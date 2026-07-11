@@ -1,0 +1,199 @@
+<div id="code-fusion-workflow">
+  <style>
+    #code-fusion-workflow { color: var(--foreground); }
+    #code-fusion-workflow .top { display:flex; gap:12px; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; margin-bottom:18px; }
+    #code-fusion-workflow .mode { min-width:220px; }
+    #code-fusion-workflow .flow { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:0; align-items:start; margin:10px 0 20px; }
+    #code-fusion-workflow .step { position:relative; text-align:center; padding:0 5px; }
+    #code-fusion-workflow .step:not(:last-child)::after { content:""; position:absolute; top:18px; left:62%; width:76%; height:1px; background:var(--border); }
+    #code-fusion-workflow .dot { position:relative; z-index:1; width:36px; height:36px; margin:0 auto 8px; border-radius:50%; display:grid; place-items:center; background:var(--muted); color:var(--muted-foreground); border:1px solid var(--border); }
+    #code-fusion-workflow .step.active .dot { background:var(--primary); color:var(--primary-foreground); border-color:var(--primary); }
+    #code-fusion-workflow .step.done .dot { background:color-mix(in srgb,var(--viz-series-1) 18%,var(--background)); color:var(--foreground); border-color:color-mix(in srgb,var(--viz-series-1) 60%,var(--border)); }
+    #code-fusion-workflow .step-label { display:block; }
+    #code-fusion-workflow .workspace { display:grid; grid-template-columns:minmax(150px,0.7fr) minmax(290px,1.35fr) minmax(230px,1fr); gap:14px; align-items:stretch; }
+    #code-fusion-workflow .pane { min-width:0; }
+    #code-fusion-workflow .pane-title { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px; }
+    #code-fusion-workflow .tree { display:grid; gap:6px; }
+    #code-fusion-workflow .tree button { width:100%; text-align:left; justify-content:flex-start; }
+    #code-fusion-workflow .indent { padding-left:18px; }
+    #code-fusion-workflow .results { display:grid; gap:10px; }
+    #code-fusion-workflow .result { display:grid; grid-template-columns:auto 1fr; gap:10px; padding:10px 0; border-bottom:1px solid var(--border); cursor:pointer; }
+    #code-fusion-workflow .result:last-child { border-bottom:0; }
+    #code-fusion-workflow .result.is-selected { background:var(--accent); color:var(--accent-foreground); margin:0 -8px; padding:10px 8px; }
+    #code-fusion-workflow .result input { margin-top:3px; }
+    #code-fusion-workflow .meta { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+    #code-fusion-workflow .codebox { margin:10px 0; padding:10px; background:var(--muted); color:var(--foreground); overflow-wrap:anywhere; white-space:pre-wrap; }
+    #code-fusion-workflow .decision { display:grid; gap:10px; }
+    #code-fusion-workflow .level { display:flex; gap:8px; align-items:flex-start; padding:9px 0; border-bottom:1px solid var(--border); }
+    #code-fusion-workflow .level:last-child { border-bottom:0; }
+    #code-fusion-workflow .num { width:24px; height:24px; border-radius:50%; display:grid; place-items:center; flex:none; background:var(--secondary); color:var(--secondary-foreground); }
+    #code-fusion-workflow .arch { margin-top:18px; padding-top:16px; border-top:1px solid var(--border); }
+    #code-fusion-workflow .lanes { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; align-items:stretch; }
+    #code-fusion-workflow .lane { text-align:center; padding:10px 6px; background:color-mix(in srgb,var(--viz-series-1) 9%,transparent); }
+    #code-fusion-workflow .lane-arrow { display:none; }
+    #code-fusion-workflow .status { margin-top:14px; display:flex; justify-content:space-between; gap:10px; align-items:center; flex-wrap:wrap; }
+    #code-fusion-workflow .hidden { display:none !important; }
+    @media (max-width:700px) {
+      #code-fusion-workflow .flow { grid-template-columns:repeat(4,1fr); row-gap:14px; }
+      #code-fusion-workflow .step::after { display:none; }
+      #code-fusion-workflow .workspace { grid-template-columns:1fr; }
+      #code-fusion-workflow .lanes { grid-template-columns:1fr; }
+    }
+  </style>
+
+  <div class="top">
+    <div>
+      <div class="text-muted text-small">当前任务</div>
+      <strong id="taskTitle">为设备管理模块添加跨语言告警规则引擎</strong>
+    </div>
+    <label class="form-label mode">查看视角
+      <select id="viewMode" class="form-select">
+        <option value="interaction">交互工作台</option>
+        <option value="logic">系统逻辑架构</option>
+      </select>
+    </label>
+  </div>
+
+  <div id="interactionView">
+    <div class="flow" aria-label="工作流程步骤">
+      <div class="step done" data-step="0"><div class="dot"><i data-lucide="boxes" aria-hidden="true"></i></div><span class="step-label text-small">定义模块</span></div>
+      <div class="step active" data-step="1"><div class="dot"><i data-lucide="search" aria-hidden="true"></i></div><span class="step-label text-small">检索代码</span></div>
+      <div class="step" data-step="2"><div class="dot"><i data-lucide="list-filter" aria-hidden="true"></i></div><span class="step-label text-small">比较方案</span></div>
+      <div class="step" data-step="3"><div class="dot"><i data-lucide="message-square-more" aria-hidden="true"></i></div><span class="step-label text-small">人机决策</span></div>
+      <div class="step" data-step="4"><div class="dot"><i data-lucide="languages" aria-hidden="true"></i></div><span class="step-label text-small">翻译适配</span></div>
+      <div class="step" data-step="5"><div class="dot"><i data-lucide="plug-zap" aria-hidden="true"></i></div><span class="step-label text-small">拼接集成</span></div>
+      <div class="step" data-step="6"><div class="dot"><i data-lucide="shield-check" aria-hidden="true"></i></div><span class="step-label text-small">验证沉淀</span></div>
+    </div>
+
+    <div class="workspace">
+      <section class="pane card" aria-label="模块树">
+        <div class="pane-title"><strong>系统模块</strong><span class="viz-badge">需求层</span></div>
+        <div class="tree">
+          <button class="btn btn-ghost" type="button"><i data-lucide="chevron-down" aria-hidden="true"></i>设备平台</button>
+          <button class="btn btn-ghost indent" type="button">设备接入</button>
+          <button class="btn indent is-selected" type="button">告警中心</button>
+          <button class="btn btn-ghost indent" type="button">工单服务</button>
+          <button class="btn btn-ghost" type="button"><i data-lucide="chevron-right" aria-hidden="true"></i>数据平台</button>
+        </div>
+      </section>
+
+      <section class="pane card" aria-label="候选代码方案">
+        <div class="pane-title"><strong>候选实现</strong><span class="text-muted text-small">语义 + 结构 + 许可证过滤</span></div>
+        <div class="results" id="results">
+          <label class="result is-selected">
+            <input type="radio" name="candidate" checked value="A">
+            <span><strong>A · Drools 规则执行核心</strong><span class="meta"><span class="viz-badge">Java</span><span class="viz-badge">规则引擎</span><span class="viz-badge">Apache-2.0</span></span></span>
+          </label>
+          <label class="result">
+            <input type="radio" name="candidate" value="B">
+            <span><strong>B · durable_rules 状态机</strong><span class="meta"><span class="viz-badge">Python</span><span class="viz-badge">轻量</span><span class="viz-badge">MIT</span></span></span>
+          </label>
+          <label class="result">
+            <input type="radio" name="candidate" value="C">
+            <span><strong>C · json-rules-engine</strong><span class="meta"><span class="viz-badge">TypeScript</span><span class="viz-badge">JSON DSL</span><span class="viz-badge">ISC</span></span></span>
+          </label>
+        </div>
+      </section>
+
+      <section class="pane card" aria-label="方案决策">
+        <div class="pane-title"><strong id="detailName">方案 A</strong><span id="fitBadge" class="viz-badge">高能力 / 高适配成本</span></div>
+        <div id="detailText" class="text-small">保留规则执行语义，将 Java API 翻译为目标栈接口；建议提取核心概念，不直接搬运框架。</div>
+        <pre class="codebox"><code id="codePreview">Rule → Condition → Action
+事件输入 → 规则匹配 → 告警动作</code></pre>
+        <div class="decision">
+          <div class="level"><span class="num">1</span><span><strong>策略选择</strong><br><span class="text-muted text-small">直接复用 / 逻辑移植 / 仅参考设计</span></span></div>
+          <div class="level"><span class="num">2</span><span><strong>范围选择</strong><br><span class="text-muted text-small">整模块 / 类与函数 / 数据结构</span></span></div>
+          <div class="level"><span class="num">3</span><span><strong>约束备注</strong><br><span class="text-muted text-small">性能、依赖、编码规范与不可变接口</span></span></div>
+        </div>
+        <label class="form-label">给 Agent 的备注
+          <textarea id="note" class="form-control" rows="2" placeholder="例如：只借鉴规则模型，目标语言使用 Rust，不引入 JVM。"></textarea>
+        </label>
+      </section>
+    </div>
+
+    <div class="status">
+      <span id="statusText" class="text-muted text-small">等待确认候选方案与复用层级</span>
+      <div class="viz-row">
+        <button id="backBtn" class="btn btn-ghost" type="button">上一步</button>
+        <button id="nextBtn" class="btn btn-primary" type="button">确认并进入翻译适配</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="logicView" class="hidden">
+    <div class="arch">
+      <div class="lanes" role="img" aria-label="从 IDE 交互层，经编排与检索，到翻译集成和验证资产层的系统逻辑">
+        <div class="lane"><i data-lucide="panel-left" aria-hidden="true"></i><br><strong>IDE / GUI</strong><br><span class="text-small text-muted">模块树 · 对话 · Diff · 选择器</span></div>
+        <div class="lane"><i data-lucide="workflow" aria-hidden="true"></i><br><strong>Agent 编排层</strong><br><span class="text-small text-muted">任务分解 · 状态机 · 人工闸门</span></div>
+        <div class="lane"><i data-lucide="database-search" aria-hidden="true"></i><br><strong>代码智能层</strong><br><span class="text-small text-muted">仓库索引 · 语义检索 · 图检索 · 重排</span></div>
+        <div class="lane"><i data-lucide="languages" aria-hidden="true"></i><br><strong>融合生成层</strong><br><span class="text-small text-muted">跨语言翻译 · API 适配 · 依赖消解</span></div>
+        <div class="lane"><i data-lucide="test-tube-2" aria-hidden="true"></i><br><strong>验证资产层</strong><br><span class="text-small text-muted">测试 · 安全 · 许可证 · 方案沉淀</span></div>
+      </div>
+      <div class="flow" style="margin-top:22px">
+        <div class="step done"><div class="dot">1</div><span class="step-label text-small">自然语言需求<br>→ 模块契约</span></div>
+        <div class="step done"><div class="dot">2</div><span class="step-label text-small">多路检索<br>→ 候选池</span></div>
+        <div class="step active"><div class="dot">3</div><span class="step-label text-small">能力/质量/许可<br>→ 可解释排序</span></div>
+        <div class="step"><div class="dot">4</div><span class="step-label text-small">用户分层选择<br>→ 决策记录</span></div>
+        <div class="step"><div class="dot">5</div><span class="step-label text-small">IR 中间表示<br>→ 跨语言转换</span></div>
+        <div class="step"><div class="dot">6</div><span class="step-label text-small">补丁 + 测试<br>→ 沙箱验证</span></div>
+        <div class="step"><div class="dot">7</div><span class="step-label text-small">反馈与成败样本<br>→ 检索优化</span></div>
+      </div>
+      <div class="viz-grid">
+        <div class="card viz-stat"><span class="text-muted">关键中间产物</span><span class="viz-stat-value">模块契约</span><span class="text-small">接口、数据、行为、非功能约束</span></div>
+        <div class="card viz-stat"><span class="text-muted">建议技术核心</span><span class="viz-stat-value">语言无关 IR</span><span class="text-small">避免直接逐行翻译造成语义漂移</span></div>
+        <div class="card viz-stat"><span class="text-muted">关键控制点</span><span class="viz-stat-value">人工闸门</span><span class="text-small">检索方案、复用范围、最终合并</span></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const root = document.getElementById('code-fusion-workflow');
+      const mode = root.querySelector('#viewMode');
+      const interaction = root.querySelector('#interactionView');
+      const logic = root.querySelector('#logicView');
+      const candidates = {
+        A: {name:'方案 A', badge:'高能力 / 高适配成本', text:'保留规则执行语义，将 Java API 翻译为目标栈接口；建议提取核心概念，不直接搬运框架。', code:'Rule → Condition → Action\n事件输入 → 规则匹配 → 告警动作'},
+        B: {name:'方案 B', badge:'中能力 / 低适配成本', text:'状态机模型紧凑，适合快速移植；复杂规则管理和可观测性需要自行补齐。', code:'State + Event → Transition\n设备事件 → 状态迁移 → 告警'},
+        C: {name:'方案 C', badge:'易交互 / 中等扩展性', text:'JSON DSL 便于 GUI 编辑和跨语言传递，适合作为语言无关中间表示的起点。', code:'JSON Rule → Evaluator → Event\n可视化规则 → 解释执行 → 告警'}
+      };
+      mode.addEventListener('change', () => {
+        const isLogic = mode.value === 'logic';
+        interaction.classList.toggle('hidden', isLogic);
+        logic.classList.toggle('hidden', !isLogic);
+      });
+      root.querySelectorAll('input[name="candidate"]').forEach(input => {
+        input.addEventListener('change', () => {
+          root.querySelectorAll('.result').forEach(x => x.classList.remove('is-selected'));
+          input.closest('.result').classList.add('is-selected');
+          const c = candidates[input.value];
+          root.querySelector('#detailName').textContent = c.name;
+          root.querySelector('#fitBadge').textContent = c.badge;
+          root.querySelector('#detailText').textContent = c.text;
+          root.querySelector('#codePreview').textContent = c.code;
+          root.querySelector('#statusText').textContent = '已选择 ' + c.name + '，等待确认复用层级';
+        });
+      });
+      let step = 1;
+      const updateSteps = () => {
+        root.querySelectorAll('#interactionView .step').forEach((el, i) => {
+          el.classList.toggle('done', i < step);
+          el.classList.toggle('active', i === step);
+        });
+      };
+      root.querySelector('#nextBtn').addEventListener('click', () => {
+        step = Math.min(6, step + 1);
+        updateSteps();
+        const labels = ['定义模块','检索代码','比较方案','人机决策','翻译适配','拼接集成','验证沉淀'];
+        root.querySelector('#statusText').textContent = '当前进入：' + labels[step] + (root.querySelector('#note').value ? '（已携带人工备注）' : '');
+        root.querySelector('#nextBtn').textContent = step >= 6 ? '完成并沉淀方案' : '继续下一阶段';
+      });
+      root.querySelector('#backBtn').addEventListener('click', () => {
+        step = Math.max(0, step - 1);
+        updateSteps();
+        root.querySelector('#statusText').textContent = '已返回上一步，可修改选择';
+        root.querySelector('#nextBtn').textContent = '继续下一阶段';
+      });
+    })();
+  </script>
+</div>

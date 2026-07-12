@@ -1,0 +1,10 @@
+{
+  "repository": "resilient-pricing-py",
+  "language": "Python",
+  "build": "python -m compileall -q src",
+  "lint": "python -B -m compileall -q src tests",
+  "test": "python -m unittest discover -s tests",
+  "license": "MIT",
+  "dependencies": [],
+  "synthetic": true
+}

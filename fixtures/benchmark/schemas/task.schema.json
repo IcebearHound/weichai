@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Retrieval task",
+  "type": "object",
+  "required": [
+    "taskId",
+    "targetRepository",
+    "targetPath",
+    "targetSymbol",
+    "targetLanguage",
+    "requirement",
+    "immutableContract",
+    "constraints",
+    "expectedBehaviors"
+  ],
+  "properties": {
+    "taskId": { "type": "string", "minLength": 1 },
+    "targetRepository": { "type": "string", "minLength": 1 },
+    "targetPath": { "type": "string", "minLength": 1 },
+    "targetSymbol": { "type": "string", "minLength": 1 },
+    "targetLanguage": { "const": "TypeScript" },
+    "requirement": { "type": "string", "minLength": 1 },
+    "immutableContract": { "type": "string", "minLength": 1 },
+    "constraints": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "expectedBehaviors": { "type": "array", "minItems": 4, "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

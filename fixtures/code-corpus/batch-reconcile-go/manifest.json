@@ -1,0 +1,10 @@
+{
+  "repository": "batch-reconcile-go",
+  "language": "Go",
+  "license": "MIT",
+  "build": "go build ./...",
+  "test": "go test ./...",
+  "lint": "gofmt -d src/reconcile && go vet ./...",
+  "dependencies": [],
+  "synthetic": true
+}

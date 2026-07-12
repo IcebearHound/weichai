@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Synthetic corpus manifest",
+  "type": "object",
+  "required": ["generatedAt", "repositories", "totals"],
+  "properties": {
+    "generatedAt": { "type": "string" },
+    "repositories": { "type": "array", "minItems": 12 },
+    "totals": { "type": "object" }
+  }
+}

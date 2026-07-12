@@ -1,0 +1,19 @@
+{
+  "name": "currency-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Synthetic currency quotation, settlement, event-consumption, and audit platform",
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/unit/*.test.js",
+    "test:acceptance": "npm run build && node --test dist/test/acceptance/*.test.js",
+    "lint": "node scripts/lint.mjs",
+    "verify": "node scripts/verify.mjs",
+    "stats": "node scripts/verify.mjs --stats-only"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "repository": "circuit-lane-java",
+  "language": "Java",
+  "languageVersion": "17+",
+  "sourceRoot": "src/main/java",
+  "testRoot": "src/test/java",
+  "build": "powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1",
+  "test": "powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -Test",
+  "lint": "powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -Test -Lint",
+  "license": "MIT",
+  "dependencies": [],
+  "synthetic": true
+}

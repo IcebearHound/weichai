@@ -1,0 +1,13 @@
+{
+  "repository": "ledger-flow-ts",
+  "language": "TypeScript",
+  "build": "npm install && npm run build",
+  "lint": "npm run lint",
+  "test": "npm test",
+  "license": "MIT",
+  "dependencies": [
+    "typescript (development only)",
+    "@types/node (development only)"
+  ],
+  "synthetic": true
+}

@@ -1,0 +1,10 @@
+{
+  "repository": "settlement-queue-py",
+  "language": "Python",
+  "license": "MIT",
+  "build": "python -m compileall -q src tests",
+  "test": "python run_tests.py",
+  "lint": "python -m compileall -q src tests",
+  "dependencies": [],
+  "synthetic": true
+}

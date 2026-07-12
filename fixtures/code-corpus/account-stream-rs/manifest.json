@@ -1,0 +1,9 @@
+{
+  "repository": "account-stream-rs",
+  "language": "Rust",
+  "build": "cargo build",
+  "test": "cargo test",
+  "license": "MIT",
+  "dependencies": [],
+  "synthetic": true
+}

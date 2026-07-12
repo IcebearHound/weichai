@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Candidate relevance judgement",
+  "type": "object",
+  "required": [
+    "taskId",
+    "candidateRepository",
+    "candidatePath",
+    "candidateSymbol",
+    "candidateLanguage",
+    "relevance",
+    "reusableParts",
+    "incompatibleParts",
+    "recommendedStrategy",
+    "risks",
+    "expectedInterfaceMappings"
+  ],
+  "properties": {
+    "taskId": { "type": "string", "minLength": 1 },
+    "candidateRepository": { "type": "string", "minLength": 1 },
+    "candidatePath": { "type": "string", "minLength": 1 },
+    "candidateSymbol": { "type": "string", "minLength": 1 },
+    "candidateLanguage": { "enum": ["TypeScript", "Python", "Java", "Go", "Rust"] },
+    "relevance": { "enum": ["high", "medium", "low", "distractor"] },
+    "reusableParts": { "type": "array", "items": { "type": "string" } },
+    "incompatibleParts": { "type": "array", "items": { "type": "string" } },
+    "recommendedStrategy": { "enum": ["reuse", "translate", "wrap", "bridge"] },
+    "risks": { "type": "array", "items": { "type": "string" } },
+    "expectedInterfaceMappings": { "type": "object" }
+  },
+  "additionalProperties": false
+}

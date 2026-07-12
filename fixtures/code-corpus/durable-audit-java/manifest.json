@@ -1,0 +1,9 @@
+{
+  "repository": "durable-audit-java",
+  "language": "Java",
+  "license": "MIT",
+  "build": "powershell -NoProfile -File build.ps1",
+  "test": "powershell -NoProfile -File test.ps1",
+  "dependencies": [],
+  "synthetic": true
+}

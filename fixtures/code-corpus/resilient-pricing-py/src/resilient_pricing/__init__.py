@@ -1,0 +1,1 @@
+"""Independent pricing resilience components."""

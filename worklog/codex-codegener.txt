@@ -1,0 +1,170 @@
+User-message
+{
+time:07-12-19-53,
+content:"你需要在当前项目中生成一套用于“跨语言代码检索、人工选择、代码翻译和模块回填”的合成基准工程。
+
+不要修改现有 workspace/forexplore 前端原型。新内容统一创建在：
+
+fixtures/
+  target-system/
+  code-corpus/
+  benchmark/
+
+一、目标工程
+
+在 fixtures/target-system/currency-platform 中创建一个 TypeScript 软件工程。
+
+规模要求：
+- 40～60 个源码文件
+- 8,000～12,000 行有效源码
+- 12～18 个 class
+- 50～80 个 function/method
+- 使用 domain、application、infrastructure、services 分层
+- 保证 npm install、npm run build、npm test、npm run lint 命令明确可用
+
+领域背景：
+这是一个货币报价、交易结算和审计平台。
+
+创建以下 5 个待实现目标：
+
+1. RateQuoteService.getQuote
+功能要求：
+- 5 秒 TTL 缓存
+- 相同货币对的并发请求合并
+- Provider 请求超时
+- Provider 失败时允许返回 stale 数据
+- 保持现有 QuoteRequest -> Promise<Quote> 接口不变
+
+2. SettlementService.settleBatch
+功能要求：
+- 批量结算
+- 幂等键
+- 部分失败重试
+- 不得重复生成 Receipt
+- 保持批量结果与输入顺序一致
+
+3. ProviderRouter.fetchQuote
+功能要求：
+- 熔断
+- 主备 Provider 故障转移
+- 半开恢复
+- 每个 Provider 独立统计失败状态
+
+4. TradeEventConsumer.consume
+功能要求：
+- 消息去重
+- 同一账户内有序
+- 不同账户间允许并行
+- 处理失败不能错误确认消息
+
+5. AuditLogBuffer.flush
+功能要求：
+- 批量缓冲
+- 定时或达到阈值时落盘
+- 多调用方并发安全
+- 进程关闭前完成剩余数据写入
+
+每个待实现目标必须满足：
+- class/function 签名完整
+- 调用方完整
+- 领域类型完整
+- 核心实现抛出 NotImplementedError
+- 工程仍然可以编译
+- 至少提供正常、边界、失败、并发测试
+- 至少一个验收测试因为功能未实现而失败
+- 不得通过修改测试完成目标
+
+二、检索代码仓库
+
+在 fixtures/code-corpus 中创建 12 个相互独立的模拟仓库。
+
+语言分布：
+- TypeScript：3 个
+- Python：3 个
+- Java：2 个
+- Go：2 个
+- Rust：2 个
+
+总体规模：
+- 500～800 个 class/function
+- 60,000～100,000 行代码
+
+候选设计：
+- 对目标工程中的每个待实现目标，生成 2 个高相关候选
+- 生成 3～5 个部分相关候选
+- 生成至少 10 个名称相似但行为不相关的干扰候选
+- 候选分布在不同语言和不同仓库
+- 不得直接使用目标工程的完整类名和函数名
+- 高相关必须是行为相关，不能仅靠同名
+- 候选应体现不同策略：直接复用、跨语言翻译、适配器封装、运行时桥接
+- 部分候选应包含真实迁移风险，例如框架耦合、全局状态、并发语义差异、错误模型差异和额外依赖
+- 核心候选必须能够解析，尽量可以独立编译或测试
+
+每个模拟仓库必须包含：
+- README.md
+- LICENSE
+- manifest.json
+- 源码
+- 测试
+- 语言、构建方式、许可证和依赖说明
+
+代码必须为独立合成，不得复制真实开源仓库源码。
+
+三、检索标准答案
+
+在 fixtures/benchmark 中生成：
+
+1. tasks.jsonl
+每行描述一个目标：
+- taskId
+- targetRepository
+- targetPath
+- targetSymbol
+- targetLanguage
+- requirement
+- immutableContract
+- constraints
+- expectedBehaviors
+
+2. relevance.jsonl
+记录目标和候选的关系：
+- taskId
+- candidateRepository
+- candidatePath
+- candidateSymbol
+- candidateLanguage
+- relevance：high、medium、low、distractor
+- reusableParts
+- incompatibleParts
+- recommendedStrategy：reuse、translate、wrap、bridge
+- risks
+- expectedInterfaceMappings
+
+3. corpus-manifest.json
+记录所有仓库、语言、文件数、代码行数、符号数和构建方式。
+
+4. provenance.json
+声明所有代码均为合成数据，没有复制真实开源项目。
+
+标准答案不得出现在待检索源码的注释、命名或 README 中。
+
+四、质量要求
+
+- 文件不能只包含空壳或重复模板
+- 禁止通过大量重复代码凑行数
+- 函数和类应具有合理调用关系
+- 候选之间应有足够实现差异
+- 所有 JSON/JSONL 必须可解析
+- TypeScript 目标工程必须通过 build
+- 对预期失败的测试单独设置 acceptance 测试命令
+- 普通单元测试必须通过
+- 输出最终统计：文件数、行数、class/function 数、语言分布、候选相关度分布
+- 最后运行验证脚本并报告结果
+
+五、实施方式
+
+先创建目录结构、数据模型和一个完整目标的纵向样例。
+验证样例结构后，再批量扩展到全部 5 个目标和 12 个仓库。
+不要修改 workspace/forexplore，也不要提交或推送 Git。",
+result: run
+}s

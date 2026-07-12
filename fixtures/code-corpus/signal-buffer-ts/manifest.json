@@ -1,0 +1,12 @@
+{
+  "repository": "signal-buffer-ts",
+  "language": "TypeScript",
+  "license": "MIT",
+  "build": "npm install && npm run build",
+  "test": "npm test",
+  "lint": "npm run lint",
+  "dependencies": [
+    "TypeScript and Node.js declarations (development only)"
+  ],
+  "synthetic": true
+}

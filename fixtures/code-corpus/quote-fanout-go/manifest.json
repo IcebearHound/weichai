@@ -1,0 +1,14 @@
+{
+  "repository": "quote-fanout-go",
+  "language": "Go",
+  "languageVersion": "1.22+",
+  "sourceRoot": "fanout",
+  "build": "go build ./...",
+  "test": "go test ./...",
+  "concurrencyTest": "go test -race ./...",
+  "lint": "go vet ./...",
+  "format": "gofmt -w fanout/*.go",
+  "license": "MIT",
+  "dependencies": [],
+  "synthetic": true
+}

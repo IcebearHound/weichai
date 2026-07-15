@@ -20,6 +20,9 @@ coverage/
 
 # Editor and operating-system files
 .vscode/
+!apps/workflow-web/.vscode/
+!apps/workflow-web/.vscode/launch.json
+!apps/workflow-web/.vscode/tasks.json
 .idea/
 .DS_Store
 Thumbs.db

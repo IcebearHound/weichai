@@ -1,0 +1,14 @@
+{
+  "name": "forexplore-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @forexplore/workflow-web",
+    "build": "npm run build --workspace @forexplore/workflow-web",
+    "test": "npm run test --workspace @forexplore/workflow-core && npm run test --workspace @forexplore/workflow-web"
+  }
+}

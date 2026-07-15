@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "ForeXplore: run and debug (Edge)",
+      "type": "pwa-msedge",
+      "request": "launch",
+      "url": "http://localhost:4173/",
+      "webRoot": "${workspaceFolder}",
+      "sourceMaps": true,
+      "preLaunchTask": "ForeXplore: dev server"
+    },
+    {
+      "name": "ForeXplore: run and debug (Chrome)",
+      "type": "pwa-chrome",
+      "request": "launch",
+      "url": "http://localhost:4173/",
+      "webRoot": "${workspaceFolder}",
+      "sourceMaps": true,
+      "preLaunchTask": "ForeXplore: dev server"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@forexplore/mock-adapters",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@forexplore/contracts": "0.1.0",
+    "@forexplore/workflow-core": "0.1.0"
+  }
+}

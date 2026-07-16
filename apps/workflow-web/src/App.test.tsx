@@ -1,10 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { mockWorkflowPorts, moduleTree } from '@forexplore/mock-adapters';
 import { describe, expect, it } from 'vitest';
 import App from './App';
 
 describe('ForeXplore vertical workflow', () => {
   it('lets a user select a function, retrieve candidates, adapt and backfill', async () => {
-    render(<App />);
+    render(<App ports={mockWorkflowPorts} moduleTree={moduleTree} />);
 
     fireEvent.click(screen.getByRole('button', { name: /getQuote/ }));
 

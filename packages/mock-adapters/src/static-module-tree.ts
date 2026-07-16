@@ -1,4 +1,4 @@
-import type { ModuleNode, ModuleTarget } from '@forexplore/contracts';
+import type { ModuleNode } from '@forexplore/contracts';
 
 export const moduleTree: ModuleNode = {
   id: 'root',
@@ -109,23 +109,3 @@ export const moduleTree: ModuleNode = {
     },
   ],
 };
-
-export function toModuleTarget(node: ModuleNode): ModuleTarget | null {
-  if (
-    (node.kind !== 'class' && node.kind !== 'function') ||
-    !node.language ||
-    !node.signature
-  ) {
-    return null;
-  }
-
-  return {
-    id: node.id,
-    name: node.name,
-    kind: node.kind,
-    path: node.path,
-    language: node.language,
-    signature: node.signature,
-    line: node.line,
-  };
-}

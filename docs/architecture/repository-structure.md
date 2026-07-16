@@ -19,6 +19,13 @@ operation happens but does not decide how retrieval, adaptation, or backfill is
 implemented. Adapters implement those ports. The web app renders state and
 forwards user decisions.
 
+## Composition root
+
+`apps/workflow-web/src/main.tsx` is the only runtime composition root. It selects
+the concrete adapter set and module tree, then injects both into `App`. Feature
+components depend only on contracts and workflow-core, so replacing Mock
+adapters does not require changes to the application component or workflow UI.
+
 ## Ownership boundaries
 
 | Path | Responsibility |

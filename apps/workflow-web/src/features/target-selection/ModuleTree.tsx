@@ -9,7 +9,7 @@ import {
   FolderOpen,
 } from 'lucide-react';
 import type { ModuleNode, ModuleTarget } from '@forexplore/contracts';
-import { toModuleTarget } from '@forexplore/mock-adapters';
+import { toModuleTarget } from '@forexplore/workflow-core';
 
 interface ModuleTreeProps {
   root: ModuleNode;

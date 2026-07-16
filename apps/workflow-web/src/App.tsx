@@ -14,11 +14,15 @@ import {
   Sparkles,
   Workflow,
 } from 'lucide-react';
-import type { AdaptationStrategy, RetrievalMode } from '@forexplore/contracts';
-import { mockWorkflowPorts, moduleTree } from '@forexplore/mock-adapters';
+import type {
+  AdaptationStrategy,
+  ModuleNode,
+  RetrievalMode,
+} from '@forexplore/contracts';
 import {
   initialWorkflowState,
   selectedCandidate,
+  type WorkflowPorts,
   workflowReducer,
 } from '@forexplore/workflow-core';
 import { CandidateBrowser } from './features/candidate-selection/CandidateBrowser';
@@ -308,7 +312,12 @@ function Inspector({ state }: { state: typeof initialWorkflowState }) {
   );
 }
 
-export default function App() {
+export interface AppProps {
+  ports: WorkflowPorts;
+  moduleTree: ModuleNode;
+}
+
+export default function App({ ports, moduleTree }: AppProps) {
   const [state, dispatch] = useReducer(workflowReducer, initialWorkflowState);
   const candidate = useMemo(() => selectedCandidate(state), [state]);
 
@@ -316,7 +325,7 @@ export default function App() {
     if (!state.target || state.requirement.trim().length < 8) return;
     dispatch({ type: 'SEARCH_START' });
     try {
-      const candidates = await mockWorkflowPorts.search.search({
+      const candidates = await ports.search.search({
         target: state.target,
         requirement: state.requirement.trim(),
         topK: state.topK,
@@ -336,7 +345,7 @@ export default function App() {
     if (!state.target || !candidate) return;
     dispatch({ type: 'ADAPT_START' });
     try {
-      const result = await mockWorkflowPorts.adaptation.adapt({
+      const result = await ports.adaptation.adapt({
         target: state.target,
         candidate,
         requirement: state.requirement,
@@ -356,7 +365,7 @@ export default function App() {
     if (!state.adaptation) return;
     dispatch({ type: 'APPLY_START' });
     try {
-      const result = await mockWorkflowPorts.backfill.apply(state.adaptation.files);
+      const result = await ports.backfill.apply(state.adaptation.files);
       dispatch({ type: 'APPLY_SUCCESS', result });
     } catch (error) {
       dispatch({

@@ -76,7 +76,7 @@ describe('SeekDbSearchEngine', () => {
     expect(store.semanticSearch).toHaveBeenCalledWith(
       [1, 0, 0],
       expect.objectContaining({ repositories: ['demo/cache'] }),
-      6,
+      50,
     );
     expect(store.textSearch).toHaveBeenCalledOnce();
   });
@@ -96,7 +96,7 @@ describe('SeekDbSearchEngine', () => {
     expect(store.textSearch).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ kind: 'function' }),
-      6,
+      50,
     );
   });
 });
@@ -134,5 +134,11 @@ describe('search internals', () => {
     expect(query).toContain('batch');
     expect(query).toContain('settlement');
     expect(searchInternals.overlap('settleBatch', 'settlement batch queue')).toBeGreaterThan(0);
+  });
+
+  it('reranks a broad but bounded candidate pool for large corpora', () => {
+    expect(searchInternals.expandedLimit(1)).toBe(50);
+    expect(searchInternals.expandedLimit(20)).toBe(100);
+    expect(searchInternals.expandedLimit(50)).toBe(250);
   });
 });

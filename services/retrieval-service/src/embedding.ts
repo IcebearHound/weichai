@@ -51,9 +51,12 @@ export class HashEmbeddingProvider implements EmbeddingProvider {
   }
 }
 
-interface OpenAiEmbeddingResponse {
-  data?: Array<{ index: number; embedding: number[] }>;
-  error?: { message?: string };
+function apiErrorMessage(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const error = (value as { error?: unknown }).error;
+  if (typeof error !== 'object' || error === null) return undefined;
+  const message = (error as { message?: unknown }).message;
+  return typeof message === 'string' ? message : undefined;
 }
 
 export class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
@@ -63,6 +66,7 @@ export class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
     private readonly apiKey: string,
     private readonly model: string,
     private readonly request: typeof globalThis.fetch = globalThis.fetch,
+    private readonly timeoutMs = 30_000,
   ) {}
 
   async embed(texts: string[]): Promise<number[][]> {
@@ -78,17 +82,46 @@ export class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
         dimensions: this.dimension,
         encoding_format: 'float',
       }),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
-    const body = (await response.json()) as OpenAiEmbeddingResponse;
-    if (!response.ok) {
-      throw new Error(body.error?.message || `Embedding API returned HTTP ${response.status}.`);
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new Error(`Embedding API returned invalid JSON (HTTP ${response.status}).`);
     }
-    if (!Array.isArray(body.data) || body.data.length !== texts.length) {
+    if (!response.ok) {
+      throw new Error(apiErrorMessage(body) || `Embedding API returned HTTP ${response.status}.`);
+    }
+    if (typeof body !== 'object' || body === null) {
+      throw new Error('Embedding API returned an invalid response body.');
+    }
+    const data = (body as { data?: unknown }).data;
+    if (!Array.isArray(data) || data.length !== texts.length) {
       throw new Error('Embedding API returned an unexpected number of vectors.');
     }
-    const vectors = [...body.data]
-      .sort((left, right) => left.index - right.index)
-      .map((item) => item.embedding);
+    const items = data.map((item) => {
+      if (typeof item !== 'object' || item === null) return null;
+      const { index, embedding } = item as { index?: unknown; embedding?: unknown };
+      if (
+        !Number.isInteger(index) ||
+        !Array.isArray(embedding) ||
+        !embedding.every((value) => typeof value === 'number' && Number.isFinite(value))
+      ) {
+        return null;
+      }
+      return { index: Number(index), embedding };
+    });
+    if (
+      items.some((item) => item === null) ||
+      new Set(items.map((item) => item?.index)).size !== texts.length ||
+      items.some((item) => (item?.index ?? -1) < 0 || (item?.index ?? -1) >= texts.length)
+    ) {
+      throw new Error('Embedding API returned malformed vector entries.');
+    }
+    const vectors = items
+      .sort((left, right) => (left?.index ?? 0) - (right?.index ?? 0))
+      .map((item) => item?.embedding ?? []);
     if (vectors.some((vector) => vector.length !== this.dimension)) {
       throw new Error(`Embedding API did not return ${this.dimension}-dimensional vectors.`);
     }

@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { access, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Language } from '@forexplore/contracts';
 import type { IndexedCodeDocument } from './types.js';
@@ -28,6 +28,28 @@ const extensions: Record<string, Language> = {
   '.rs': 'Rust',
   '.go': 'Go',
 };
+const supportedLanguages = new Set<Language>(Object.values(extensions));
+
+function parseManifest(value: unknown, manifestPath: string): CorpusManifest {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error(`Corpus manifest ${manifestPath} must contain a JSON object.`);
+  }
+  const manifest = value as Partial<CorpusManifest>;
+  if (
+    typeof manifest.repository !== 'string' ||
+    !manifest.repository.trim() ||
+    !supportedLanguages.has(manifest.language as Language) ||
+    (manifest.license !== undefined && typeof manifest.license !== 'string') ||
+    (manifest.sourceRoot !== undefined && typeof manifest.sourceRoot !== 'string') ||
+    (manifest.synthetic !== undefined && typeof manifest.synthetic !== 'boolean') ||
+    (manifest.dependencies !== undefined &&
+      (!Array.isArray(manifest.dependencies) ||
+        !manifest.dependencies.every((dependency) => typeof dependency === 'string')))
+  ) {
+    throw new Error(`Corpus manifest ${manifestPath} has invalid retrieval metadata.`);
+  }
+  return manifest as CorpusManifest;
+}
 
 function isTestPath(relativePath: string): boolean {
   const normalized = relativePath.replaceAll('\\', '/').toLowerCase();
@@ -286,15 +308,35 @@ async function sourceFiles(root: string): Promise<string[]> {
 
 async function loadManifest(repositoryRoot: string): Promise<CorpusManifest | null> {
   for (const fileName of ['manifest.json', 'dataset-manifest.json']) {
+    const manifestPath = path.join(repositoryRoot, fileName);
     try {
-      return JSON.parse(
-        await readFile(path.join(repositoryRoot, fileName), 'utf8'),
-      ) as CorpusManifest;
-    } catch {
-      // Try the next supported manifest name.
+      await access(manifestPath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') continue;
+      throw error;
+    }
+    try {
+      const value: unknown = JSON.parse(await readFile(manifestPath, 'utf8'));
+      return parseManifest(value, manifestPath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Invalid corpus manifest ${manifestPath}: ${message}`);
     }
   }
   return null;
+}
+
+function resolveSourceRoot(repositoryRoot: string, sourceRoot: string | undefined): string {
+  const resolvedRepository = path.resolve(repositoryRoot);
+  const resolvedSource = sourceRoot
+    ? path.resolve(resolvedRepository, sourceRoot)
+    : resolvedRepository;
+  const relative = path.relative(resolvedRepository, resolvedSource);
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`Corpus sourceRoot must stay inside ${resolvedRepository}.`);
+  }
+  return resolvedSource;
 }
 
 async function repositories(
@@ -317,9 +359,7 @@ export async function indexCorpus(corpusRoot: string): Promise<IndexedCodeDocume
   const documents: IndexedCodeDocument[] = [];
 
   for (const { root: repositoryRoot, manifest } of await repositories(corpusRoot)) {
-    const scanRoot = manifest.sourceRoot
-      ? path.resolve(repositoryRoot, manifest.sourceRoot)
-      : repositoryRoot;
+    const scanRoot = resolveSourceRoot(repositoryRoot, manifest.sourceRoot);
     for (const absolutePath of await sourceFiles(scanRoot)) {
       const relativePath = path.relative(repositoryRoot, absolutePath).replaceAll('\\', '/');
       if (isTestPath(relativePath)) continue;

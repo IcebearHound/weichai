@@ -9,6 +9,7 @@ const resolvedVirtualModuleId = `\0${virtualModuleId}`;
 const targetWorkspace = fileURLToPath(
   new URL('../../fixtures/target-system/currency-platform', import.meta.url),
 );
+const normalizedTargetWorkspace = targetWorkspace.replaceAll('\\', '/');
 
 function targetModuleTreePlugin(): Plugin {
   return {
@@ -24,9 +25,15 @@ function targetModuleTreePlugin(): Plugin {
     configureServer(server) {
       server.watcher.add(targetWorkspace);
       server.watcher.on('all', (_event, changedPath) => {
+        const normalizedChangedPath = changedPath.replaceAll('\\', '/');
         if (
-          !changedPath.startsWith(targetWorkspace) ||
-          !['.ts', '.tsx'].includes(changedPath.slice(changedPath.lastIndexOf('.')))
+          !(
+            normalizedChangedPath === normalizedTargetWorkspace ||
+            normalizedChangedPath.startsWith(`${normalizedTargetWorkspace}/`)
+          ) ||
+          !['.ts', '.tsx'].includes(
+            normalizedChangedPath.slice(normalizedChangedPath.lastIndexOf('.')),
+          )
         ) {
           return;
         }

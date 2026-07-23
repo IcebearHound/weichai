@@ -21,9 +21,19 @@ server.listen(config.port, config.host, () => {
 });
 
 async function shutdown(): Promise<void> {
-  server.close();
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+    server.closeIdleConnections();
+  });
   await store.close();
 }
 
-process.once('SIGINT', () => void shutdown());
-process.once('SIGTERM', () => void shutdown());
+function requestShutdown(): void {
+  void shutdown().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
+
+process.once('SIGINT', requestShutdown);
+process.once('SIGTERM', requestShutdown);

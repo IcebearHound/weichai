@@ -98,4 +98,25 @@ describe('retrieval HTTP API', () => {
     expect(response.status).toBe(400);
     expect(engine.search).not.toHaveBeenCalled();
   });
+
+  it('reports invalid JSON and oversized bodies as client errors', async () => {
+    const engine: SearchEngine = { search: vi.fn(async () => []) };
+    const url = await listen(engine, store());
+
+    const invalidJson = await fetch(`${url}/v1/search`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{',
+    });
+    const oversized = await fetch(`${url}/v1/search`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: Buffer.alloc(1024 * 1024 + 1),
+    });
+
+    expect(invalidJson.status).toBe(400);
+    expect(await invalidJson.json()).toEqual({ error: 'Request body must be valid JSON.' });
+    expect(oversized.status).toBe(413);
+    expect(engine.search).not.toHaveBeenCalled();
+  });
 });

@@ -8,6 +8,15 @@ export interface HttpServerOptions {
   corsOrigin: string;
 }
 
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 function json(
   response: ServerResponse,
   status: number,
@@ -24,16 +33,25 @@ function json(
 }
 
 async function readBody(request: IncomingMessage): Promise<unknown> {
+  const declaredLength = Number(request.headers['content-length']);
+  if (Number.isFinite(declaredLength) && declaredLength > 1024 * 1024) {
+    throw new HttpError(413, 'Request body exceeds 1 MiB.');
+  }
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.byteLength;
-    if (size > 1024 * 1024) throw new Error('Request body exceeds 1 MiB.');
+    if (size > 1024 * 1024) throw new HttpError(413, 'Request body exceeds 1 MiB.');
     chunks.push(buffer);
   }
   const text = Buffer.concat(chunks).toString('utf8');
-  return text ? (JSON.parse(text) as unknown) : null;
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new HttpError(400, 'Request body must be valid JSON.');
+  }
 }
 
 function isSearchRequest(value: unknown): value is SearchRequest {
@@ -88,8 +106,9 @@ export function createHttpServer(options: HttpServerOptions): Server {
       json(response, 404, { error: 'Not found.' }, options.corsOrigin);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown retrieval error.';
-      console.error(error);
-      json(response, 503, { error: message }, options.corsOrigin);
+      const status = error instanceof HttpError ? error.status : 503;
+      if (!(error instanceof HttpError)) console.error(error);
+      json(response, status, { error: message }, options.corsOrigin);
     }
   });
 }

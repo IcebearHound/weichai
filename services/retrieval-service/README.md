@@ -11,6 +11,9 @@ and exposes the stable workflow search contract over HTTP.
 - `hybrid`: parallel vector and full-text queries followed by weighted
   reciprocal-rank fusion and contract-aware reranking.
 
+Each mode retrieves a broader, bounded candidate pool before final reranking,
+which keeps small result sets useful when the index contains many repositories.
+
 The schema uses SeekDB's `VECTOR`, `VECTOR INDEX ... TYPE=hnsw`,
 `FULLTEXT INDEX`, and `ORDER BY cosine_distance(...) APPROXIMATE` features.
 All query values and filters are parameterized; only validated SQL identifiers

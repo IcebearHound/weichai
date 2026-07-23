@@ -19,6 +19,10 @@ function repositoryScopes(values: string[]): string[] {
     .filter((value) => value.includes('/') && !value.includes('*'));
 }
 
+function expandedLimit(topK: number): number {
+  return Math.min(250, Math.max(50, topK * 5));
+}
+
 function queryText(request: SearchRequest): string {
   const raw = [
     request.target.name,
@@ -147,20 +151,20 @@ export class SeekDbSearchEngine implements SearchEngine {
       repositories: repositoryScopes(request.repositoryScopes),
       kind: request.retrievalMode === 'structure' ? request.target.kind : undefined,
     };
-    const expandedLimit = Math.max(request.topK * 3, request.topK);
+    const candidateLimit = expandedLimit(request.topK);
     let documents: RetrievedCodeDocument[];
 
     if (request.retrievalMode === 'structure') {
-      documents = await this.store.textSearch(text, filters, expandedLimit);
+      documents = await this.store.textSearch(text, filters, candidateLimit);
     } else {
       const [embedding] = await this.embeddings.embed([text]);
       if (!embedding) throw new Error('Embedding provider returned no query vector.');
       if (request.retrievalMode === 'semantic') {
-        documents = await this.store.semanticSearch(embedding, filters, expandedLimit);
+        documents = await this.store.semanticSearch(embedding, filters, candidateLimit);
       } else {
         const [semantic, fullText] = await Promise.all([
-          this.store.semanticSearch(embedding, filters, expandedLimit),
-          this.store.textSearch(text, filters, expandedLimit),
+          this.store.semanticSearch(embedding, filters, candidateLimit),
+          this.store.textSearch(text, filters, candidateLimit),
         ]);
         documents = mergeResults(semantic, fullText);
       }
@@ -173,4 +177,10 @@ export class SeekDbSearchEngine implements SearchEngine {
   }
 }
 
-export const searchInternals = { mergeResults, overlap, queryText, repositoryScopes };
+export const searchInternals = {
+  expandedLimit,
+  mergeResults,
+  overlap,
+  queryText,
+  repositoryScopes,
+};

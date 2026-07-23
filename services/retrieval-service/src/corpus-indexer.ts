@@ -9,6 +9,7 @@ interface CorpusManifest {
   license?: string;
   dependencies?: string[];
   synthetic?: boolean;
+  sourceRoot?: string;
 }
 
 interface SymbolMatch {
@@ -98,6 +99,8 @@ function pythonSnippet(lines: string[], start: number): string {
 function declaration(
   line: string,
   language: Language,
+  atTypeMemberLevel: boolean,
+  currentTypeName?: string,
 ): { kind: IndexedCodeDocument['kind']; name: string } | null {
   const patterns: Record<
     Language,
@@ -114,10 +117,17 @@ function declaration(
         pattern:
           /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/,
       },
+      ...(atTypeMemberLevel
+        ? [{
+            kind: 'function' as const,
+            pattern:
+              /^\s*(?:(?:public|private|protected|static|readonly|abstract|override|async|get|set)\s+)*([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\(/,
+          }]
+        : []),
     ],
     Python: [
-      { kind: 'class', pattern: /^class\s+([A-Za-z_]\w*)/ },
-      { kind: 'function', pattern: /^(?:async\s+)?def\s+([A-Za-z_]\w*)/ },
+      { kind: 'class', pattern: /^\s*class\s+([A-Za-z_]\w*)/ },
+      { kind: 'function', pattern: /^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)/ },
     ],
     Java: [
       {
@@ -125,6 +135,13 @@ function declaration(
         pattern:
           /^\s*(?:public\s+)?(?:(?:abstract|final|sealed|non-sealed)\s+)*(?:class|interface|record|enum)\s+([A-Za-z_$][\w$]*)/,
       },
+      ...(atTypeMemberLevel
+        ? [{
+            kind: 'function' as const,
+            pattern:
+              /^\s*(?:(?:public|protected|private|static|final|synchronized|abstract|native|default|strictfp)\s+)*(?:<[^>]+>\s+)?(?:[\w$.[\]<?>,@]+\s+)+([A-Za-z_$][\w$]*)\s*\(/,
+          }]
+        : []),
     ],
     Rust: [
       {
@@ -135,27 +152,45 @@ function declaration(
       {
         kind: 'function',
         pattern:
-          /^\s*pub(?:\([^)]*\))?\s+(?:async\s+)?fn\s+([A-Za-z_]\w*)/,
+          /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)/,
       },
     ],
     Go: [
       {
         kind: 'class',
-        pattern: /^type\s+([A-Za-z_]\w*)\s+(?:struct|interface)\b/,
+        pattern: /^\s*type\s+([A-Za-z_]\w*)\s+(?:struct|interface)\b/,
       },
       {
         kind: 'function',
         pattern:
-          /^func\s+(?:\([^)]*\)\s+)?([A-Za-z_]\w*)\s*\(/,
+          /^\s*func\s+(?:\([^)]*\)\s+)?([A-Za-z_]\w*)\s*\(/,
       },
     ],
   };
 
   for (const { kind, pattern } of patterns[language]) {
     const match = line.match(pattern);
-    if (match?.[1]) return { kind, name: match[1] };
+    if (
+      match?.[1] &&
+      match[1] !== currentTypeName &&
+      !['constructor', 'if', 'for', 'while', 'switch', 'catch'].includes(match[1])
+    ) {
+      return { kind, name: match[1] };
+    }
   }
   return null;
+}
+
+function braceDelta(line: string): number {
+  const code = line
+    .replace(/(['"`])(?:\\.|(?!\1).)*\1/g, '')
+    .replace(/\/\/.*$/, '');
+  let delta = 0;
+  for (const character of code) {
+    if (character === '{') delta += 1;
+    else if (character === '}') delta -= 1;
+  }
+  return delta;
 }
 
 function signature(lines: string[], start: number, language: Language): string {
@@ -177,22 +212,51 @@ function signature(lines: string[], start: number, language: Language): string {
 export function extractSymbols(source: string, language: Language): SymbolMatch[] {
   const lines = source.replace(/\r\n?/g, '\n').split('\n');
   const symbols: SymbolMatch[] = [];
+  let braceDepth = 0;
+  const typeScopes: Array<{ depth: number; name: string }> = [];
+
   for (let index = 0; index < lines.length; index += 1) {
-    const match = declaration(lines[index] ?? '', language);
-    if (!match) continue;
-    const extractedSignature = signature(lines, index, language);
-    symbols.push({
-      ...match,
-      signature: extractedSignature,
-      line: index + 1,
-      preview:
-        language === 'Python'
-          ? pythonSnippet(lines, index)
-          : braceSnippet(lines, index),
-      summary:
-        commentSummary(lines, index) ||
-        `${match.kind === 'class' ? 'Type' : 'Function'} ${match.name}: ${extractedSignature}`,
-    });
+    while (
+      typeScopes.length > 0 &&
+      braceDepth < (typeScopes.at(-1)?.depth ?? 0)
+    ) {
+      typeScopes.pop();
+    }
+    const line = lines[index] ?? '';
+    const currentType = typeScopes.at(-1);
+    const atTypeMemberLevel =
+      currentType !== undefined && braceDepth === currentType.depth;
+    const match = declaration(
+      line,
+      language,
+      atTypeMemberLevel,
+      currentType?.name,
+    );
+    if (match) {
+      const extractedSignature = signature(lines, index, language);
+      symbols.push({
+        ...match,
+        signature: extractedSignature,
+        line: index + 1,
+        preview:
+          language === 'Python'
+            ? pythonSnippet(lines, index)
+            : braceSnippet(lines, index),
+        summary:
+          commentSummary(lines, index) ||
+          `${match.kind === 'class' ? 'Type' : 'Function'} ${match.name}: ${extractedSignature}`,
+      });
+    }
+
+    const previousDepth = braceDepth;
+    braceDepth += braceDelta(line);
+    if (
+      match?.kind === 'class' &&
+      language !== 'Python' &&
+      braceDepth > previousDepth
+    ) {
+      typeScopes.push({ depth: braceDepth, name: match.name });
+    }
   }
   return symbols;
 }
@@ -205,6 +269,7 @@ async function sourceFiles(root: string): Promise<string[]> {
       if (
         entry.name === 'node_modules' ||
         entry.name === 'target' ||
+        entry.name === 'build' ||
         entry.name === '__pycache__' ||
         entry.name.startsWith('.')
       ) {
@@ -219,22 +284,43 @@ async function sourceFiles(root: string): Promise<string[]> {
   return files;
 }
 
+async function loadManifest(repositoryRoot: string): Promise<CorpusManifest | null> {
+  for (const fileName of ['manifest.json', 'dataset-manifest.json']) {
+    try {
+      return JSON.parse(
+        await readFile(path.join(repositoryRoot, fileName), 'utf8'),
+      ) as CorpusManifest;
+    } catch {
+      // Try the next supported manifest name.
+    }
+  }
+  return null;
+}
+
+async function repositories(
+  corpusRoot: string,
+): Promise<Array<{ root: string; manifest: CorpusManifest }>> {
+  const directManifest = await loadManifest(corpusRoot);
+  if (directManifest) return [{ root: corpusRoot, manifest: directManifest }];
+
+  const discovered: Array<{ root: string; manifest: CorpusManifest }> = [];
+  for (const entry of await readdir(corpusRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const repositoryRoot = path.join(corpusRoot, entry.name);
+    const manifest = await loadManifest(repositoryRoot);
+    if (manifest) discovered.push({ root: repositoryRoot, manifest });
+  }
+  return discovered;
+}
+
 export async function indexCorpus(corpusRoot: string): Promise<IndexedCodeDocument[]> {
-  const repositories = await readdir(corpusRoot, { withFileTypes: true });
   const documents: IndexedCodeDocument[] = [];
 
-  for (const repositoryEntry of repositories) {
-    if (!repositoryEntry.isDirectory()) continue;
-    const repositoryRoot = path.join(corpusRoot, repositoryEntry.name);
-    const manifestPath = path.join(repositoryRoot, 'manifest.json');
-    let manifest: CorpusManifest;
-    try {
-      manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as CorpusManifest;
-    } catch {
-      continue;
-    }
-
-    for (const absolutePath of await sourceFiles(repositoryRoot)) {
+  for (const { root: repositoryRoot, manifest } of await repositories(corpusRoot)) {
+    const scanRoot = manifest.sourceRoot
+      ? path.resolve(repositoryRoot, manifest.sourceRoot)
+      : repositoryRoot;
+    for (const absolutePath of await sourceFiles(scanRoot)) {
       const relativePath = path.relative(repositoryRoot, absolutePath).replaceAll('\\', '/');
       if (isTestPath(relativePath)) continue;
       const fileLanguage = extensions[path.extname(absolutePath)];

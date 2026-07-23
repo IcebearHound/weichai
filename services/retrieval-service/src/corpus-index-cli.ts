@@ -16,16 +16,29 @@ function embeddingText(document: IndexedCodeDocument): string {
 }
 
 const replace = process.argv.includes('--replace');
-const rootArgument = process.argv.slice(2).find((argument) => !argument.startsWith('--'));
-const corpusRoot = path.resolve(rootArgument || '../../fixtures/code-corpus');
+const rootArguments = process.argv.slice(2).filter((argument) => !argument.startsWith('--'));
+const corpusRoots = (
+  rootArguments.length > 0
+    ? rootArguments
+    : ['../../fixtures/code-corpus', '../../fixtures/translation-datasets']
+).map((root) => path.resolve(root));
 const config = loadConfig();
 const { store, embeddings } = createRuntime(config);
 
 try {
   await store.initialize();
-  const documents = await indexCorpus(corpusRoot);
+  const indexedRoots = await Promise.all(
+    corpusRoots.map(async (corpusRoot) => {
+      const documents = await indexCorpus(corpusRoot);
+      console.log(`Extracted ${documents.length} symbols from ${corpusRoot}.`);
+      return documents;
+    }),
+  );
+  const documents = [
+    ...new Map(indexedRoots.flat().map((document) => [document.id, document])).values(),
+  ];
   if (documents.length === 0) {
-    throw new Error(`No code symbols were extracted from ${corpusRoot}.`);
+    throw new Error(`No code symbols were extracted from ${corpusRoots.join(', ')}.`);
   }
   if (replace) {
     await store.clear();
@@ -45,7 +58,7 @@ try {
     console.log(`Indexed ${Math.min(offset + batch.length, documents.length)}/${documents.length}`);
   }
   await store.refreshIndex();
-  console.log(`Indexed ${documents.length} extracted symbols from ${corpusRoot}.`);
+  console.log(`Indexed ${documents.length} extracted symbols.`);
 } finally {
   await store.close();
 }

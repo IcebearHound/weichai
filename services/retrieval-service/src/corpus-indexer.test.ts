@@ -1,8 +1,9 @@
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { extractSymbols } from './corpus-indexer.js';
+import { extractSymbols, indexCorpus } from './corpus-indexer.js';
 
 describe('extractSymbols', () => {
-  it('extracts TypeScript classes and top-level functions', () => {
+  it('extracts TypeScript classes, methods, and top-level functions', () => {
     const symbols = extractSymbols(
       `
 /** Coordinates cache refreshes. */
@@ -18,6 +19,7 @@ export async function loadQuote(id: string): Promise<string> {
     );
     expect(symbols.map(({ kind, name }) => ({ kind, name }))).toEqual([
       { kind: 'class', name: 'QuoteCache' },
+      { kind: 'function', name: 'get' },
       { kind: 'function', name: 'loadQuote' },
     ]);
     expect(symbols[0]?.summary).toContain('Coordinates cache refreshes');
@@ -36,5 +38,22 @@ export async function loadQuote(id: string): Promise<string> {
       ),
     ).toEqual(['Cache', 'Load']);
     expect(extractSymbols('public final class Cache {}', 'Java')[0]?.name).toBe('Cache');
+  });
+
+  it('discovers the updated Java translation dataset and indexes its methods', async () => {
+    const datasetRoot = fileURLToPath(
+      new URL('../../../fixtures/translation-datasets', import.meta.url),
+    );
+    const documents = await indexCorpus(datasetRoot);
+
+    expect(documents.length).toBeGreaterThan(79);
+    expect(
+      documents.some(
+        (document) =>
+          document.title === 'apply' &&
+          document.path.endsWith('application/SettlementBatch.java'),
+      ),
+    ).toBe(true);
+    expect(documents.every((document) => document.language === 'Java')).toBe(true);
   });
 });

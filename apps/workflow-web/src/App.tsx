@@ -455,8 +455,8 @@ export default function App({ ports, moduleTree, searchProvider = 'Mock' }: AppP
                 <div className="eyebrow">从软件结构开始</div>
                 <h1>选择一个需要补齐能力的 class 或 function</h1>
                 <p>
-                  目标符号会作为后续检索、接口映射、翻译和回填的稳定锚点。当前树为演示数据，
-                  可替换为 IDE Symbol Provider。
+                  目标符号会作为后续检索、接口映射、翻译和回填的稳定锚点。当前树由目标工程
+                  源码生成，并保留真实路径、签名和待实现状态。
                 </p>
               </div>
             </div>

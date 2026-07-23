@@ -1,0 +1,14 @@
+{
+  "repository": "forexplore-translation-java-csharp",
+  "language": "Java",
+  "languageVersion": "17+",
+  "sourceRoot": "src/main/java",
+  "testRoot": "src/test/java",
+  "build": "bash build.sh",
+  "test": "bash build.sh test",
+  "license": "MIT",
+  "dependencies": [],
+  "pairedSkeleton": "csharp-skeleton",
+  "benchmarkIncluded": false,
+  "synthetic": true
+}

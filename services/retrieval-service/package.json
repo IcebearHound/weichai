@@ -1,0 +1,26 @@
+{
+  "name": "@forexplore/retrieval-service",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "schema": "tsx src/schema-cli.ts",
+    "index": "tsx src/index-cli.ts",
+    "index:corpus": "tsx src/corpus-index-cli.ts"
+  },
+  "dependencies": {
+    "@forexplore/contracts": "0.1.0",
+    "dotenv": "^17.2.3",
+    "mysql2": "^3.15.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.21.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

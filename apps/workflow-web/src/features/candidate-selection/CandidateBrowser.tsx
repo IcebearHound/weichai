@@ -5,6 +5,7 @@ interface CandidateBrowserProps {
   candidates: SearchCandidate[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  sourceLabel?: string;
 }
 
 function scorePercent(value: number): string {
@@ -27,6 +28,7 @@ export function CandidateBrowser({
   candidates,
   selectedId,
   onSelect,
+  sourceLabel = 'CodeSearchPort',
 }: CandidateBrowserProps) {
   const selected = candidates.find((candidate) => candidate.id === selectedId) ?? candidates[0];
 
@@ -37,7 +39,7 @@ export function CandidateBrowser({
       <aside className="candidate-list" aria-label="检索结果">
         <div className="candidate-list-heading">
           <span>TOP {candidates.length} 方案</span>
-          <span>Mock Search Port</span>
+          <span>{sourceLabel}</span>
         </div>
         {candidates.map((candidate, index) => {
           const active = candidate.id === selected.id;

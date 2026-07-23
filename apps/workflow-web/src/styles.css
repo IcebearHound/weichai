@@ -352,6 +352,21 @@ kbd {
   letter-spacing: 0.06em;
 }
 
+.tree-status {
+  margin-left: auto;
+  padding: 2px 4px;
+  color: oklch(0.43 0.12 45);
+  background: oklch(0.9 0.07 65);
+  border-radius: 2px;
+  font: 600 7px/1 var(--mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.tree-status + .tree-kind {
+  margin-left: 4px;
+}
+
 .explorer-note {
   padding: 10px 12px;
   color: var(--muted);
@@ -1202,6 +1217,15 @@ input[type='range'] {
   color: var(--accent-dark);
   font: 500 9px/1 var(--mono);
   text-transform: uppercase;
+}
+
+.implementation-status {
+  margin-left: auto;
+  padding: 3px 5px;
+  color: oklch(0.43 0.12 45);
+  background: oklch(0.9 0.07 65);
+  border-radius: 2px;
+  font-size: 8px;
 }
 
 .target-card strong {

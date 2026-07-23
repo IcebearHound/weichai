@@ -7,6 +7,8 @@ describe('ForeXplore vertical workflow', () => {
   it('lets a user select a function, retrieve candidates, adapt and backfill', async () => {
     render(<App ports={mockWorkflowPorts} moduleTree={moduleTree} />);
 
+    fireEvent.click(screen.getByRole('button', { name: 'rate-quote.service.ts' }));
+    fireEvent.click(screen.getByRole('button', { name: /RateQuoteService/ }));
     fireEvent.click(screen.getByRole('button', { name: /getQuote/ }));
 
     const requirement = screen.getByLabelText('功能需求');

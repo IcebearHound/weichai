@@ -1,0 +1,21 @@
+services:
+  seekdb:
+    image: oceanbase/seekdb:latest
+    container_name: forexplore-seekdb
+    ports:
+      - "2881:2881"
+      - "2886:2886"
+    environment:
+      SEEKDB_DATABASE: forexplore
+      MEMORY_LIMIT: 2G
+      CPU_COUNT: 2
+    volumes:
+      - seekdb-data:/var/lib/oceanbase
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -P 2881 -u root"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  seekdb-data:

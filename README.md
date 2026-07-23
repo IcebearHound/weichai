@@ -11,7 +11,9 @@ explicit ownership boundaries.
 - `packages/contracts`: shared request, result, symbol, and patch types.
 - `packages/workflow-core`: workflow state machine and implementation ports.
 - `packages/mock-adapters`: demonstration data and adapter implementations.
-- `services`: reserved boundaries for indexing, retrieval, and adaptation services.
+- `packages/seekdb-adapter`: browser-to-retrieval-service `CodeSearchPort` adapter.
+- `services/retrieval-service`: SeekDB-backed semantic, structural, and hybrid search.
+- `services`: backend boundaries for indexing, retrieval, and adaptation services.
 - `fixtures`: synthetic target system, code corpus, and retrieval benchmark.
 - `tests`: repository-level contract, integration, and end-to-end tests.
 - `docs`: architecture material, prototypes, reports, and historical work logs.
@@ -28,5 +30,12 @@ npm run build
 npm test
 ```
 
-The current runtime still uses `packages/mock-adapters`. Production services can
-replace those adapters through the ports exported by `packages/workflow-core`.
+The web runtime uses `packages/mock-adapters` by default. Set
+`VITE_RETRIEVAL_API_URL` to activate the SeekDB-backed search adapter while
+keeping the mock adaptation and backfill ports. See
+`services/retrieval-service/README.md` for setup and indexing instructions.
+
+The module tree is generated from
+`fixtures/target-system/currency-platform` when Vite starts or builds. It keeps
+the real source paths, signatures, line numbers, and unimplemented-method
+status instead of using the mock tree at runtime.

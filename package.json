@@ -4,11 +4,14 @@
   "version": "0.1.0",
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "services/*"
   ],
   "scripts": {
     "dev": "npm run dev --workspace @forexplore/workflow-web",
+    "dev:retrieval": "npm run dev --workspace @forexplore/retrieval-service",
     "build": "npm run build --workspace @forexplore/workflow-web",
-    "test": "npm run test --workspace @forexplore/workflow-core && npm run test --workspace @forexplore/workflow-web"
+    "build:retrieval": "npm run build --workspace @forexplore/retrieval-service",
+    "test": "npm run test --workspace @forexplore/workflow-core && npm run test --workspace @forexplore/seekdb-adapter && npm run test --workspace @forexplore/retrieval-service && npm run test --workspace @forexplore/workflow-web"
   }
 }

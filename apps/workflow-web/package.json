@@ -13,6 +13,7 @@
   "dependencies": {
     "@forexplore/contracts": "0.1.0",
     "@forexplore/mock-adapters": "0.1.0",
+    "@forexplore/seekdb-adapter": "0.1.0",
     "@forexplore/workflow-core": "0.1.0",
     "@fontsource-variable/ibm-plex-sans": "^5.2.8",
     "@fontsource/ibm-plex-mono": "^5.2.7",
@@ -21,6 +22,7 @@
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "@babel/parser": "^7.28.5",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/react": "^19.2.17",

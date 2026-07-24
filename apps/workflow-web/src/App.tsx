@@ -55,10 +55,12 @@ function RequirementPanel({
   state,
   dispatch,
   onSearch,
+  searchProvider,
 }: {
   state: typeof initialWorkflowState;
   dispatch: React.Dispatch<Parameters<typeof workflowReducer>[1]>;
   onSearch: () => void;
+  searchProvider: string;
 }) {
   const canSearch = Boolean(state.target && state.requirement.trim().length >= 8);
 
@@ -155,7 +157,7 @@ function RequirementPanel({
           </label>
           <label>
             <input type="checkbox" defaultChecked /> 开源样例目录
-            <span>Mock catalog</span>
+            <span>{searchProvider === 'SeekDB' ? 'SeekDB code corpus' : 'Mock catalog'}</span>
           </label>
         </section>
 
@@ -229,7 +231,13 @@ function SelectionFooter({
   );
 }
 
-function Inspector({ state }: { state: typeof initialWorkflowState }) {
+function Inspector({
+  state,
+  searchProvider,
+}: {
+  state: typeof initialWorkflowState;
+  searchProvider: string;
+}) {
   const candidate = selectedCandidate(state);
   return (
     <aside className="inspector-pane">
@@ -245,6 +253,9 @@ function Inspector({ state }: { state: typeof initialWorkflowState }) {
             <div className="target-kind">
               {state.target.kind === 'class' ? <Boxes size={15} /> : <Braces size={15} />}
               {state.target.kind}
+              {state.target.implementationStatus === 'unimplemented' ? (
+                <span className="implementation-status">待实现</span>
+              ) : null}
             </div>
             <strong>{state.target.name}</strong>
             <code>{state.target.signature}</code>
@@ -264,7 +275,7 @@ function Inspector({ state }: { state: typeof initialWorkflowState }) {
             <FileSearch size={14} />
             <span>
               <strong>CodeSearchPort</strong>
-              <small>Mock · Top-K</small>
+              <small>{searchProvider} · Top-K</small>
             </span>
             <em>ready</em>
           </div>
@@ -315,9 +326,10 @@ function Inspector({ state }: { state: typeof initialWorkflowState }) {
 export interface AppProps {
   ports: WorkflowPorts;
   moduleTree: ModuleNode;
+  searchProvider?: string;
 }
 
-export default function App({ ports, moduleTree }: AppProps) {
+export default function App({ ports, moduleTree, searchProvider = 'Mock' }: AppProps) {
   const [state, dispatch] = useReducer(workflowReducer, initialWorkflowState);
   const candidate = useMemo(() => selectedCandidate(state), [state]);
 
@@ -443,15 +455,20 @@ export default function App({ ports, moduleTree }: AppProps) {
                 <div className="eyebrow">从软件结构开始</div>
                 <h1>选择一个需要补齐能力的 class 或 function</h1>
                 <p>
-                  目标符号会作为后续检索、接口映射、翻译和回填的稳定锚点。当前树为演示数据，
-                  可替换为 IDE Symbol Provider。
+                  目标符号会作为后续检索、接口映射、翻译和回填的稳定锚点。当前树由目标工程
+                  源码生成，并保留真实路径、签名和待实现状态。
                 </p>
               </div>
             </div>
           ) : null}
 
           {state.stage === 'requirement' ? (
-            <RequirementPanel state={state} dispatch={dispatch} onSearch={handleSearch} />
+            <RequirementPanel
+              state={state}
+              dispatch={dispatch}
+              onSearch={handleSearch}
+              searchProvider={searchProvider}
+            />
           ) : null}
 
           {state.stage === 'candidates' ? (
@@ -459,6 +476,7 @@ export default function App({ ports, moduleTree }: AppProps) {
               <CandidateBrowser
                 candidates={state.candidates}
                 selectedId={state.selectedCandidateId}
+                sourceLabel={`${searchProvider} Search Port`}
                 onSelect={(candidateId) =>
                   dispatch({ type: 'SELECT_CANDIDATE', candidateId })
                 }
@@ -499,11 +517,11 @@ export default function App({ ports, moduleTree }: AppProps) {
         </div>
       </main>
 
-      <Inspector state={state} />
+      <Inspector state={state} searchProvider={searchProvider} />
 
       <footer className="statusbar">
         <span>Mock workspace · main</span>
-        <span>检索器：{state.retrievalMode}</span>
+        <span>检索器：{searchProvider} · {state.retrievalMode}</span>
         <span>目标：{state.target?.language ?? '未选择'}</span>
         <span className="statusbar-spacer" />
         <span>Ports 3/3 ready</span>

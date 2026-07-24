@@ -2,6 +2,8 @@ export type Language = 'TypeScript' | 'Python' | 'Java' | 'Rust' | 'Go';
 
 export type ModuleKind = 'workspace' | 'folder' | 'file' | 'class' | 'function';
 
+export type ImplementationStatus = 'implemented' | 'unimplemented';
+
 export interface ModuleNode {
   id: string;
   name: string;
@@ -10,6 +12,7 @@ export interface ModuleNode {
   language?: Language;
   signature?: string;
   line?: number;
+  implementationStatus?: ImplementationStatus;
   children?: ModuleNode[];
 }
 
@@ -21,4 +24,5 @@ export interface ModuleTarget {
   language: Language;
   signature: string;
   line?: number;
+  implementationStatus?: ImplementationStatus;
 }

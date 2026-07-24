@@ -17,11 +17,16 @@ interface ModuleTreeProps {
   onSelect: (target: ModuleTarget) => void;
 }
 
-function collectExpandableIds(node: ModuleNode, result: string[] = []): string[] {
-  if (node.children?.length) {
-    result.push(node.id);
-    node.children.forEach((child) => collectExpandableIds(child, result));
-  }
+function collectInitialExpandedIds(
+  node: ModuleNode,
+  result: string[] = [],
+  depth = 0,
+): string[] {
+  if (!node.children?.length || depth > 1) return result;
+  result.push(node.id);
+  node.children
+    .filter((child) => child.kind === 'folder')
+    .forEach((child) => collectInitialExpandedIds(child, result, depth + 1));
   return result;
 }
 
@@ -35,7 +40,7 @@ function NodeIcon({ node, expanded }: { node: ModuleNode; expanded: boolean }) {
 }
 
 export function ModuleTree({ root, selectedId, onSelect }: ModuleTreeProps) {
-  const initialExpanded = useMemo(() => new Set(collectExpandableIds(root)), [root]);
+  const initialExpanded = useMemo(() => new Set(collectInitialExpandedIds(root)), [root]);
   const [expanded, setExpanded] = useState(initialExpanded);
 
   function toggle(id: string) {
@@ -65,7 +70,7 @@ export function ModuleTree({ root, selectedId, onSelect }: ModuleTreeProps) {
           aria-selected={isSelected}
           onClick={() => {
             if (target) onSelect(target);
-            else if (hasChildren) toggle(node.id);
+            if (hasChildren) toggle(node.id);
           }}
         >
           <span
@@ -88,6 +93,11 @@ export function ModuleTree({ root, selectedId, onSelect }: ModuleTreeProps) {
             <NodeIcon node={node} expanded={isExpanded} />
           </span>
           <span className="tree-label">{node.name}</span>
+          {node.implementationStatus === 'unimplemented' ? (
+            <span className="tree-status" title="源码中尚未实现">
+              todo
+            </span>
+          ) : null}
           {node.kind === 'function' || node.kind === 'class' ? (
             <span className="tree-kind">{node.kind === 'function' ? 'fn' : 'cls'}</span>
           ) : null}

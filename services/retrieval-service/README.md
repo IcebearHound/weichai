@@ -1,5 +1,109 @@
-# Retrieval Service
+# SeekDB Retrieval Service
 
-Reserved for semantic, structural, and hybrid candidate retrieval and ranking.
-It will consume indexed repository data and return contract-compatible Top-K
-candidates. No implementation has been added yet.
+This service is the production `CodeSearchPort` boundary for ForeXplore. It
+stores code-symbol documents in [SeekDB](https://github.com/oceanbase/seekdb)
+and exposes the stable workflow search contract over HTTP.
+
+## Retrieval modes
+
+- `semantic`: HNSW cosine-distance search over dense embeddings.
+- `structure`: SeekDB full-text search, constrained to the target symbol kind.
+- `hybrid`: parallel vector and full-text queries followed by weighted
+  reciprocal-rank fusion and contract-aware reranking.
+
+Each mode retrieves a broader, bounded candidate pool before final reranking,
+which keeps small result sets useful when the index contains many repositories.
+
+The schema uses SeekDB's `VECTOR`, `VECTOR INDEX ... TYPE=hnsw`,
+`FULLTEXT INDEX`, and `ORDER BY cosine_distance(...) APPROXIMATE` features.
+All query values and filters are parameterized; only validated SQL identifiers
+and generated vector hex literals are interpolated.
+
+## Start locally
+
+SeekDB's embedded library is currently available for Linux and Apple Silicon,
+not native Windows. Docker or a remote SeekDB instance is therefore the
+portable development option.
+
+```text
+docker compose -f services/retrieval-service/docker-compose.yml up -d
+copy services\retrieval-service\.env.example services\retrieval-service\.env
+npm install
+npm run schema --workspace @forexplore/retrieval-service
+npm run index:corpus --workspace @forexplore/retrieval-service -- --replace
+npm run dev:retrieval
+```
+
+In another terminal:
+
+```text
+copy apps\workflow-web\.env.example apps\workflow-web\.env
+npm run dev
+```
+
+The service listens on `http://127.0.0.1:8787` by default. Check both layers:
+
+```text
+curl http://127.0.0.1:8787/health
+```
+
+The sample Docker image is for development/testing. Use a managed or properly
+operated SeekDB deployment for production.
+
+## Embeddings
+
+`SEEKDB_EMBEDDING_PROVIDER=hash` is the default. It performs deterministic
+token and character-trigram feature hashing, needs no model download, and is
+appropriate for integration smoke tests. It is not a replacement for a
+semantic embedding model.
+
+Set `SEEKDB_EMBEDDING_PROVIDER=openai` with an OpenAI-compatible embeddings URL,
+API key, model, and matching `SEEKDB_VECTOR_DIMENSION` for production-quality
+semantic retrieval. A table's vector dimension cannot be changed in place:
+use a new table or rebuild it when changing models/dimensions.
+
+## Index input
+
+By default, `index:corpus` scans both `fixtures/code-corpus` and
+`fixtures/translation-datasets`. It extracts class, method, and function
+symbols from TypeScript, Python, Java, Rust, and Go sources and indexes the
+resulting documents. Both `manifest.json` and `dataset-manifest.json`
+repositories are discovered. The intentionally incomplete C# translation
+skeleton is not treated as a reusable implementation.
+
+Pass `--replace` to clear the dedicated code-symbol table first. To override
+the defaults, pass one or more explicit corpus roots after `--`.
+
+The lower-level `index` command accepts UTF-8 JSON Lines. Each line follows this shape:
+
+```json
+{
+  "id": "unique-symbol-id",
+  "title": "Cache.getOrLoad",
+  "repository": "owner/repository",
+  "license": "Apache-2.0",
+  "language": "TypeScript",
+  "kind": "function",
+  "path": "src/cache.ts",
+  "signature": "getOrLoad(key: string): Promise<Value>",
+  "summary": "TTL cache with request coalescing",
+  "preview": "async function getOrLoad(...) { ... }",
+  "dependencies": [],
+  "compatibility": [],
+  "risks": [],
+  "content": "Optional additional searchable implementation text"
+}
+```
+
+The indexer upserts documents in batches and calls
+`dbms_index_manager.refresh()` so newly indexed vectors are immediately
+searchable on supported SeekDB versions.
+
+## HTTP API
+
+- `GET /health` checks the SeekDB connection.
+- `POST /v1/search` accepts `SearchRequest` from `@forexplore/contracts` and
+  returns `{ "candidates": SearchCandidate[] }`.
+
+Set `VITE_RETRIEVAL_API_URL` in the web app to activate the real adapter. If the
+variable is absent, the original mock search adapter remains active.

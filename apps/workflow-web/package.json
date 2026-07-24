@@ -14,6 +14,7 @@
     "@forexplore/contracts": "0.1.0",
     "@forexplore/mock-adapters": "0.1.0",
     "@forexplore/seekdb-adapter": "0.1.0",
+    "@forexplore/workspace-adapters": "0.1.0",
     "@forexplore/workflow-core": "0.1.0",
     "@fontsource-variable/ibm-plex-sans": "^5.2.8",
     "@fontsource/ibm-plex-mono": "^5.2.7",

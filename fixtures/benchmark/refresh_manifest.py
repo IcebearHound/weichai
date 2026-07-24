@@ -139,11 +139,19 @@ def load_repository_manifest(repository: Path) -> dict[str, object]:
     }
 
 
+def is_benchmark_repository(repository: Path) -> bool:
+    manifest_path = repository / "manifest.json"
+    if not manifest_path.is_file():
+        return False
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    return data.get("benchmarkIncluded") is not False
+
+
 def main() -> None:
     repositories = [
         load_repository_manifest(path)
         for path in sorted(CORPUS.iterdir())
-        if path.is_dir() and (path / "manifest.json").exists()
+        if path.is_dir() and is_benchmark_repository(path)
     ]
     languages = Counter(str(repository["language"]) for repository in repositories)
     output = {

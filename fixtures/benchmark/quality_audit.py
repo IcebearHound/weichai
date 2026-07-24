@@ -91,16 +91,20 @@ def jaccard(left: Iterable[tuple[str, ...]], right: Iterable[tuple[str, ...]]) -
     return len(left_set & right_set) / len(left_set | right_set)
 
 
-def source_files(root: Path) -> list[Path]:
+def source_files(root: Path, excluded_roots: Iterable[Path] = ()) -> list[Path]:
+    excluded = tuple(path.resolve() for path in excluded_roots)
     return sorted(
         path
         for path in root.rglob("*")
-        if path.is_file() and path.suffix in SOURCE_SUFFIXES and not (set(path.parts) & IGNORED_PARTS)
+        if path.is_file()
+        and path.suffix in SOURCE_SUFFIXES
+        and not (set(path.parts) & IGNORED_PARTS)
+        and not any(path.resolve().is_relative_to(excluded_root) for excluded_root in excluded)
     )
 
 
-def audit(root: Path) -> dict[str, object]:
-    files = source_files(root)
+def audit(root: Path, excluded_roots: Iterable[Path] = ()) -> dict[str, object]:
+    files = source_files(root, excluded_roots)
     normalized = {path: normalized_lines(path) for path in files}
     exact = {path: significant_lines(path) for path in files}
     repetition = {path: repetition_ratio(lines) for path, lines in normalized.items() if len(lines) >= 100}

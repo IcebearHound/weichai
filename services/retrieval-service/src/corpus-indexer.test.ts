@@ -28,7 +28,7 @@ export async function loadQuote(id: string): Promise<string> {
     expect(symbols[0]?.summary).toContain('Coordinates cache refreshes');
   });
 
-  it('extracts Python, Rust, Go, and Java declarations', () => {
+  it('extracts Python, Rust, Go, Java, and C# declarations', () => {
     expect(extractSymbols('class Cache:\n    pass\n\ndef load():\n    pass', 'Python')).toHaveLength(2);
     expect(
       extractSymbols('pub struct Cache {}\nimpl Cache { pub fn load(&self) {} }', 'Rust').map(
@@ -41,11 +41,17 @@ export async function loadQuote(id: string): Promise<string> {
       ),
     ).toEqual(['Cache', 'Load']);
     expect(extractSymbols('public final class Cache {}', 'Java')[0]?.name).toBe('Cache');
+    expect(
+      extractSymbols(
+        'public sealed class Cache {\n  public async Task<string> LoadAsync() { return ""; }\n}',
+        'C#',
+      ).map((symbol) => symbol.name),
+    ).toEqual(['Cache', 'LoadAsync']);
   });
 
   it('discovers the updated Java translation dataset and indexes its methods', async () => {
     const datasetRoot = fileURLToPath(
-      new URL('../../../fixtures/translation-datasets', import.meta.url),
+      new URL('../../../fixtures/code-corpus/forexplore-reference-java', import.meta.url),
     );
     const documents = await indexCorpus(datasetRoot);
 

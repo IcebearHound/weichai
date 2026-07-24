@@ -30,26 +30,30 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
 
 const catalog: SearchCandidate[] = [
   {
-    id: 'python-ttl-cache',
-    title: 'AsyncTTLCache.get_or_load',
-    repository: 'demo-catalog/python-service-kit',
-    license: 'Apache-2.0',
-    language: 'Python',
+    id: 'java-quote-cache',
+    title: 'QuoteCache.getOrLoad',
+    repository: 'forexplore-reference-java',
+    license: 'MIT',
+    language: 'Java',
     kind: 'function',
-    path: 'service_kit/cache/async_ttl.py',
-    signature: 'async def get_or_load(key, loader, ttl, stale_ttl=None)',
+    path: 'src/main/java/forexplore/reference/application/QuoteCache.java',
+    signature: 'synchronized Quote getOrLoad(QuoteRequest request, Function<QuoteRequest, Quote> loader)',
     summary:
-      '异步 TTL 缓存，支持并发请求合并、过期回源与短时 stale 回退，适合作为报价读取的主体实现。',
-    score: { overall: 0.92, semantic: 0.95, symbol: 0.84, contract: 0.89 },
-    preview: `async def get_or_load(key, loader, ttl, stale_ttl=None):
-    cached = await store.get(key)
-    if cached and not cached.expired:
-        return cached.value
-    async with locks.singleflight(key):
-        return await loader()`,
-    dependencies: ['asyncio', 'cache store'],
-    compatibility: ['异步返回值', '可注入 loader', '可映射错误类型'],
-    risks: ['Python 异常需转换为 TypeScript Result', '锁语义需要目标运行时实现'],
+      '来自已配置 Java corpus 的 TTL 报价缓存，包含规范化键、过期回源与容量淘汰，可翻译到 C# 异步缓存端口。',
+    score: { overall: 0.94, semantic: 0.96, symbol: 0.9, contract: 0.91 },
+    preview: `public synchronized Quote getOrLoad(
+    QuoteRequest request,
+    Function<QuoteRequest, Quote> loader) {
+  Entry existing = entries.get(request.normalizedPair());
+  Instant now = clock.now();
+  if (existing != null && existing.expiresAt().isAfter(now)) return existing.quote();
+  Quote loaded = loader.apply(request);
+  entries.put(request.normalizedPair(), new Entry(loaded, now.plusSeconds(request.maxAgeSeconds())));
+  return loaded;
+}`,
+    dependencies: ['Java standard library'],
+    compatibility: ['请求模型对应', '缓存 loader 可映射到 C# Func', 'TTL 来自请求契约'],
+    risks: ['同步锁需改为异步 single-flight', 'Java loader 未携带 CancellationToken'],
   },
   {
     id: 'rust-resilient-cache',
@@ -155,25 +159,67 @@ class MockCodeSearchAdapter implements CodeSearchPort {
 
 function generatedCode(request: AdaptationRequest): string {
   const note = request.decisionNotes.trim()
-    ? `\n  // 人工决策备注：${request.decisionNotes.trim()}`
+    ? `\n    // 人工决策备注：${request.decisionNotes.trim()}`
     : '';
-  return `async getQuote(request: QuoteRequest): Promise<Quote> {${note}
-  const key = this.normalizePair(request.base, request.quote);
-  const cached = await this.quoteCache.get(key);
-  if (cached?.isFresh()) return cached.value;
 
-  return this.singleFlight.run(key, async () => {
-    try {
-      const quote = await this.provider.fetchQuote(request, { timeoutMs: 800 });
-      await this.quoteCache.put(key, quote, { ttlMs: 5_000 });
-      return quote;
-    } catch (error) {
-      const stale = await this.quoteCache.getStale(key);
-      if (stale) return stale.value;
-      throw QuoteProviderError.from(error);
+  if (request.target.name === 'SettleBatchAsync') {
+    return `public async Task<IReadOnlyList<SettlementOutcome>> SettleBatchAsync(
+    IReadOnlyList<SettlementInstruction> instructions,
+    Func<SettlementInstruction, int, CancellationToken, Task<SettlementOutcome>> gateway,
+    CancellationToken cancellationToken)
+{${note}
+    var outcomes = new List<SettlementOutcome>(instructions.Count);
+    var seen = new HashSet<string>(StringComparer.Ordinal);
+    foreach (var instruction in instructions)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!seen.Add(instruction.IdempotencyKey)) continue;
+        outcomes.Add(await gateway(instruction, 1, cancellationToken));
     }
-  });
+    return outcomes;
 }`;
+  }
+
+  if (request.target.name === 'AppendAsync') {
+    return `public async ValueTask<long> AppendAsync(
+    string action,
+    string subject,
+    string payload,
+    CancellationToken cancellationToken)
+{${note}
+    cancellationToken.ThrowIfCancellationRequested();
+    return await journal.AppendAsync(action, subject, payload, cancellationToken);
+}`;
+  }
+
+  if (request.target.kind === 'class') {
+    return `${request.target.signature}\n{${note}\n    // Mock preview: translated members are inserted here.\n}`;
+  }
+
+  return `public async Task<Quote> GetQuoteAsync(
+    QuoteRequest request,
+    CancellationToken cancellationToken)
+{${note}
+    cancellationToken.ThrowIfCancellationRequested();
+    return await cache.GetOrLoadAsync(
+        request,
+        token => FetchWithFallbackAsync(request, token),
+        cancellationToken);
+}`;
+}
+
+function originalStub(targetName: string): string {
+  const stubs: Record<string, string> = {
+    GetQuoteAsync:
+      '        throw new NotImplementedException("Translation exercise: implement cache and fallback orchestration");',
+    FetchWithFallbackAsync:
+      '        throw new NotImplementedException("Translation exercise: preserve retryability without swallowing cancellation");',
+    SettleBatchAsync:
+      '        throw new NotImplementedException("Translation exercise: map Java retry loop to typed async outcomes");',
+    AppendAsync:
+      '        throw new NotImplementedException("Translation exercise: implement canonical hash-chain append");',
+  };
+  return stubs[targetName] ?? '        throw new NotImplementedException();';
 }
 
 function createPatch(request: AdaptationRequest): FilePatch[] {
@@ -188,26 +234,8 @@ function createPatch(request: AdaptationRequest): FilePatch[] {
         {
           header: `@@ -${request.target.line ?? 42},3 +${request.target.line ?? 42},${code.length} @@`,
           lines: [
-            { type: 'remove', content: '  throw new Error("Not implemented");' },
+            { type: 'remove', content: originalStub(request.target.name) },
             ...code.map((content) => ({ type: 'add' as const, content })),
-          ],
-        },
-      ],
-    },
-    {
-      path: 'services/quote-cache.port.ts',
-      status: 'created',
-      additions: 18,
-      deletions: 0,
-      hunks: [
-        {
-          header: '@@ -0,0 +1,18 @@',
-          lines: [
-            { type: 'add', content: 'export interface QuoteCachePort {' },
-            { type: 'add', content: '  get(key: CurrencyPair): Promise<CachedQuote | null>;' },
-            { type: 'add', content: '  getStale(key: CurrencyPair): Promise<CachedQuote | null>;' },
-            { type: 'add', content: '  put(key: CurrencyPair, quote: Quote, options: CacheOptions): Promise<void>;' },
-            { type: 'add', content: '}' },
           ],
         },
       ],
@@ -227,22 +255,22 @@ class MockCodeAdaptationAdapter implements CodeAdaptationPort {
       generatedCode: generatedCode(request),
       interfaceMappings: [
         {
-          source: 'key',
-          target: 'CurrencyPair',
+          source: 'QuoteRequest.normalizedPair()',
+          target: 'QuoteRequest Base / Counter',
           action: 'convert',
-          note: '通过 normalizePair 统一领域键。',
+          note: '在 C# 目标边界统一报价对规范化规则。',
         },
         {
-          source: 'loader()',
-          target: 'provider.fetchQuote(request)',
+          source: 'Function<QuoteRequest, Quote>',
+          target: 'Func<CancellationToken, Task<Quote>>',
           action: 'inject',
-          note: '复用目标模块已有 Provider 依赖。',
+          note: '同步 Java loader 转换为目标异步端口。',
         },
         {
-          source: 'Python exception / Rust Result',
-          target: 'QuoteProviderError',
+          source: 'synchronized / RuntimeException',
+          target: 'async single-flight / CancellationToken',
           action: 'convert',
-          note: '错误统一收敛到目标领域类型。',
+          note: '保留目标运行时的取消和并发语义。',
         },
       ],
       validation: [

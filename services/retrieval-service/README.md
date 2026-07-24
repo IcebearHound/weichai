@@ -64,12 +64,11 @@ use a new table or rebuild it when changing models/dimensions.
 
 ## Index input
 
-By default, `index:corpus` scans both `fixtures/code-corpus` and
-`fixtures/translation-datasets`. It extracts class, method, and function
-symbols from TypeScript, Python, Java, Rust, and Go sources and indexes the
-resulting documents. Both `manifest.json` and `dataset-manifest.json`
-repositories are discovered. The intentionally incomplete C# translation
-skeleton is not treated as a reusable implementation.
+By default, `index:corpus` scans `fixtures/code-corpus`. It extracts class,
+method, and function symbols from TypeScript, Python, Java, C#, Rust, and Go
+sources and indexes the resulting documents. Repositories with either
+`manifest.json` or `dataset-manifest.json` are discovered. The intentionally
+incomplete C# target workspace is not treated as a reusable implementation.
 
 Pass `--replace` to clear the dedicated code-symbol table first. To override
 the defaults, pass one or more explicit corpus roots after `--`.

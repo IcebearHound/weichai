@@ -8,7 +8,7 @@ import {
   Folder,
   FolderOpen,
 } from 'lucide-react';
-import type { ModuleNode, ModuleTarget } from '@forexplore/contracts';
+import type { ModuleKind, ModuleNode, ModuleTarget } from '@forexplore/contracts';
 import { toModuleTarget } from '@forexplore/workflow-core';
 
 interface ModuleTreeProps {
@@ -35,9 +35,16 @@ function NodeIcon({ node, expanded }: { node: ModuleNode; expanded: boolean }) {
     return expanded ? <FolderOpen size={14} /> : <Folder size={14} />;
   }
   if (node.kind === 'file') return <FileCode2 size={14} />;
-  if (node.kind === 'class') return <Box size={14} />;
+  if (node.kind === 'class' || node.kind === 'record') return <Box size={14} />;
   return <Braces size={14} />;
 }
+
+const kindLabels: Partial<Record<ModuleKind, string>> = {
+  class: 'cls',
+  record: 'rec',
+  interface: 'ifc',
+  function: 'fn',
+};
 
 export function ModuleTree({ root, selectedId, onSelect }: ModuleTreeProps) {
   const initialExpanded = useMemo(() => new Set(collectInitialExpandedIds(root)), [root]);
@@ -98,9 +105,7 @@ export function ModuleTree({ root, selectedId, onSelect }: ModuleTreeProps) {
               todo
             </span>
           ) : null}
-          {node.kind === 'function' || node.kind === 'class' ? (
-            <span className="tree-kind">{node.kind === 'function' ? 'fn' : 'cls'}</span>
-          ) : null}
+          {kindLabels[node.kind] ? <span className="tree-kind">{kindLabels[node.kind]}</span> : null}
         </button>
         {hasChildren && isExpanded
           ? node.children?.map((child) => renderNode(child, depth + 1))

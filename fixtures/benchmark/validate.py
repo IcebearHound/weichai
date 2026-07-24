@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from quality_audit import audit
-from refresh_manifest import is_test_file, load_repository_manifest
+from refresh_manifest import is_benchmark_repository, is_test_file, load_repository_manifest
 
 BENCHMARK = Path(__file__).resolve().parent
 FIXTURES = BENCHMARK.parent
@@ -292,7 +292,7 @@ def target_metrics(validation: Validation) -> dict[str, int]:
 
 
 def validate_corpus(validation: Validation) -> dict[str, Any]:
-    repositories = sorted(path for path in CORPUS.iterdir() if path.is_dir() and (path / "manifest.json").exists())
+    repositories = sorted(path for path in CORPUS.iterdir() if path.is_dir() and is_benchmark_repository(path))
     validation.require(len(repositories) == 12, f"expected 12 corpus repositories, found {len(repositories)}")
     measured: list[dict[str, Any]] = []
     for repository in repositories:
@@ -401,7 +401,13 @@ def validate_separation_and_provenance(validation: Validation) -> None:
 
 
 def validate_source_quality(validation: Validation) -> dict[str, object]:
-    report = audit(CORPUS)
+    excluded_repositories = [
+        path
+        for path in CORPUS.iterdir()
+        if path.is_dir() and (path / "manifest.json").is_file() and not is_benchmark_repository(path)
+    ]
+    report = audit(CORPUS, excluded_roots=excluded_repositories)
+    report["excludedRepositories"] = [path.name for path in sorted(excluded_repositories)]
     repeated = report["excessiveRepetition"]
     similar = report["highSimilarityPairs"]
     validation.require(not repeated, f"mechanically repeated source windows detected: {repeated}")

@@ -334,6 +334,14 @@ kbd {
   color: oklch(0.55 0.13 55);
 }
 
+.tree-icon-record {
+  color: oklch(0.5 0.11 155);
+}
+
+.tree-icon-interface {
+  color: oklch(0.5 0.09 225);
+}
+
 .tree-icon-function {
   color: oklch(0.5 0.11 290);
 }

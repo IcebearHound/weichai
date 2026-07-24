@@ -25,6 +25,7 @@ const extensions: Record<string, Language> = {
   '.ts': 'TypeScript',
   '.py': 'Python',
   '.java': 'Java',
+  '.cs': 'C#',
   '.rs': 'Rust',
   '.go': 'Go',
 };
@@ -162,6 +163,20 @@ function declaration(
             kind: 'function' as const,
             pattern:
               /^\s*(?:(?:public|protected|private|static|final|synchronized|abstract|native|default|strictfp)\s+)*(?:<[^>]+>\s+)?(?:[\w$.[\]<?>,@]+\s+)+([A-Za-z_$][\w$]*)\s*\(/,
+          }]
+        : []),
+    ],
+    'C#': [
+      {
+        kind: 'class',
+        pattern:
+          /^\s*(?:(?:public|internal|protected|private|static|abstract|sealed|partial|readonly|ref)\s+)*(?:class|interface|record(?:\s+(?:class|struct))?|struct|enum)\s+([A-Za-z_][\w]*)/,
+      },
+      ...(atTypeMemberLevel
+        ? [{
+            kind: 'function' as const,
+            pattern:
+              /^\s*(?:(?:public|internal|protected|private|static|abstract|virtual|override|sealed|async|extern|unsafe|new|partial)\s+)*(?:[\w.[\]<?>,]+\s+)+([A-Za-z_][\w]*)\s*\(/,
           }]
         : []),
     ],

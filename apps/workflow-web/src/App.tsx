@@ -84,7 +84,7 @@ function RequirementPanel({
           className="requirement-textarea"
           value={state.requirement}
           onChange={(event) => dispatch({ type: 'SET_REQUIREMENT', value: event.target.value })}
-          placeholder="例如：为报价读取增加 5 秒 TTL 缓存、并发请求合并、800ms 超时与失败时 stale 回退；保持现有 QuoteRequest → Promise<Quote> 接口不变。"
+          placeholder="例如：为报价读取增加 5 秒 TTL 缓存、并发请求合并、800ms 超时与失败时 stale 回退；保持现有 QuoteRequest → Task<Quote> 接口不变。"
         />
         <div className="field-hint">
           <span>{state.requirement.trim().length} 字符</span>
@@ -431,7 +431,7 @@ export default function App({ ports, moduleTree, searchProvider = 'Mock' }: AppP
         </div>
         <div className="explorer-scope">
           <span>WORKSPACE</span>
-          <strong>currency-platform</strong>
+          <strong>{moduleTree.name}</strong>
         </div>
         <ModuleTree
           root={moduleTree}
@@ -455,8 +455,8 @@ export default function App({ ports, moduleTree, searchProvider = 'Mock' }: AppP
                 <div className="eyebrow">从软件结构开始</div>
                 <h1>选择一个需要补齐能力的 class 或 function</h1>
                 <p>
-                  目标符号会作为后续检索、接口映射、翻译和回填的稳定锚点。当前树由目标工程
-                  源码生成，并保留真实路径、签名和待实现状态。
+                  目标符号会作为后续检索、接口映射、翻译和回填的稳定锚点。当前 C# 树由
+                  ModuleSymbolPort 提供，并保留真实路径和签名；后续可替换为 IDE Symbol Provider。
                 </p>
               </div>
             </div>
@@ -520,7 +520,7 @@ export default function App({ ports, moduleTree, searchProvider = 'Mock' }: AppP
       <Inspector state={state} searchProvider={searchProvider} />
 
       <footer className="statusbar">
-        <span>Mock workspace · main</span>
+        <span>{moduleTree.name} · main</span>
         <span>检索器：{searchProvider} · {state.retrievalMode}</span>
         <span>目标：{state.target?.language ?? '未选择'}</span>
         <span className="statusbar-spacer" />

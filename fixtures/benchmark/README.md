@@ -12,6 +12,8 @@ python fixtures/benchmark/validate.py --run-commands
 
 The validator bootstraps the target project's pinned development dependencies when they are absent. Generated dependency and build directories are not benchmark data and may be removed after validation.
 
+Repositories under `fixtures/code-corpus` with `benchmarkIncluded: false` remain available to indexers but are excluded from this fixed benchmark's manifest, relevance distribution, and source-quality thresholds.
+
 Refresh measured repository statistics after changing corpus source files:
 
 ```text

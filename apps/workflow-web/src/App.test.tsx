@@ -1,15 +1,21 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { mockWorkflowPorts, moduleTree } from '@forexplore/mock-adapters';
+import { mockWorkflowPorts } from '@forexplore/mock-adapters';
+import { csharpWorkspaceId, workspaceModuleSymbols } from '@forexplore/workspace-adapters';
 import { describe, expect, it } from 'vitest';
 import App from './App';
 
 describe('ForeXplore vertical workflow', () => {
   it('lets a user select a function, retrieve candidates, adapt and backfill', async () => {
+    const moduleTree = await workspaceModuleSymbols.loadTree(csharpWorkspaceId);
     render(<App ports={mockWorkflowPorts} moduleTree={moduleTree} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'rate-quote.service.ts' }));
-    fireEvent.click(screen.getByRole('button', { name: /RateQuoteService/ }));
-    fireEvent.click(screen.getByRole('button', { name: /getQuote/ }));
+    expect(screen.getAllByText('ForeXplore.Skeleton')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Application' }));
+    fireEvent.click(screen.getByRole('button', { name: 'QuoteOrchestrationService.cs' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'QuoteOrchestrationServicecls' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /GetQuoteAsync/ }));
 
     const requirement = screen.getByLabelText('功能需求');
     fireEvent.change(requirement, {
@@ -21,11 +27,11 @@ describe('ForeXplore vertical workflow', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole('button', { name: /AsyncTTLCache\.get_or_load/ }),
+        screen.getByRole('button', { name: /QuoteCache\.getOrLoad/ }),
       ).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /AsyncTTLCache\.get_or_load/ }));
+    fireEvent.click(screen.getByRole('button', { name: /QuoteCache\.getOrLoad/ }));
     fireEvent.change(screen.getByPlaceholderText(/缓存必须通过构造函数注入/), {
       target: { value: '禁止新增全局状态' },
     });

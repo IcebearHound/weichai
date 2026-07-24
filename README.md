@@ -10,7 +10,8 @@ explicit ownership boundaries.
 - `apps/workflow-web`: runnable React workflow UI.
 - `packages/contracts`: shared request, result, symbol, and patch types.
 - `packages/workflow-core`: workflow state machine and implementation ports.
-- `packages/mock-adapters`: demonstration data and adapter implementations.
+- `packages/workspace-adapters`: workspace discovery and module-symbol providers.
+- `packages/mock-adapters`: demonstration search, adaptation, and backfill implementations.
 - `packages/seekdb-adapter`: browser-to-retrieval-service `CodeSearchPort` adapter.
 - `services/retrieval-service`: SeekDB-backed semantic, structural, and hybrid search.
 - `services`: backend boundaries for indexing, retrieval, and adaptation services.
@@ -35,7 +36,6 @@ The web runtime uses `packages/mock-adapters` by default. Set
 keeping the mock adaptation and backfill ports. See
 `services/retrieval-service/README.md` for setup and indexing instructions.
 
-The module tree is generated from
-`fixtures/target-system/currency-platform` when Vite starts or builds. It keeps
-the real source paths, signatures, line numbers, and unimplemented-method
-status instead of using the mock tree at runtime.
+The runtime module tree is loaded through `ModuleSymbolPort` from the C# target
+fixture. The repository also includes a Vite-time TypeScript workspace scanner
+for generated module-tree integrations.

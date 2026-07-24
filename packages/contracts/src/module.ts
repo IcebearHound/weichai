@@ -1,6 +1,13 @@
-export type Language = 'TypeScript' | 'Python' | 'Java' | 'Rust' | 'Go';
+export type Language = 'TypeScript' | 'Python' | 'Java' | 'C#' | 'Rust' | 'Go';
 
-export type ModuleKind = 'workspace' | 'folder' | 'file' | 'class' | 'function';
+export type ModuleKind =
+  | 'workspace'
+  | 'folder'
+  | 'file'
+  | 'class'
+  | 'record'
+  | 'interface'
+  | 'function';
 
 export type ImplementationStatus = 'implemented' | 'unimplemented';
 

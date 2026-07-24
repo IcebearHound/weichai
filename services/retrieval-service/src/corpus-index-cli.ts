@@ -20,7 +20,7 @@ const rootArguments = process.argv.slice(2).filter((argument) => !argument.start
 const corpusRoots = (
   rootArguments.length > 0
     ? rootArguments
-    : ['../../fixtures/code-corpus', '../../fixtures/translation-datasets']
+    : ['../../fixtures/code-corpus']
 ).map((root) => path.resolve(root));
 const config = loadConfig();
 const { store, embeddings } = createRuntime(config);

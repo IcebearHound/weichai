@@ -4,11 +4,11 @@
 
 ```text
 apps/workflow-web
-    |            |                  \
-    v            v                   v
-workflow-core <- mock-adapters <- seekdb-adapter
-    |            |                   |
-    +------------+---------v---------+
+    |            |                 |                 |
+    v            v                 v                 v
+workflow-core <- mock-adapters  workspace-adapters  seekdb-adapter
+    |            |                 |                 |
+    +------------+--------v--------+--------v--------+
                          contracts
 
 seekdb-adapter -> retrieval-service -> SeekDB
@@ -22,14 +22,12 @@ forwards user decisions.
 ## Composition root
 
 `apps/workflow-web/src/main.tsx` is the only runtime composition root. It selects
-the concrete adapter set and injects it with the Vite-generated target module
-tree into `App`. The tree is scanned from the target workspace at development
-startup or build time, so source paths, declarations, and line numbers remain
-aligned with the actual TypeScript files. When
+the concrete workflow adapters and loads the module tree through
+`ModuleSymbolPort`, then injects both into `App`. Feature components depend only
+on contracts and workflow-core, so replacing the fixture workspace provider or
+mock workflow adapters does not require changes to the workflow UI. When
 `VITE_RETRIEVAL_API_URL` is configured, only `CodeSearchPort` is replaced by
-the SeekDB HTTP adapter. Feature components depend only on contracts and
-workflow-core, so replacing adapters does not require changes to the
-application component or workflow UI.
+the SeekDB HTTP adapter.
 
 ## Ownership boundaries
 
@@ -38,6 +36,7 @@ application component or workflow UI.
 | `apps/workflow-web` | React presentation and interaction |
 | `packages/contracts` | Cross-module request and result types |
 | `packages/workflow-core` | Workflow state, transitions, and ports |
+| `packages/workspace-adapters` | Workspace discovery and module-symbol implementations |
 | `packages/mock-adapters` | Explicitly non-production demonstrations |
 | `packages/seekdb-adapter` | HTTP implementation of `CodeSearchPort` |
 | `services/code-indexer` | Repository and symbol indexing |

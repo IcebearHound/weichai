@@ -1,9 +1,9 @@
 import 'dotenv/config';
 import path from 'node:path';
 import { loadConfig } from './config.js';
-import { indexCorpus } from './corpus-indexer.js';
+import { extractCorpus } from '@forexplore/code-indexer';
 import { createRuntime } from './runtime.js';
-import type { IndexedCodeDocument } from './types.js';
+import type { IndexedCodeDocument } from '@forexplore/contracts';
 
 function embeddingText(document: IndexedCodeDocument): string {
   return [
@@ -29,7 +29,7 @@ try {
   await store.initialize();
   const indexedRoots = await Promise.all(
     corpusRoots.map(async (corpusRoot) => {
-      const documents = await indexCorpus(corpusRoot);
+      const documents = await extractCorpus(corpusRoot);
       console.log(`Extracted ${documents.length} symbols from ${corpusRoot}.`);
       return documents;
     }),

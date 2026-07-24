@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { SearchRequest } from '@forexplore/contracts';
+import type { Language, SearchRequest } from '@forexplore/contracts';
 import type { SearchEngine, SearchStore } from './types.js';
 
 export interface HttpServerOptions {
@@ -16,6 +16,15 @@ class HttpError extends Error {
     super(message);
   }
 }
+
+const languages = new Set<Language>([
+  'TypeScript',
+  'Python',
+  'Java',
+  'C#',
+  'Rust',
+  'Go',
+]);
 
 function json(
   response: ServerResponse,
@@ -67,6 +76,13 @@ function isSearchRequest(value: unknown): value is SearchRequest {
     ['hybrid', 'semantic', 'structure'].includes(String(body.retrievalMode)) &&
     Array.isArray(body.repositoryScopes) &&
     body.repositoryScopes.every((scope) => typeof scope === 'string') &&
+    (body.candidateLanguages === undefined ||
+      (Array.isArray(body.candidateLanguages) &&
+        body.candidateLanguages.length > 0 &&
+        body.candidateLanguages.every(
+          (language) =>
+            typeof language === 'string' && languages.has(language as Language),
+        ))) &&
     typeof target === 'object' &&
     target !== null &&
     typeof target.id === 'string' &&
@@ -74,7 +90,8 @@ function isSearchRequest(value: unknown): value is SearchRequest {
     typeof target.path === 'string' &&
     typeof target.signature === 'string' &&
     ['class', 'function'].includes(String(target.kind)) &&
-    typeof target.language === 'string'
+    typeof target.language === 'string' &&
+    languages.has(target.language as Language)
   );
 }
 

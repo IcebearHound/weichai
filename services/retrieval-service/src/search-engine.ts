@@ -1,4 +1,9 @@
-import type { RetrievalMode, SearchCandidate, SearchRequest } from '@forexplore/contracts';
+import type {
+  Language,
+  RetrievalMode,
+  SearchCandidate,
+  SearchRequest,
+} from '@forexplore/contracts';
 import type {
   EmbeddingProvider,
   IndexedCodeDocument,
@@ -17,6 +22,10 @@ function repositoryScopes(values: string[]): string[] {
   return values
     .map((value) => value.replace(/^repo:/, '').trim())
     .filter((value) => value.includes('/') && !value.includes('*'));
+}
+
+function candidateLanguages(values: Language[] | undefined): Language[] {
+  return [...new Set(values ?? [])];
 }
 
 function expandedLimit(topK: number): number {
@@ -147,8 +156,10 @@ export class SeekDbSearchEngine implements SearchEngine {
 
   async search(request: SearchRequest): Promise<SearchCandidate[]> {
     const text = queryText(request);
+    const languages = candidateLanguages(request.candidateLanguages);
     const filters: SearchFilters = {
       repositories: repositoryScopes(request.repositoryScopes),
+      languages,
       kind: request.retrievalMode === 'structure' ? request.target.kind : undefined,
     };
     const candidateLimit = expandedLimit(request.topK);
@@ -170,7 +181,12 @@ export class SeekDbSearchEngine implements SearchEngine {
       }
     }
 
+    const allowedLanguages = new Set(languages);
     return documents
+      .filter(
+        (document) =>
+          allowedLanguages.size === 0 || allowedLanguages.has(document.language),
+      )
       .map((document) => candidate(document, request))
       .sort((left, right) => right.score.overall - left.score.overall)
       .slice(0, request.topK);
@@ -178,6 +194,7 @@ export class SeekDbSearchEngine implements SearchEngine {
 }
 
 export const searchInternals = {
+  candidateLanguages,
   expandedLimit,
   mergeResults,
   overlap,

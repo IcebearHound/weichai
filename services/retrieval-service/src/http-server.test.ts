@@ -58,6 +58,7 @@ const request: SearchRequest = {
   topK: 3,
   retrievalMode: 'hybrid',
   repositoryScopes: [],
+  candidateLanguages: ['Java'],
 };
 
 describe('retrieval HTTP API', () => {
@@ -96,6 +97,22 @@ describe('retrieval HTTP API', () => {
     });
 
     expect(response.status).toBe(400);
+    expect(engine.search).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown or empty candidate language constraints', async () => {
+    const engine: SearchEngine = { search: vi.fn(async () => []) };
+    const url = await listen(engine, store());
+
+    for (const candidateLanguages of [[], ['Kotlin']]) {
+      const response = await fetch(`${url}/v1/search`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...request, candidateLanguages }),
+      });
+
+      expect(response.status).toBe(400);
+    }
     expect(engine.search).not.toHaveBeenCalled();
   });
 

@@ -147,13 +147,20 @@ const catalog: SearchCandidate[] = [
 class MockCodeSearchAdapter implements CodeSearchPort {
   async search(request: SearchRequest, signal?: AbortSignal): Promise<SearchCandidate[]> {
     await delay(850, signal);
-    return catalog.slice(0, request.topK).map((candidate, index) => ({
-      ...candidate,
-      score: {
-        ...candidate.score,
-        overall: Math.max(0.5, candidate.score.overall - index * 0.005),
-      },
-    }));
+    const allowedLanguages = new Set(request.candidateLanguages ?? []);
+    return catalog
+      .filter(
+        (candidate) =>
+          allowedLanguages.size === 0 || allowedLanguages.has(candidate.language),
+      )
+      .slice(0, request.topK)
+      .map((candidate, index) => ({
+        ...candidate,
+        score: {
+          ...candidate.score,
+          overall: Math.max(0.5, candidate.score.overall - index * 0.005),
+        },
+      }));
   }
 }
 

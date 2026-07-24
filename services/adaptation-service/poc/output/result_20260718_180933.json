@@ -1,0 +1,78 @@
+[
+  {
+    "id": "case-1-exact-match",
+    "description": "完全匹配: Java订单总价计算 → C#订单总价计算",
+    "matchType": "exact",
+    "csharpCode": "public decimal CalculateTotal(List<OrderItem> items, Discount discount)\n{\n    decimal total = 0.0m;\n    foreach (OrderItem item in items)\n    {\n        if (item.Price > 0 && item.Quantity > 0)\n        {\n            total += item.Price * item.Quantity;\n        }\n    }\n    if (discount != null && discount.IsValid())\n    {\n        total = discount.Apply(total);\n    }\n    if (total < 0)\n    {\n        total = 0.0m;\n    }\n    return total;\n}",
+    "compileSuccess": false,
+    "retries": 3,
+    "compileErrors": [
+      "error CS0246: 未能找到类型或命名空间名“OrderItem”(是否缺少 using 指令或程序集引用?) [C:\\Users\\pyc26\\AppData\\Local\\Temp\\cs_compile_jmptuefb\\tmp.csproj]",
+      "error CS0246: 未能找到类型或命名空间名“Discount”(是否缺少 using 指令或程序集引用?) [C:\\Users\\pyc26\\AppData\\Local\\Temp\\cs_compile_jmptuefb\\tmp.csproj]",
+      "error CS0246: 未能找到类型或命名空间名“OrderItem”(是否缺少 using 指令或程序集引用?) [C:\\Users\\pyc26\\AppData\\Local\\Temp\\cs_compile_jmptuefb\\tmp.csproj]",
+      "error CS0246: 未能找到类型或命名空间名“Discount”(是否缺少 using 指令或程序集引用?) [C:\\Users\\pyc26\\AppData\\Local\\Temp\\cs_compile_jmptuefb\\tmp.csproj]"
+    ],
+    "inputJavaSource": "public double calculateTotal(List<OrderItem> items, Discount discount) {\n    double total = 0.0;\n    for (OrderItem item : items) {\n        if (item.getPrice() > 0 && item.getQuantity() > 0) {\n            total += item.getPrice() * item.getQuantity();\n        }\n    }\n    if (discount != null && discount.isValid()) {\n        total = discount.apply(total);\n    }\n    if (total < 0) {\n        total = 0.0;\n    }\n    return total;\n}",
+    "inputCsharpSignature": "public decimal CalculateTotal(List<OrderItem> items, Discount discount)",
+    "inputRequirement": "根据订单项和折扣规则计算总价，支持满减和百分比折扣叠加，结果不能为负数"
+  },
+  {
+    "id": "case-2-partial-match",
+    "description": "部分匹配: Java验证订单(含库存检查) → C#验证订单(不含库存)",
+    "matchType": "partial",
+    "csharpCode": "public bool ValidateOrder(Order order)\n{\n    if (order == null)\n    {\n        throw new ArgumentException(\"Order cannot be null\");\n    }\n    if (order.Items == null || order.Items.Count == 0)\n    {\n        throw new ArgumentException(\"Order must contain at least one item\");\n    }\n    if (order.Customer == null)\n    {\n        throw new ArgumentException(\"Order must have a customer\");\n    }\n    return true;\n}",
+    "compileSuccess": false,
+    "retries": 3,
+    "compileErrors": [
+      "error CS0246: 未能找到类型或命名空间名“Order”(是否缺少 using 指令或程序集引用?) [C:\\Users\\pyc26\\AppData\\Local\\Temp\\cs_compile_58x0pzfv\\tmp.csproj]",
+      "error CS0246: 未能找到类型或命名空间名“Order”(是否缺少 using 指令或程序集引用?) [C:\\Users\\pyc26\\AppData\\Local\\Temp\\cs_compile_58x0pzfv\\tmp.csproj]"
+    ],
+    "inputJavaSource": "public boolean validateOrder(Order order, InventoryService inventory) throws IllegalArgumentException {\n    if (order == null) {\n        throw new IllegalArgumentException(\"Order cannot be null\");\n    }\n    if (order.getItems() == null || order.getItems().isEmpty()) {\n        throw new IllegalArgumentException(\"Order must contain at least one item\");\n    }\n    // Check inventory availability\n    for (OrderItem item : order.getItems()) {\n        if (!inventory.hasStock(item.getProductId(), item.getQuantity())) {\n            return false;\n        }\n    }\n    if (order.getCustomer() == null) {\n        throw new IllegalArgumentException(\"Order must have a customer\");\n    }\n    return true;\n}",
+    "inputCsharpSignature": "public bool ValidateOrder(Order order)",
+    "inputRequirement": "验证订单基本信息（客户、订单项不为空），不需要检查库存"
+  },
+  {
+    "id": "case-3-different-signature",
+    "description": "结构差异: Java静态工具方法 → C#实例方法(有状态)",
+    "matchType": "partial",
+    "csharpCode": "public string FormatPrice(decimal price, string currency)\n{\n    var culture = System.Threading.Thread.CurrentThread.CurrentCulture;\n    var formatter = (System.Globalization.NumberFormatInfo)culture.NumberFormat.Clone();\n    formatter.CurrencySymbol = \"\";\n    string formatted;\n    try\n    {\n        var region = new System.Globalization.RegionInfo(culture.Name);\n        formatter.CurrencySymbol = region.CurrencySymbol;\n    }\n    catch\n    {\n        formatter.CurrencySymbol = currency;\n    }\n    formatted = price.ToString(\"C\", formatter);\n    if (price < 0)\n    {\n        formatted = \"-\" + Math.Abs(price).ToString(\"C\", formatter);\n    }\n    return formatted;\n}",
+    "compileSuccess": true,
+    "retries": 0,
+    "compileErrors": [],
+    "inputJavaSource": "public static String formatPrice(double price, String currency, Locale locale) {\n    NumberFormat formatter = NumberFormat.getCurrencyInstance(locale);\n    formatter.setCurrency(Currency.getInstance(currency));\n    String formatted = formatter.format(price);\n    // Handle negative prices gracefully\n    if (price < 0) {\n        formatted = \"-\" + formatter.format(Math.abs(price));\n    }\n    return formatted;\n}",
+    "inputCsharpSignature": "public string FormatPrice(decimal price, string currency)",
+    "inputRequirement": "格式化价格显示，使用指定的货币代码，支持负值标记。使用当前线程的区域设置。"
+  },
+  {
+    "id": "case-4-exception-mapping",
+    "description": "异常映射: Java检查型异常 → C#异常体系",
+    "matchType": "exact",
+    "csharpCode": "public PaymentResult ProcessPayment(PaymentRequest request)\n{\n    if (request.Amount <= 0)\n    {\n        throw new ArgumentException(\"Payment amount must be positive\");\n    }\n    Account account = accountRepository.FindById(request.AccountId);\n    if (account == null)\n    {\n        throw new ArgumentException(\"Account not found: \" + request.AccountId);\n    }\n    if (account.Balance < request.Amount)\n    {\n        throw new InsufficientFundsException(\n            string.Format(\"Balance {0:F2} is insufficient for payment {1:F2}\",\n                account.Balance, request.Amount)\n        );\n    }\n    try\n    {\n        PaymentResult result = paymentGateway.Charge(request);\n        account.Balance = account.Balance - request.Amount;\n        accountRepository.Save(account);\n        return result;\n    }\n    catch (GatewayException e)\n    {\n        throw new PaymentFailedException(\"Payment gateway error\", e);\n    }\n}",
+    "compileSuccess": false,
+    "retries": 3,
+    "compileErrors": [
+      "error CS0246: 未能找到类型或命名空间名“PaymentRequest”(是否缺少 using 指令或程序集引用?) [C:\\Users\\pyc26\\AppData\\Local\\Temp\\cs_compile_2a6d65xc\\tmp.csproj]",
+      "error CS0246: 未能找到类型或命名空间名“PaymentResult”(是否缺少 using 指令或程序集引用?) [C:\\Users\\pyc26\\AppData\\Local\\Temp\\cs_compile_2a6d65xc\\tmp.csproj]",
+      "error CS0246: 未能找到类型或命名空间名“PaymentRequest”(是否缺少 using 指令或程序集引用?) [C:\\Users\\pyc26\\AppData\\Local\\Temp\\cs_compile_2a6d65xc\\tmp.csproj]",
+      "error CS0246: 未能找到类型或命名空间名“PaymentResult”(是否缺少 using 指令或程序集引用?) [C:\\Users\\pyc26\\AppData\\Local\\Temp\\cs_compile_2a6d65xc\\tmp.csproj]"
+    ],
+    "inputJavaSource": "public PaymentResult processPayment(PaymentRequest request) throws PaymentFailedException, InsufficientFundsException {\n    if (request.getAmount() <= 0) {\n        throw new IllegalArgumentException(\"Payment amount must be positive\");\n    }\n    Account account = accountRepository.findById(request.getAccountId());\n    if (account == null) {\n        throw new IllegalArgumentException(\"Account not found: \" + request.getAccountId());\n    }\n    if (account.getBalance() < request.getAmount()) {\n        throw new InsufficientFundsException(\n            String.format(\"Balance %.2f is insufficient for payment %.2f\",\n                account.getBalance(), request.getAmount())\n        );\n    }\n    try {\n        PaymentResult result = paymentGateway.charge(request);\n        account.setBalance(account.getBalance() - request.getAmount());\n        accountRepository.save(account);\n        return result;\n    } catch (GatewayException e) {\n        throw new PaymentFailedException(\"Payment gateway error\", e);\n    }\n}",
+    "inputCsharpSignature": "public PaymentResult ProcessPayment(PaymentRequest request)",
+    "inputRequirement": "处理支付请求：校验金额、检查余额、调用支付网关、更新账户"
+  },
+  {
+    "id": "case-5-collection-transform",
+    "description": "集合操作: Java Stream/Map → C# LINQ/Dictionary",
+    "matchType": "exact",
+    "csharpCode": "public Dictionary<string, decimal> CalculateCategoryTotals(List<Order> orders)\n{\n    var totals = new Dictionary<string, decimal>();\n    foreach (var order in orders)\n    {\n        foreach (var item in order.Items)\n        {\n            string category = item.Category;\n            decimal amount = item.Price * item.Quantity;\n            if (totals.TryGetValue(category, out decimal existing))\n            {\n                totals[category] = existing + amount;\n            }\n            else\n            {\n                totals[category] = amount;\n            }\n        }\n    }\n    return totals\n        .OrderByDescending(kvp => kvp.Value)\n        .Take(10)\n        .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);\n}",
+    "compileSuccess": false,
+    "retries": 3,
+    "compileErrors": [
+      "error CS0246: 未能找到类型或命名空间名“Order”(是否缺少 using 指令或程序集引用?) [C:\\Users\\pyc26\\AppData\\Local\\Temp\\cs_compile_8myqi986\\tmp.csproj]",
+      "error CS0246: 未能找到类型或命名空间名“Order”(是否缺少 using 指令或程序集引用?) [C:\\Users\\pyc26\\AppData\\Local\\Temp\\cs_compile_8myqi986\\tmp.csproj]"
+    ],
+    "inputJavaSource": "public Map<String, Double> calculateCategoryTotals(List<Order> orders) {\n    Map<String, Double> totals = new HashMap<>();\n    for (Order order : orders) {\n        for (OrderItem item : order.getItems()) {\n            String category = item.getCategory();\n            double amount = item.getPrice() * item.getQuantity();\n            totals.merge(category, amount, Double::sum);\n        }\n    }\n    // Sort by total descending and keep top N\n    return totals.entrySet().stream()\n        .sorted(Map.Entry.<String, Double>comparingByValue().reversed())\n        .limit(10)\n        .collect(Collectors.toMap(\n            Map.Entry::getKey,\n            Map.Entry::getValue,\n            (a, b) -> a,\n            LinkedHashMap::new\n        ));\n}",
+    "inputCsharpSignature": "public Dictionary<string, decimal> CalculateCategoryTotals(List<Order> orders)",
+    "inputRequirement": "按商品类别汇总订单金额，返回金额最高的前10个类别，按金额降序排列"
+  }
+]

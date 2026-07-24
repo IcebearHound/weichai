@@ -8,6 +8,11 @@ export interface SearchRequest {
   topK: number;
   retrievalMode: RetrievalMode;
   repositoryScopes: string[];
+  /**
+   * Hard source-language constraint for retrieved candidates.
+   * Omit it when the caller can adapt candidates from any language.
+   */
+  candidateLanguages?: Language[];
 }
 
 export interface CandidateScore {

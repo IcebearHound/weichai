@@ -104,5 +104,11 @@ searchable on supported SeekDB versions.
 - `POST /v1/search` accepts `SearchRequest` from `@forexplore/contracts` and
   returns `{ "candidates": SearchCandidate[] }`.
 
+Set `candidateLanguages` on `SearchRequest` when the downstream adapter only
+supports specific source languages. The constraint is applied in SeekDB and
+checked again before candidates are returned. For example, the Java-to-C#
+pipeline sends `candidateLanguages: ["Java"]` while keeping the target
+language as `C#`.
+
 Set `VITE_RETRIEVAL_API_URL` in the web app to activate the real adapter. If the
 variable is absent, the original mock search adapter remains active.

@@ -99,6 +99,28 @@ describe('SeekDbSearchEngine', () => {
       50,
     );
   });
+
+  it('pushes candidate language constraints to storage and rejects mismatched rows', async () => {
+    const store = fakeStore();
+    const engine = new SeekDbSearchEngine(store, embeddings);
+
+    const candidates = await engine.search({
+      ...request,
+      candidateLanguages: ['Java'],
+    });
+
+    expect(candidates).toEqual([]);
+    expect(store.semanticSearch).toHaveBeenCalledWith(
+      [1, 0, 0],
+      expect.objectContaining({ languages: ['Java'] }),
+      50,
+    );
+    expect(store.textSearch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ languages: ['Java'] }),
+      50,
+    );
+  });
 });
 
 describe('search internals', () => {
@@ -140,5 +162,12 @@ describe('search internals', () => {
     expect(searchInternals.expandedLimit(1)).toBe(50);
     expect(searchInternals.expandedLimit(20)).toBe(100);
     expect(searchInternals.expandedLimit(50)).toBe(250);
+  });
+
+  it('deduplicates candidate language constraints', () => {
+    expect(searchInternals.candidateLanguages(['Java', 'Java', 'Python'])).toEqual([
+      'Java',
+      'Python',
+    ]);
   });
 });

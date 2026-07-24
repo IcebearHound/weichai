@@ -84,9 +84,9 @@ function filterSql(filters: SearchFilters): { sql: string; parameters: string[] 
     clauses.push(`repository IN (${filters.repositories.map(() => '?').join(', ')})`);
     parameters.push(...filters.repositories);
   }
-  if (filters.language) {
-    clauses.push('language = ?');
-    parameters.push(filters.language);
+  if (filters.languages.length > 0) {
+    clauses.push(`language IN (${filters.languages.map(() => '?').join(', ')})`);
+    parameters.push(...filters.languages);
   }
   if (filters.kind) {
     clauses.push('kind = ?');

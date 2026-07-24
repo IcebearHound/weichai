@@ -1,21 +1,10 @@
-import type { Language, SearchRequest } from '@forexplore/contracts';
+import type {
+  IndexedCodeDocument,
+  Language,
+  SearchRequest,
+} from '@forexplore/contracts';
 
-export interface IndexedCodeDocument {
-  id: string;
-  title: string;
-  repository: string;
-  license: string;
-  language: Language;
-  kind: 'class' | 'function';
-  path: string;
-  signature: string;
-  summary: string;
-  preview: string;
-  dependencies: string[];
-  compatibility: string[];
-  risks: string[];
-  content?: string;
-}
+export type { IndexedCodeDocument } from '@forexplore/contracts';
 
 export interface RetrievedCodeDocument extends IndexedCodeDocument {
   semanticScore?: number;
@@ -24,7 +13,7 @@ export interface RetrievedCodeDocument extends IndexedCodeDocument {
 
 export interface SearchFilters {
   repositories: string[];
-  language?: Language;
+  languages: Language[];
   kind?: 'class' | 'function';
 }
 

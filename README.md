@@ -39,3 +39,9 @@ The module tree is generated from
 `fixtures/target-system/currency-platform` when Vite starts or builds. It keeps
 the real source paths, signatures, line numbers, and unimplemented-method
 status instead of using the mock tree at runtime.
+
+## Development guide
+
+See the complete Chinese handoff guide for the module-tree and SeekDB changes:
+
+- [`docs/seekdb-retrieval-development-guide.zh-CN.md`](docs/seekdb-retrieval-development-guide.zh-CN.md)

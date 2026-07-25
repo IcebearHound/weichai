@@ -39,3 +39,10 @@ keeping the mock adaptation and backfill ports. See
 The runtime module tree is loaded through `ModuleSymbolPort` from the C# target
 fixture. The repository also includes a Vite-time TypeScript workspace scanner
 for generated module-tree integrations.
+
+## Development guide
+
+See the complete Chinese handoff guide for the workspace, indexing, retrieval,
+and module-tree changes:
+
+- [`docs/seekdb-retrieval-development-guide.zh-CN.md`](docs/seekdb-retrieval-development-guide.zh-CN.md)

@@ -1,6 +1,6 @@
 import type { AdaptationRequest, SearchCandidate } from "@forexplore/contracts";
 import { describe, expect, it } from "vitest";
-import { AdaptationAdapter } from "./adaptation-adapter";
+import { AdaptationAdapter, _buildFilePatch } from "./adaptation-adapter";
 
 const javaCandidate: SearchCandidate = {
   id: "java-candidate",
@@ -63,5 +63,80 @@ describe("AdaptationAdapter language gate", () => {
     await expect(adapter.adapt({ ...request, strategy: "wrap" })).rejects.toThrow(
       'AdaptationAdapter only supports the "translate" strategy; received "wrap".',
     );
+  });
+});
+
+describe("buildFilePatch", () => {
+  const originalClass = [
+    "using System;",
+    "using System.Collections.Generic;",
+    "",
+    "namespace MyApp.Services",
+    "{",
+    "    public class RateQuoteService",
+    "    {",
+    "        public decimal GetRate(string currencyPair)",
+    "        {",
+    "            throw new NotImplementedException();",
+    "        }",
+    "",
+    "        public void Initialize()",
+    "        {",
+    "            // setup",
+    "        }",
+    "    }",
+    "}",
+  ].join("\n");
+
+  const newMethod = [
+    "        public decimal GetRate(string currencyPair)",
+    "        {",
+    "            return 0.92m;",
+    "        }",
+  ].join("\n");
+
+  it("produces a context-based hunk when originalContent and targetLine are provided", () => {
+    const patch = _buildFilePatch("src/Service.cs", newMethod, originalClass, 8);
+
+    expect(patch.status).toBe("modified");
+    expect(patch.hunks).toHaveLength(1);
+
+    const lines = patch.hunks[0].lines;
+    const types = lines.map((l) => l.type);
+
+    // 必须包含 context 行（用于定位）
+    expect(types).toContain("context");
+    // 必须包含 remove 行（旧方法代码被删除）
+    expect(types).toContain("remove");
+    // 必须包含 add 行（新方法代码被加入）
+    expect(types).toContain("add");
+
+    // context 行应该是原方法签名前的那一行
+    const contextLines = lines.filter((l) => l.type === "context");
+    expect(contextLines.some((l) => l.content.trim() === "{")).toBe(true);
+
+    // remove 行应包含原方法的 throw 语句
+    const removeLines = lines.filter((l) => l.type === "remove");
+    expect(removeLines.some((l) => l.content.includes("throw new NotImplementedException"))).toBe(true);
+
+    // add 行应包含新方法代码
+    const addLines = lines.filter((l) => l.type === "add");
+    expect(addLines.some((l) => l.content.includes("return 0.92m"))).toBe(true);
+  });
+
+  it("falls back to add-only patch when originalContent is null", () => {
+    const patch = _buildFilePatch("src/Service.cs", newMethod, null, 8);
+
+    const lines = patch.hunks[0].lines;
+    const types = [...new Set(lines.map((l) => l.type))];
+    expect(types).toEqual(["add"]);
+  });
+
+  it("falls back to add-only patch when targetLine is undefined", () => {
+    const patch = _buildFilePatch("src/Service.cs", newMethod, originalClass, undefined);
+
+    const lines = patch.hunks[0].lines;
+    const types = [...new Set(lines.map((l) => l.type))];
+    expect(types).toEqual(["add"]);
   });
 });

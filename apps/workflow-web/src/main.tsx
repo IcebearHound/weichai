@@ -4,6 +4,7 @@ import '@fontsource-variable/ibm-plex-sans/index.css';
 import '@fontsource/ibm-plex-mono/400.css';
 import { mockWorkflowPorts } from '@forexplore/mock-adapters';
 import { withSeekDbSearch } from '@forexplore/seekdb-adapter';
+import { withAdaptationService } from '@forexplore/adaptation-http-adapter';
 import {
   csharpWorkspaceId,
   workspaceModuleSymbols,
@@ -12,9 +13,15 @@ import App from './App';
 import './styles.css';
 
 const retrievalApiUrl = import.meta.env.VITE_RETRIEVAL_API_URL?.trim();
-const workflowPorts = retrievalApiUrl
-  ? withSeekDbSearch(mockWorkflowPorts, { baseUrl: retrievalApiUrl })
-  : mockWorkflowPorts;
+const adaptationApiUrl = import.meta.env.VITE_ADAPTATION_API_URL?.trim();
+
+let workflowPorts = mockWorkflowPorts;
+if (retrievalApiUrl) {
+  workflowPorts = withSeekDbSearch(workflowPorts, { baseUrl: retrievalApiUrl });
+}
+if (adaptationApiUrl) {
+  workflowPorts = withAdaptationService(workflowPorts, { baseUrl: adaptationApiUrl });
+}
 
 async function bootstrap() {
   const moduleTree = await workspaceModuleSymbols.loadTree(csharpWorkspaceId);

@@ -4,7 +4,7 @@
  */
 
 const API_BASE = "https://api.deepseek.com/v1";
-const MODEL = "deepseek-chat";
+const MODEL = "deepseek-v4-pro";
 
 export interface TranslateRequest {
   javaSource: string;

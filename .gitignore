@@ -26,3 +26,9 @@ coverage/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Java / Eclipse build artifacts
+.classpath
+.project
+.settings/
+target/

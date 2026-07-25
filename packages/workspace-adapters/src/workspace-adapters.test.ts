@@ -22,6 +22,8 @@ describe('C# workspace module symbols', () => {
         name: 'GetQuoteAsync',
         language: 'C#',
         path: 'src/Application/QuoteOrchestrationService.cs',
+        documentation:
+          'Gets a quote through the configured cache and provider fallback policy.',
       },
     );
     await expect(workspaceModuleSymbols.resolveTarget('quote-record')).rejects.toThrow(

@@ -2,9 +2,7 @@
  * Java → C# 翻译器
  * 调用 DeepSeek API（兼容 OpenAI 格式）将 Java 方法翻译为 C#。
  */
-
-const API_BASE = "https://api.deepseek.com/v1";
-const MODEL = "deepseek-v4-pro";
+import { adaptationModelConfig } from "./model-config";
 
 export interface TranslateRequest {
   javaSource: string;
@@ -107,15 +105,16 @@ async function callLLM(
   apiKey: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const response = await fetch(`${API_BASE}/chat/completions`, {
+  const response = await fetch(`${adaptationModelConfig.apiBase}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: MODEL,
+      model: adaptationModelConfig.model,
       messages: [{ role: "user", content: prompt }],
+      thinking: { type: "disabled" },
       temperature: 0.1,
     }),
     signal,
@@ -129,5 +128,9 @@ async function callLLM(
   const data = (await response.json()) as {
     choices: Array<{ message: { content: string } }>;
   };
-  return data.choices[0].message.content.trim();
+  const content = data.choices[0]?.message.content;
+  if (typeof content !== "string" || !content.trim()) {
+    throw new Error("DeepSeek API returned an empty completion.");
+  }
+  return content.trim();
 }

@@ -100,6 +100,28 @@ describe('retrieval HTTP API', () => {
     expect(engine.search).not.toHaveBeenCalled();
   });
 
+  it('accepts an empty requirement when target metadata is present', async () => {
+    const engine: SearchEngine = { search: vi.fn(async () => []) };
+    const url = await listen(engine, store());
+    const emptyRequirement = {
+      ...request,
+      requirement: '',
+      target: {
+        ...request.target,
+        documentation: 'Returns a cached quote with provider fallback.',
+      },
+    };
+
+    const response = await fetch(`${url}/v1/search`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(emptyRequirement),
+    });
+
+    expect(response.status).toBe(200);
+    expect(engine.search).toHaveBeenCalledWith(emptyRequirement);
+  });
+
   it('rejects unknown or empty candidate language constraints', async () => {
     const engine: SearchEngine = { search: vi.fn(async () => []) };
     const url = await listen(engine, store());

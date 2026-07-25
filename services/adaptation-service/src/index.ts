@@ -16,3 +16,12 @@ export type { TranslateRequest } from "./translator";
 
 export { compileStandalone, compileIntegrated } from "./compiler";
 export type { CompileResult } from "./compiler";
+
+export { adaptationModelConfig, loadAdaptationModelConfig } from "./model-config";
+export type { AdaptationModelConfig } from "./model-config";
+
+export { loadConfig } from "./config";
+export type { AdaptationServiceConfig } from "./config";
+
+export { createHttpServer } from "./http-server";
+export type { HttpServerOptions } from "./http-server";

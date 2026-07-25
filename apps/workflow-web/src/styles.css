@@ -1251,6 +1251,21 @@ input[type='range'] {
   line-height: 1.55;
 }
 
+.target-documentation {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.55;
+}
+
+.target-documentation span {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--faint);
+  font: 500 8px/1.3 var(--mono);
+  text-transform: uppercase;
+}
+
 .target-card > span {
   margin-top: 7px;
   color: var(--faint);

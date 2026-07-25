@@ -3,9 +3,16 @@
  * 调用 dotnet build 或 csc 检查代码是否能通过编译。
  */
 
-import { execSync } from "node:child_process";
-import { writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { execFileSync, execSync } from "node:child_process";
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 
 export interface CompileResult {
@@ -13,8 +20,6 @@ export interface CompileResult {
   errors: string[];
   output: string;
 }
-
-const MAX_RETRIES = 3;
 
 /**
  * 独立编译一个 C# 方法体，不依赖项目类型定义。
@@ -24,16 +29,17 @@ export function compileStandalone(
   csharpCode: string,
   className: string,
 ): CompileResult {
-  const dir = join(tmpdir(), `cs-compile-${Date.now()}`);
-  mkdirSync(dir, { recursive: true });
+  const dotnet = findDotnet();
+  const temporaryRoot = dotnet?.endsWith(".exe") ? process.cwd() : tmpdir();
+  const dir = mkdtempSync(join(temporaryRoot, ".forexplore-standalone-"));
 
   const fullSource = buildWrapperSource(csharpCode, className);
   const csFile = join(dir, `${className}.cs`);
   writeFileSync(csFile, fullSource, "utf-8");
 
   try {
-    if (hasDotnet()) {
-      return compileWithDotnet(dir);
+    if (dotnet) {
+      return compileWithDotnet(dotnet, dir, true);
     }
     if (hasCsc()) {
       return compileWithCsc(dir, csFile);
@@ -55,30 +61,89 @@ export function compileStandalone(
 }
 
 /**
- * 集成编译 — 把翻译后的方法放到 C# skeleton 项目完整编译。
- * TODO: 等数据集交付后实现。
+ * 集成编译 — 在临时副本中替换目标方法并编译完整 C# skeleton。
  */
 export function compileIntegrated(
-  _csharpCode: string,
-  _skeletonProjectPath: string,
-  _targetFilePath: string,
+  csharpCode: string,
+  skeletonProjectPath: string,
+  targetFilePath: string,
 ): CompileResult {
-  return {
-    success: true,
-    errors: [],
-    output: "Integrated compile not yet implemented (waiting for dataset)",
-  };
+  const projectRoot = resolve(skeletonProjectPath);
+  const sourcePath = resolve(projectRoot, targetFilePath);
+  const relativeTarget = relative(projectRoot, sourcePath);
+  if (
+    !relativeTarget ||
+    relativeTarget === ".." ||
+    relativeTarget.startsWith(`..${sep}`) ||
+    isAbsolute(relativeTarget)
+  ) {
+    return {
+      success: false,
+      errors: [`Target file must stay inside the skeleton project: ${targetFilePath}`],
+      output: "",
+    };
+  }
+  if (!existsSync(sourcePath)) {
+    return {
+      success: false,
+      errors: [`Target file does not exist in the skeleton project: ${targetFilePath}`],
+      output: "",
+    };
+  }
+  const dotnet = findDotnet();
+  if (!dotnet) {
+    return {
+      success: false,
+      errors: [".NET SDK not installed; integrated compilation was not executed."],
+      output: "",
+    };
+  }
+
+  // Keep Windows-hosted SDK builds on the same mounted drive as the skeleton.
+  const temporaryProject = mkdtempSync(
+    join(dirname(projectRoot), ".forexplore-integrated-"),
+  );
+  try {
+    cpSync(projectRoot, temporaryProject, {
+      recursive: true,
+      filter: (source) => !["bin", "obj"].includes(source.split(/[\\/]/).at(-1) ?? ""),
+    });
+    const temporaryTarget = join(temporaryProject, relativeTarget);
+    const original = readFileSync(temporaryTarget, "utf8");
+    writeFileSync(temporaryTarget, replaceTargetMethod(original, csharpCode), "utf8");
+    return compileWithDotnet(dotnet, temporaryProject, false);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, errors: [message], output: message };
+  } finally {
+    rmSync(temporaryProject, { recursive: true, force: true });
+  }
 }
 
 // ---- helpers ----
 
-function hasDotnet(): boolean {
-  try {
-    execSync("dotnet --version", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
+function findDotnet(): string | null {
+  const candidates = [
+    process.env.DOTNET_COMMAND?.trim(),
+    "dotnet",
+    "/mnt/c/Program Files/dotnet/dotnet.exe",
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const candidate of candidates) {
+    try {
+      execFileSync(candidate, ["--version"], { stdio: "ignore" });
+      return candidate;
+    } catch {
+      // Continue to the next known installation location.
+    }
   }
+  return null;
+}
+
+export function isCompilerUnavailable(result: CompileResult): boolean {
+  return result.errors.some((error) =>
+    /(?:\.NET SDK|C# compiler).*(?:not installed|not available)/i.test(error),
+  );
 }
 
 function hasCsc(): boolean {
@@ -89,8 +154,13 @@ function hasCsc(): boolean {
   return paths.some((p) => existsSync(p));
 }
 
-function compileWithDotnet(dir: string): CompileResult {
-  const csproj = `<Project Sdk="Microsoft.NET.Sdk">
+function compileWithDotnet(
+  dotnet: string,
+  dir: string,
+  createProject: boolean,
+): CompileResult {
+  if (createProject) {
+    const csproj = `<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Library</OutputType>
     <TargetFramework>net8.0</TargetFramework>
@@ -98,10 +168,11 @@ function compileWithDotnet(dir: string): CompileResult {
     <ImplicitUsings>disable</ImplicitUsings>
   </PropertyGroup>
 </Project>`;
-  writeFileSync(join(dir, "tmp.csproj"), csproj, "utf-8");
+    writeFileSync(join(dir, "tmp.csproj"), csproj, "utf-8");
+  }
 
   try {
-    const stdout = execSync("dotnet build --nologo -v q", {
+    const stdout = execFileSync(dotnet, ["build", "--nologo", "-v", "q"], {
       cwd: dir,
       encoding: "utf-8",
       maxBuffer: 10 * 1024 * 1024,
@@ -166,3 +237,87 @@ public class ${className} {
 ${code}
 }`;
 }
+
+function replaceTargetMethod(source: string, generatedCode: string): string {
+  const code = generatedCode
+    .trim()
+    .replace(/^```(?:csharp|cs)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim();
+  const openingBrace = code.indexOf("{");
+  if (openingBrace < 0) throw new Error("Generated C# code must contain a method body.");
+
+  const declarations = [...code.slice(0, openingBrace).matchAll(/([A-Za-z_]\w*)\s*\(/g)];
+  const methodName = declarations.at(-1)?.[1];
+  if (!methodName) throw new Error("Unable to determine the generated C# method name.");
+
+  const declaration = new RegExp(
+    `^[\\t ]*(?:(?:public|private|protected|internal|static|abstract|virtual|override|sealed|async|extern|unsafe|new|partial)\\s+)+[^\\n;=]*\\b${escapeRegExp(methodName)}\\s*\\(`,
+    "m",
+  ).exec(source);
+  if (declaration?.index === undefined) {
+    throw new Error(`Target method ${methodName} was not found in the skeleton source.`);
+  }
+  const sourceOpeningBrace = source.indexOf("{", declaration.index);
+  if (sourceOpeningBrace < 0) {
+    throw new Error(`Target method ${methodName} does not have a block body.`);
+  }
+  const sourceClosingBrace = matchingBrace(source, sourceOpeningBrace);
+  const declarationStart = source.lastIndexOf("\n", declaration.index) + 1;
+  const indentation = source.slice(declarationStart).match(/^\s*/)?.[0] ?? "";
+  const replacement = indentCode(code, indentation);
+
+  return `${source.slice(0, declarationStart)}${replacement}${source.slice(sourceClosingBrace + 1)}`;
+}
+
+function matchingBrace(source: string, openingBrace: number): number {
+  let depth = 0;
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+
+  for (let index = openingBrace; index < source.length; index += 1) {
+    const character = source[index];
+    const next = source[index + 1];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === "/" && next === "/") {
+      index = source.indexOf("\n", index);
+      if (index < 0) break;
+      continue;
+    }
+    if (character === "/" && next === "*") {
+      index = source.indexOf("*/", index + 2);
+      if (index < 0) break;
+      index += 1;
+      continue;
+    }
+    if (character === "{") depth += 1;
+    else if (character === "}" && --depth === 0) return index;
+  }
+  throw new Error("Target method contains an unmatched brace.");
+}
+
+function indentCode(code: string, indentation: string): string {
+  const lines = code.split(/\r?\n/);
+  const nonEmpty = lines.filter((line) => line.trim());
+  const commonIndent = Math.min(
+    ...nonEmpty.map((line) => line.match(/^\s*/)?.[0].length ?? 0),
+  );
+  return lines
+    .map((line) => `${indentation}${line.slice(commonIndent)}`.trimEnd())
+    .join("\n");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export const compilerInternals = { replaceTargetMethod };

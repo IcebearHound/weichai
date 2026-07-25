@@ -36,6 +36,7 @@ function queryText(request: SearchRequest): string {
   const raw = [
     request.target.name,
     request.target.signature,
+    request.target.documentation ?? '',
     request.target.kind,
     request.target.language,
     request.target.path,
@@ -104,14 +105,16 @@ function candidate(
   document: RetrievedCodeDocument,
   request: SearchRequest,
 ): SearchCandidate {
-  const semantic = clamp(document.semanticScore ?? overlap(request.requirement, documentText(document)));
-  const lexical = overlap(queryText(request), documentText(document));
+  const searchText = queryText(request);
+  const semantic = clamp(document.semanticScore ?? overlap(searchText, documentText(document)));
+  const lexical = overlap(searchText, documentText(document));
   const text = clamp(
     document.textScore === undefined ? lexical : 0.7 * document.textScore + 0.3 * lexical,
   );
   const targetContext = [
     request.target.name,
     request.target.signature,
+    request.target.documentation ?? '',
     request.target.path,
   ].join('\n');
   const candidateSymbol = [document.title, document.signature].join('\n');

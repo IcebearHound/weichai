@@ -69,7 +69,6 @@ function isSearchRequest(value: unknown): value is SearchRequest {
   const target = body.target as Partial<SearchRequest['target']> | undefined;
   return (
     typeof body.requirement === 'string' &&
-    body.requirement.trim().length > 0 &&
     Number.isInteger(body.topK) &&
     Number(body.topK) >= 1 &&
     Number(body.topK) <= 50 &&
@@ -89,6 +88,7 @@ function isSearchRequest(value: unknown): value is SearchRequest {
     typeof target.name === 'string' &&
     typeof target.path === 'string' &&
     typeof target.signature === 'string' &&
+    (target.documentation === undefined || typeof target.documentation === 'string') &&
     ['class', 'function'].includes(String(target.kind)) &&
     typeof target.language === 'string' &&
     languages.has(target.language as Language)

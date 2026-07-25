@@ -18,6 +18,7 @@ export interface ModuleNode {
   path: string;
   language?: Language;
   signature?: string;
+  documentation?: string;
   line?: number;
   implementationStatus?: ImplementationStatus;
   children?: ModuleNode[];
@@ -30,6 +31,7 @@ export interface ModuleTarget {
   path: string;
   language: Language;
   signature: string;
+  documentation?: string;
   line?: number;
   implementationStatus?: ImplementationStatus;
 }

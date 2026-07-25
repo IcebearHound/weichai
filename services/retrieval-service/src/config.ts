@@ -73,7 +73,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RetrievalConfi
   return {
     host: env.RETRIEVAL_HOST?.trim() || '127.0.0.1',
     port: positiveInteger(env.RETRIEVAL_PORT, 8787, 'RETRIEVAL_PORT'),
-    corsOrigin: env.RETRIEVAL_CORS_ORIGIN?.trim() || 'http://localhost:4173',
+    corsOrigin: env.RETRIEVAL_CORS_ORIGIN?.trim() || '*',
     autoMigrate: boolean(env.SEEKDB_AUTO_MIGRATE, true),
     seekdb: {
       host: env.SEEKDB_HOST?.trim() || '127.0.0.1',

@@ -4,6 +4,26 @@ export const csharpWorkspaceId = 'forexplore-csharp-workspace';
 
 const language = 'C#' as const;
 
+const symbolDocumentation: Record<string, string> = {
+  'audit-pipeline-class': 'Coordinates durable audit appends and hash-chain verification.',
+  'audit-append-function': 'Appends an audit entry and returns its durable sequence number.',
+  'audit-verify-function': 'Verifies the integrity of the persisted audit chain.',
+  'quote-orchestration-class': 'Coordinates quote caching, provider fallback, and audit recording.',
+  'get-quote-async-function': 'Gets a quote through the configured cache and provider fallback policy.',
+  'fetch-with-fallback-function': 'Queries eligible providers in policy order until one returns a quote.',
+  'settlement-orchestration-class': 'Coordinates ordered and idempotent settlement batches.',
+  'settle-batch-async-function': 'Settles a batch while preserving order, idempotency, and retry semantics.',
+  'in-memory-provider-class': 'Provides deterministic in-memory quote responses for tests.',
+  'provider-supports-function': 'Reports whether this provider supports the requested currency pair.',
+  'provider-fetch-function': 'Fetches a deterministic quote or raises a configured transient failure.',
+  'in-memory-cache-class': 'Stores quotes in memory behind the target cache contract.',
+  'cache-load-function': 'Returns a cached quote or loads and stores a new value.',
+  'cache-invalidate-function': 'Removes the normalized currency pair from the cache.',
+  'program-class': 'Hosts the ForeXplore C# translation target.',
+  'program-main-function': 'Composes the sample host and runs the translation exercise.',
+  'requirements-matrix-class': 'Lists the behavior cases expected from translated implementations.',
+};
+
 function symbol(
   id: string,
   name: string,
@@ -13,7 +33,17 @@ function symbol(
   line: number,
   children?: ModuleNode[],
 ): ModuleNode {
-  return { id, name, kind, path, language, signature, line, children };
+  return {
+    id,
+    name,
+    kind,
+    path,
+    language,
+    signature,
+    documentation: symbolDocumentation[id],
+    line,
+    children,
+  };
 }
 
 function file(id: string, name: string, path: string, children?: ModuleNode[]): ModuleNode {
@@ -46,7 +76,7 @@ export const csharpWorkspaceTree: ModuleNode = {
                 'class',
                 'src/Application/AuditPipeline.cs',
                 'public sealed class AuditPipeline',
-                7,
+                8,
                 [
                   symbol(
                     'audit-append-function',
@@ -54,7 +84,7 @@ export const csharpWorkspaceTree: ModuleNode = {
                     'function',
                     'src/Application/AuditPipeline.cs',
                     'ValueTask<long> AppendAsync(string action, string subject, string payload, CancellationToken cancellationToken)',
-                    13,
+                    16,
                   ),
                   symbol(
                     'audit-verify-function',
@@ -62,7 +92,7 @@ export const csharpWorkspaceTree: ModuleNode = {
                     'function',
                     'src/Application/AuditPipeline.cs',
                     'Task<bool> VerifyAsync(CancellationToken cancellationToken)',
-                    18,
+                    22,
                   ),
                 ],
               ),
@@ -78,7 +108,7 @@ export const csharpWorkspaceTree: ModuleNode = {
                   'class',
                   'src/Application/QuoteOrchestrationService.cs',
                   'public sealed class QuoteOrchestrationService',
-                  6,
+                  7,
                   [
                     symbol(
                       'get-quote-async-function',
@@ -86,7 +116,7 @@ export const csharpWorkspaceTree: ModuleNode = {
                       'function',
                       'src/Application/QuoteOrchestrationService.cs',
                       'Task<Quote> GetQuoteAsync(QuoteRequest request, CancellationToken cancellationToken)',
-                      21,
+                      24,
                     ),
                     symbol(
                       'fetch-with-fallback-function',
@@ -94,7 +124,7 @@ export const csharpWorkspaceTree: ModuleNode = {
                       'function',
                       'src/Application/QuoteOrchestrationService.cs',
                       'Task<Quote> FetchWithFallbackAsync(QuoteRequest request, CancellationToken cancellationToken)',
-                      28,
+                      32,
                     ),
                   ],
                 ),
@@ -111,7 +141,7 @@ export const csharpWorkspaceTree: ModuleNode = {
                   'class',
                   'src/Application/SettlementOrchestrationService.cs',
                   'public sealed class SettlementOrchestrationService',
-                  6,
+                  7,
                   [
                     symbol(
                       'settle-batch-async-function',
@@ -119,7 +149,7 @@ export const csharpWorkspaceTree: ModuleNode = {
                       'function',
                       'src/Application/SettlementOrchestrationService.cs',
                       'Task<IReadOnlyList<SettlementOutcome>> SettleBatchAsync(IReadOnlyList<SettlementInstruction> instructions, Func<SettlementInstruction, int, CancellationToken, Task<SettlementOutcome>> gateway, CancellationToken cancellationToken)',
-                      13,
+                      16,
                     ),
                   ],
                 ),
@@ -170,10 +200,10 @@ export const csharpWorkspaceTree: ModuleNode = {
                   'class',
                   'src/Infrastructure/InMemoryAdapters.cs',
                   'public sealed class InMemoryQuoteProvider',
-                  8,
+                  9,
                   [
-                    symbol('provider-supports-function', 'Supports', 'function', 'src/Infrastructure/InMemoryAdapters.cs', 'bool Supports(string pair)', 20),
-                    symbol('provider-fetch-function', 'FetchAsync', 'function', 'src/Infrastructure/InMemoryAdapters.cs', 'ValueTask<Quote> FetchAsync(QuoteRequest request, CancellationToken cancellationToken)', 22),
+                    symbol('provider-supports-function', 'Supports', 'function', 'src/Infrastructure/InMemoryAdapters.cs', 'bool Supports(string pair)', 23),
+                    symbol('provider-fetch-function', 'FetchAsync', 'function', 'src/Infrastructure/InMemoryAdapters.cs', 'ValueTask<Quote> FetchAsync(QuoteRequest request, CancellationToken cancellationToken)', 26),
                   ],
                 ),
                 symbol(
@@ -182,10 +212,10 @@ export const csharpWorkspaceTree: ModuleNode = {
                   'class',
                   'src/Infrastructure/InMemoryAdapters.cs',
                   'public sealed class InMemoryQuoteCache',
-                  29,
+                  34,
                   [
-                    symbol('cache-load-function', 'GetOrLoadAsync', 'function', 'src/Infrastructure/InMemoryAdapters.cs', 'Task<Quote> GetOrLoadAsync(QuoteRequest request, Func<CancellationToken, Task<Quote>> loader, CancellationToken cancellationToken)', 32),
-                    symbol('cache-invalidate-function', 'Invalidate', 'function', 'src/Infrastructure/InMemoryAdapters.cs', 'void Invalidate(string pair)', 36),
+                    symbol('cache-load-function', 'GetOrLoadAsync', 'function', 'src/Infrastructure/InMemoryAdapters.cs', 'Task<Quote> GetOrLoadAsync(QuoteRequest request, Func<CancellationToken, Task<Quote>> loader, CancellationToken cancellationToken)', 38),
+                    symbol('cache-invalidate-function', 'Invalidate', 'function', 'src/Infrastructure/InMemoryAdapters.cs', 'void Invalidate(string pair)', 43),
                   ],
                 ),
               ],
@@ -200,17 +230,17 @@ export const csharpWorkspaceTree: ModuleNode = {
           children: [
             file('provider-ports-file', 'ProviderPorts.cs', 'src/Ports/ProviderPorts.cs', [
               symbol('quote-provider-interface', 'IQuoteProvider', 'interface', 'src/Ports/ProviderPorts.cs', 'public interface IQuoteProvider', 6),
-              symbol('quote-router-interface', 'IQuoteRouter', 'interface', 'src/Ports/ProviderPorts.cs', 'public interface IQuoteRouter', 17),
+              symbol('quote-router-interface', 'IQuoteRouter', 'interface', 'src/Ports/ProviderPorts.cs', 'public interface IQuoteRouter', 19),
             ]),
             file('storage-ports-file', 'StoragePorts.cs', 'src/Ports/StoragePorts.cs', [
               symbol('quote-cache-interface', 'IQuoteCache', 'interface', 'src/Ports/StoragePorts.cs', 'public interface IQuoteCache', 6),
-              symbol('audit-journal-interface', 'IAuditJournal', 'interface', 'src/Ports/StoragePorts.cs', 'public interface IAuditJournal', 15),
+              symbol('audit-journal-interface', 'IAuditJournal', 'interface', 'src/Ports/StoragePorts.cs', 'public interface IAuditJournal', 17),
             ]),
           ],
         },
         file('program-file', 'Program.cs', 'src/Program.cs', [
-          symbol('program-class', 'Program', 'class', 'src/Program.cs', 'public static class Program', 6, [
-            symbol('program-main-function', 'Main', 'function', 'src/Program.cs', 'Task Main(string[] args)', 9),
+          symbol('program-class', 'Program', 'class', 'src/Program.cs', 'public static class Program', 7, [
+            symbol('program-main-function', 'Main', 'function', 'src/Program.cs', 'Task Main(string[] args)', 11),
           ]),
         ]),
       ],
@@ -222,7 +252,7 @@ export const csharpWorkspaceTree: ModuleNode = {
       path: 'tests',
       children: [
         file('requirements-matrix-file', 'RequirementsMatrix.cs', 'tests/RequirementsMatrix.cs', [
-          symbol('requirements-matrix-class', 'RequirementsMatrix', 'class', 'tests/RequirementsMatrix.cs', 'public static class RequirementsMatrix', 4),
+          symbol('requirements-matrix-class', 'RequirementsMatrix', 'class', 'tests/RequirementsMatrix.cs', 'public static class RequirementsMatrix', 5),
         ]),
       ],
     },

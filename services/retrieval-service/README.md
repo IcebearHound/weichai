@@ -38,7 +38,7 @@ In another terminal:
 
 ```text
 copy apps\workflow-web\.env.example apps\workflow-web\.env
-npm run dev
+npm run dev:web
 ```
 
 The service listens on `http://127.0.0.1:8787` by default. Check both layers:

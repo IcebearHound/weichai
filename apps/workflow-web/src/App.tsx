@@ -62,7 +62,7 @@ function RequirementPanel({
   onSearch: () => void;
   searchProvider: string;
 }) {
-  const canSearch = Boolean(state.target && state.requirement.trim().length >= 8);
+  const canSearch = Boolean(state.target);
 
   return (
     <div className="requirement-layout">
@@ -77,7 +77,7 @@ function RequirementPanel({
         </div>
 
         <label className="field-label" htmlFor="requirement">
-          功能需求
+          功能需求（可选）
         </label>
         <textarea
           id="requirement"
@@ -88,7 +88,7 @@ function RequirementPanel({
         />
         <div className="field-hint">
           <span>{state.requirement.trim().length} 字符</span>
-          <span>建议同时描述行为、约束、错误处理和不可修改的接口。</span>
+          <span>留空时使用目标名称、签名和源码注释检索。</span>
         </div>
 
         <div className="query-preview">
@@ -183,13 +183,16 @@ function SelectionFooter({
   state,
   dispatch,
   onAdapt,
+  adaptationProvider,
 }: {
   state: typeof initialWorkflowState;
   dispatch: React.Dispatch<Parameters<typeof workflowReducer>[1]>;
   onAdapt: () => void;
+  adaptationProvider: string;
 }) {
   const candidate = selectedCandidate(state);
   if (!candidate) return null;
+  const realAdaptation = adaptationProvider !== 'Mock';
 
   return (
     <div className="selection-workbench">
@@ -206,8 +209,13 @@ function SelectionFooter({
             }
           >
             {strategyOptions.map((option) => (
-              <option key={option.id} value={option.id}>
+              <option
+                key={option.id}
+                value={option.id}
+                disabled={realAdaptation && option.id !== 'translate'}
+              >
                 {option.label} · {option.detail}
+                {realAdaptation && option.id !== 'translate' ? '（演示服务暂不支持）' : ''}
               </option>
             ))}
           </select>
@@ -224,7 +232,11 @@ function SelectionFooter({
           />
         </label>
       </div>
-      <button type="button" className="button-primary" onClick={onAdapt}>
+      <button
+        type="button"
+        className="button-primary"
+        onClick={onAdapt}
+      >
         <Sparkles size={15} /> 使用此方案并生成适配
       </button>
     </div>
@@ -234,9 +246,11 @@ function SelectionFooter({
 function Inspector({
   state,
   searchProvider,
+  adaptationProvider,
 }: {
   state: typeof initialWorkflowState;
   searchProvider: string;
+  adaptationProvider: string;
 }) {
   const candidate = selectedCandidate(state);
   return (
@@ -259,6 +273,12 @@ function Inspector({
             </div>
             <strong>{state.target.name}</strong>
             <code>{state.target.signature}</code>
+            {state.target.documentation ? (
+              <p className="target-documentation">
+                <span>源码注释</span>
+                {state.target.documentation}
+              </p>
+            ) : null}
             <span>
               {state.target.path}:{state.target.line}
             </span>
@@ -283,7 +303,7 @@ function Inspector({
             <GitCompareArrows size={14} />
             <span>
               <strong>CodeAdaptationPort</strong>
-              <small>Mock · translate / bridge</small>
+              <small>{adaptationProvider} · Java → C#</small>
             </span>
             <em>ready</em>
           </div>
@@ -327,14 +347,20 @@ export interface AppProps {
   ports: WorkflowPorts;
   moduleTree: ModuleNode;
   searchProvider?: string;
+  adaptationProvider?: string;
 }
 
-export default function App({ ports, moduleTree, searchProvider = 'Mock' }: AppProps) {
+export default function App({
+  ports,
+  moduleTree,
+  searchProvider = 'Mock',
+  adaptationProvider = 'Mock',
+}: AppProps) {
   const [state, dispatch] = useReducer(workflowReducer, initialWorkflowState);
   const candidate = useMemo(() => selectedCandidate(state), [state]);
 
   async function handleSearch() {
-    if (!state.target || state.requirement.trim().length < 8) return;
+    if (!state.target) return;
     dispatch({ type: 'SEARCH_START' });
     try {
       const candidates = await ports.search.search({
@@ -343,6 +369,7 @@ export default function App({ ports, moduleTree, searchProvider = 'Mock' }: AppP
         topK: state.topK,
         retrievalMode: state.retrievalMode,
         repositoryScopes: ['configured-repositories', 'mock-catalog'],
+        candidateLanguages: adaptationProvider === 'Mock' ? undefined : ['Java'],
       });
       dispatch({ type: 'SEARCH_SUCCESS', candidates });
     } catch (error) {
@@ -481,7 +508,12 @@ export default function App({ ports, moduleTree, searchProvider = 'Mock' }: AppP
                   dispatch({ type: 'SELECT_CANDIDATE', candidateId })
                 }
               />
-              <SelectionFooter state={state} dispatch={dispatch} onAdapt={handleAdapt} />
+              <SelectionFooter
+                state={state}
+                dispatch={dispatch}
+                onAdapt={handleAdapt}
+                adaptationProvider={adaptationProvider}
+              />
             </div>
           ) : null}
 
@@ -498,9 +530,9 @@ export default function App({ ports, moduleTree, searchProvider = 'Mock' }: AppP
                 策略：{state.strategy} · {candidate?.language} → {state.target?.language}
               </p>
               <div className="processing-log">
-                <span>读取源方案边界</span>
-                <span>对齐目标函数签名</span>
-                <span>生成工作区编辑预览</span>
+                <span>{adaptationProvider} 正在翻译源实现</span>
+                <span>临时 C# skeleton 编译与自动修复</span>
+                <span>生成工作区补丁预览</span>
               </div>
             </div>
           ) : null}
@@ -517,11 +549,16 @@ export default function App({ ports, moduleTree, searchProvider = 'Mock' }: AppP
         </div>
       </main>
 
-      <Inspector state={state} searchProvider={searchProvider} />
+      <Inspector
+        state={state}
+        searchProvider={searchProvider}
+        adaptationProvider={adaptationProvider}
+      />
 
       <footer className="statusbar">
         <span>{moduleTree.name} · main</span>
         <span>检索器：{searchProvider} · {state.retrievalMode}</span>
+        <span>适配器：{adaptationProvider}</span>
         <span>目标：{state.target?.language ?? '未选择'}</span>
         <span className="statusbar-spacer" />
         <span>Ports 3/3 ready</span>

@@ -10,6 +10,29 @@ function endpoint(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/+$/, '')}${path}`;
 }
 
+function isAdaptationResult(value: unknown): value is AdaptationResult {
+  if (typeof value !== 'object' || value === null) return false;
+  const result = value as Partial<AdaptationResult>;
+  return (
+    typeof result.generatedCode === 'string' &&
+    typeof result.targetLanguage === 'string' &&
+    typeof result.strategy === 'string' &&
+    Array.isArray(result.interfaceMappings) &&
+    Array.isArray(result.validation) &&
+    Array.isArray(result.files)
+  );
+}
+
+function isApplyResult(value: unknown): value is ApplyResult {
+  if (typeof value !== 'object' || value === null) return false;
+  const result = value as Partial<ApplyResult>;
+  return (
+    Array.isArray(result.appliedFiles) &&
+    result.appliedFiles.every((path) => typeof path === 'string') &&
+    typeof result.checkpointId === 'string'
+  );
+}
+
 async function responseError(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as { error?: unknown };
@@ -45,10 +68,10 @@ export class AdaptationHttpAdapter implements CodeAdaptationPort {
     }
 
     const body: unknown = await response.json();
-    if (typeof body !== 'object' || body === null || !('generatedCode' in body)) {
+    if (!isAdaptationResult(body)) {
       throw new Error('Adaptation service returned an invalid response.');
     }
-    return body as AdaptationResult;
+    return body;
   }
 }
 
@@ -77,10 +100,10 @@ export class BackfillHttpAdapter implements CodeBackfillPort {
     }
 
     const body: unknown = await response.json();
-    if (typeof body !== 'object' || body === null || !('appliedFiles' in body)) {
+    if (!isApplyResult(body)) {
       throw new Error('Backfill service returned an invalid response.');
     }
-    return body as ApplyResult;
+    return body;
   }
 }
 

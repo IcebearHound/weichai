@@ -16,6 +16,7 @@ export function toModuleTarget(node: ModuleNode): ModuleTarget | null {
     path: node.path,
     language: node.language,
     signature: node.signature,
+    documentation: node.documentation,
     line: node.line,
     implementationStatus: node.implementationStatus,
   };

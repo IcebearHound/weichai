@@ -15,7 +15,11 @@ import type {
 } from "@forexplore/contracts";
 import type { CodeAdaptationPort } from "@forexplore/workflow-core";
 import { translateJavaToCSharp, fixCompileErrors } from "./translator";
-import { compileStandalone, compileIntegrated } from "./compiler";
+import {
+  compileIntegrated,
+  compileStandalone,
+  isCompilerUnavailable,
+} from "./compiler";
 
 const MAX_RETRIES = 3;
 
@@ -58,37 +62,39 @@ export class AdaptationAdapter implements CodeAdaptationPort {
       signal,
     );
 
-    // ===== Step 2: 独立编译 + 自动修复 =====
+    // ===== Step 2: 编译 + 自动修复 =====
     let standaloneResult = compileStandalone(csharpCode, request.target.name);
+    let integratedResult = this.#skeletonProjectPath
+      ? compileIntegrated(csharpCode, this.#skeletonProjectPath, request.target.path)
+      : null;
     let retries = 0;
+    let repairResult = integratedResult ?? standaloneResult;
 
-    while (!standaloneResult.success && retries < MAX_RETRIES) {
+    while (
+      !repairResult.success &&
+      !isCompilerUnavailable(repairResult) &&
+      retries < MAX_RETRIES
+    ) {
       csharpCode = await fixCompileErrors(
         csharpCode,
-        standaloneResult.errors,
+        repairResult.errors,
         request.target.signature,
         request.requirement,
         this.#apiKey,
         signal,
       );
       standaloneResult = compileStandalone(csharpCode, request.target.name);
+      integratedResult = this.#skeletonProjectPath
+        ? compileIntegrated(csharpCode, this.#skeletonProjectPath, request.target.path)
+        : null;
+      repairResult = integratedResult ?? standaloneResult;
       retries++;
     }
 
-    // ===== Step 3: 集成编译（如果有 skeleton 项目） =====
-    let integratedResult = null;
-    if (this.#skeletonProjectPath) {
-      integratedResult = compileIntegrated(
-        csharpCode,
-        this.#skeletonProjectPath,
-        request.target.path,
-      );
-    }
-
-    // ===== Step 4: 生成映射 =====
+    // ===== Step 3: 生成映射 =====
     const mappings = buildMappings(request.candidate.preview, csharpCode);
 
-    // ===== Step 5: 生成 FilePatch =====
+    // ===== Step 4: 生成 FilePatch =====
     const originalContent = readOriginalIfAvailable(
       this.#projectRoot,
       request.target.path,
@@ -119,7 +125,7 @@ export class AdaptationAdapter implements CodeAdaptationPort {
           detail: integratedResult
             ? integratedResult.success
               ? "编译通过"
-              : "待修复"
+              : integratedResult.errors.slice(0, 3).join("; ")
             : "未执行（需 skeleton 项目路径）",
         },
       ],

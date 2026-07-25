@@ -7,13 +7,13 @@ import { BackfillAdapter } from './backfill-adapter.js';
 const config = loadConfig();
 
 const adapter = new AdaptationAdapter({
-  apiKey: config.deepseekApiKey,
+  apiKey: config.apiKey,
   skeletonProjectPath: config.skeletonProjectPath,
   projectRoot: config.projectRoot,
 });
 
 const backfill = new BackfillAdapter({
-  projectRoot: config.projectRoot || '.',
+  projectRoot: config.projectRoot,
 });
 
 const server = createHttpServer({
@@ -24,6 +24,7 @@ const server = createHttpServer({
 
 server.listen(config.port, config.host, () => {
   console.log(`Adaptation service listening on http://${config.host}:${config.port}`);
+  console.log(`C# project: ${config.projectRoot}`);
 });
 
 async function shutdown(): Promise<void> {

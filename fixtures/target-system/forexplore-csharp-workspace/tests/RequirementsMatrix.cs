@@ -1,6 +1,7 @@
 namespace ForeXplore.Skeleton.Tests;
 
 // This file is a requirements-analysis artifact, not a runnable test framework dependency.
+/// <summary>Lists the behavior cases expected from translated implementations.</summary>
 public static class RequirementsMatrix
 {
     // REQ: A translated implementation must cover normal, boundary, failure, and concurrency cases.
@@ -12,4 +13,3 @@ public static class RequirementsMatrix
         ["audit"] = new[] { "canonical-hash", "tamper-detection", "durable-sequence", "cancellation" },
     };
 }
-

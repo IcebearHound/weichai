@@ -158,6 +158,23 @@ describe('search internals', () => {
     expect(searchInternals.overlap('settleBatch', 'settlement batch queue')).toBeGreaterThan(0);
   });
 
+  it('uses target signatures and documentation when the requirement is empty', () => {
+    const metadataOnlyRequest: SearchRequest = {
+      ...request,
+      requirement: '',
+      target: {
+        ...request.target,
+        signature: 'GetQuoteAsync(QuoteRequest request)',
+        documentation: 'Returns a cached quote with stale provider fallback.',
+      },
+    };
+
+    const query = searchInternals.queryText(metadataOnlyRequest);
+    expect(query).toContain('GetQuoteAsync');
+    expect(query).toContain('QuoteRequest');
+    expect(query).toContain('cached quote with stale provider fallback');
+  });
+
   it('reranks a broad but bounded candidate pool for large corpora', () => {
     expect(searchInternals.expandedLimit(1)).toBe(50);
     expect(searchInternals.expandedLimit(20)).toBe(100);

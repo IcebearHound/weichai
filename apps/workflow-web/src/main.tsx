@@ -31,6 +31,7 @@ async function bootstrap() {
         ports={workflowPorts}
         moduleTree={moduleTree}
         searchProvider={retrievalApiUrl ? 'SeekDB' : 'Mock'}
+        adaptationProvider={adaptationApiUrl ? 'DeepSeek HTTP' : 'Mock'}
       />
     </React.StrictMode>,
   );

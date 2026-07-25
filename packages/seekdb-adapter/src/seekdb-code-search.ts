@@ -53,12 +53,21 @@ export class SeekDbCodeSearchAdapter implements CodeSearchPort {
   }
 
   async search(request: SearchRequest, signal?: AbortSignal): Promise<SearchCandidate[]> {
-    const response = await this.request(this.endpoint, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(request),
-      signal,
-    });
+    let response: Response;
+    try {
+      response = await this.request(this.endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(request),
+        signal,
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') throw error;
+      throw new Error(
+        `无法连接 SeekDB 检索服务 ${this.endpoint}；请确认已通过 npm run dev 启动服务。`,
+        { cause: error },
+      );
+    }
 
     if (!response.ok) {
       throw new Error(`SeekDB retrieval failed: ${await responseError(response)}`);

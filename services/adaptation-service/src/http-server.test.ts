@@ -103,7 +103,7 @@ describe("adaptation HTTP API", () => {
 
     const response = await fetch(`${url}/health`);
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "ok" });
+    expect(await response.json()).toEqual({ status: "ok", provider: "deepseek" });
   });
 
   it("routes adaptation requests to the adapter", async () => {
@@ -120,7 +120,10 @@ describe("adaptation HTTP API", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(adapter.adapt).toHaveBeenCalledWith(adaptationRequest);
+    expect(adapter.adapt).toHaveBeenCalledWith(
+      adaptationRequest,
+      expect.any(AbortSignal),
+    );
     expect(await response.json()).toEqual(adaptationResult);
     expect(response.headers.get("access-control-allow-origin")).toBe(
       "http://localhost:4173",
@@ -155,7 +158,7 @@ describe("adaptation HTTP API", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(backfill.apply).toHaveBeenCalledWith(files);
+    expect(backfill.apply).toHaveBeenCalledWith(files, expect.any(AbortSignal));
     expect(await response.json()).toEqual(applyResult);
   });
 
@@ -215,7 +218,7 @@ describe("adaptation HTTP API", () => {
     const response = await fetch(`${url}/v1/adapt`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: Buffer.alloc(1024 * 1024 + 1),
+      body: Buffer.alloc(2 * 1024 * 1024 + 1),
     });
 
     expect(response.status).toBe(413);
@@ -240,7 +243,7 @@ describe("adaptation HTTP API", () => {
     expect(response.status).toBe(204);
   });
 
-  it("returns 503 when the adapter throws an unexpected error", async () => {
+  it("returns 502 when the upstream adapter throws an unexpected error", async () => {
     const adapter: CodeAdaptationPort = {
       adapt: vi.fn(async () => {
         throw new Error("DeepSeek API timeout");
@@ -255,7 +258,7 @@ describe("adaptation HTTP API", () => {
       body: JSON.stringify(adaptationRequest),
     });
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(502);
     const body = await response.json();
     expect(body.error).toBe("DeepSeek API timeout");
   });

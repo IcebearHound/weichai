@@ -1,10 +1,63 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { mockWorkflowPorts } from '@forexplore/mock-adapters';
 import { csharpWorkspaceId, workspaceModuleSymbols } from '@forexplore/workspace-adapters';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 
+afterEach(cleanup);
+
 describe('ForeXplore vertical workflow', () => {
+  it('limits real adaptation demo searches to Java candidates', async () => {
+    const moduleTree = await workspaceModuleSymbols.loadTree(csharpWorkspaceId);
+    const search = vi.fn(
+      mockWorkflowPorts.search.search.bind(mockWorkflowPorts.search),
+    );
+    render(
+      <App
+        ports={{ ...mockWorkflowPorts, search: { search } }}
+        moduleTree={moduleTree}
+        adaptationProvider="DeepSeek HTTP"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Application' }));
+    fireEvent.click(screen.getByRole('button', { name: 'QuoteOrchestrationService.cs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'QuoteOrchestrationServicecls' }));
+    fireEvent.click(screen.getByRole('button', { name: /GetQuoteAsync/ }));
+    expect(
+      screen.getByText('Gets a quote through the configured cache and provider fallback policy.'),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '检索相似实现' }));
+
+    await waitFor(() => {
+      expect(search).toHaveBeenCalledWith(
+        expect.objectContaining({ candidateLanguages: ['Java'] }),
+      );
+      expect(
+        (screen.getByRole('button', {
+          name: '使用此方案并生成适配',
+        }) as HTMLButtonElement).disabled,
+      ).toBe(false);
+    });
+  });
+
+  it('retrieves candidates from target metadata when the requirement is empty', async () => {
+    const moduleTree = await workspaceModuleSymbols.loadTree(csharpWorkspaceId);
+    render(<App ports={mockWorkflowPorts} moduleTree={moduleTree} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Application' }));
+    fireEvent.click(screen.getByRole('button', { name: 'QuoteOrchestrationService.cs' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'QuoteOrchestrationServicecls' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /GetQuoteAsync/ }));
+    fireEvent.click(screen.getByRole('button', { name: '检索相似实现' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /QuoteCache\.getOrLoad/ })).toBeTruthy();
+    });
+  });
+
   it('lets a user select a function, retrieve candidates, adapt and backfill', async () => {
     const moduleTree = await workspaceModuleSymbols.loadTree(csharpWorkspaceId);
     render(<App ports={mockWorkflowPorts} moduleTree={moduleTree} />);
@@ -17,7 +70,7 @@ describe('ForeXplore vertical workflow', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: /GetQuoteAsync/ }));
 
-    const requirement = screen.getByLabelText('功能需求');
+    const requirement = screen.getByLabelText(/功能需求/);
     fireEvent.change(requirement, {
       target: {
         value: '增加 TTL 缓存、并发请求合并和失败时 stale 回退，保持现有接口不变。',

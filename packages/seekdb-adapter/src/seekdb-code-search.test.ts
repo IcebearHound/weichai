@@ -55,4 +55,18 @@ describe('SeekDbCodeSearchAdapter', () => {
 
     await expect(adapter.search(request)).rejects.toThrow('seekdb is unavailable');
   });
+
+  it('explains how to recover when the service is unreachable', async () => {
+    const fetch = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    const adapter = new SeekDbCodeSearchAdapter({
+      baseUrl: 'http://127.0.0.1:8787',
+      fetch,
+    });
+
+    await expect(adapter.search(request)).rejects.toThrow(
+      '请确认已通过 npm run dev 启动服务',
+    );
+  });
 });

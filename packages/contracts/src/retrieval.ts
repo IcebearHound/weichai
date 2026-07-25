@@ -4,6 +4,7 @@ export type RetrievalMode = 'hybrid' | 'semantic' | 'structure';
 
 export interface SearchRequest {
   target: ModuleTarget;
+  /** Optional natural-language context; an empty string searches by target metadata. */
   requirement: string;
   topK: number;
   retrievalMode: RetrievalMode;

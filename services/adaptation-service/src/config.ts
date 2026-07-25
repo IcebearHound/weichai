@@ -1,10 +1,17 @@
-export interface AdaptationConfig {
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+
+const defaultProjectPath = fileURLToPath(
+  new URL("../../../fixtures/target-system/forexplore-csharp-workspace", import.meta.url),
+);
+
+export interface AdaptationServiceConfig {
   host: string;
   port: number;
   corsOrigin: string;
-  deepseekApiKey: string;
-  skeletonProjectPath?: string;
-  projectRoot?: string;
+  apiKey: string;
+  skeletonProjectPath: string;
+  projectRoot: string;
 }
 
 function positiveInteger(value: string | undefined, fallback: number, name: string): number {
@@ -15,18 +22,24 @@ function positiveInteger(value: string | undefined, fallback: number, name: stri
   return parsed;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdaptationConfig {
-  const apiKey = env.DEEPSEEK_API_KEY?.trim();
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdaptationServiceConfig {
+  const apiKey = env.DEEPSEEK_API_KEY?.trim() ?? "";
   if (!apiKey) {
-    throw new Error('DEEPSEEK_API_KEY is required.');
+    throw new Error("DEEPSEEK_API_KEY is required to start the adaptation service.");
   }
 
+  const skeletonProjectPath = resolve(
+    env.ADAPTATION_SKELETON_PROJECT_PATH?.trim() ||
+      env.ADAPTATION_SKELETON_PATH?.trim() ||
+      defaultProjectPath,
+  );
+
   return {
-    host: env.ADAPTATION_HOST?.trim() || '127.0.0.1',
-    port: positiveInteger(env.ADAPTATION_PORT, 4001, 'ADAPTATION_PORT'),
-    corsOrigin: env.ADAPTATION_CORS_ORIGIN?.trim() || 'http://localhost:4173',
-    deepseekApiKey: apiKey,
-    skeletonProjectPath: env.ADAPTATION_SKELETON_PATH?.trim() || undefined,
-    projectRoot: env.ADAPTATION_PROJECT_ROOT?.trim() || undefined,
+    host: env.ADAPTATION_HOST?.trim() || "127.0.0.1",
+    port: positiveInteger(env.ADAPTATION_PORT, 8788, "ADAPTATION_PORT"),
+    corsOrigin: env.ADAPTATION_CORS_ORIGIN?.trim() || "*",
+    apiKey,
+    skeletonProjectPath,
+    projectRoot: resolve(env.ADAPTATION_PROJECT_ROOT?.trim() || skeletonProjectPath),
   };
 }

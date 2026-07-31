@@ -8,6 +8,7 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+.vscode-test/
 
 # Local environment files
 .env
@@ -23,6 +24,9 @@ coverage/
 !apps/workflow-web/.vscode/
 !apps/workflow-web/.vscode/launch.json
 !apps/workflow-web/.vscode/tasks.json
+!apps/vscode-extension/.vscode/
+!apps/vscode-extension/.vscode/launch.json
+!apps/vscode-extension/.vscode/tasks.json
 .idea/
 .DS_Store
 Thumbs.db

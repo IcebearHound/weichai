@@ -1,0 +1,99 @@
+{
+  "name": "forexplore-vscode",
+  "displayName": "ForeXplore Code Translation",
+  "description": "在 VSCode 中运行 ForeXplore 代码翻译工作流：检索相似实现、生成目标代码并以 diff 预览回填。",
+  "version": "0.1.0",
+  "publisher": "forexplore",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension/extension.js",
+  "activationEvents": [
+    "onCommand:forexplore.startTranslation",
+    "onCommand:forexplore.showPanel",
+    "onCommand:forexplore.checkRepositories",
+    "onCommand:forexplore.reindex"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "forexplore.startTranslation",
+        "title": "ForeXplore: 开始代码翻译"
+      },
+      {
+        "command": "forexplore.showPanel",
+        "title": "ForeXplore: 打开翻译面板"
+      },
+      {
+        "command": "forexplore.checkRepositories",
+        "title": "ForeXplore: 检查检索仓库"
+      },
+      {
+        "command": "forexplore.reindex",
+        "title": "ForeXplore: 重新索引检索仓库"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "forexplore.startTranslation",
+          "when": "editorHasSelection && resourceScheme == file",
+          "group": "forexplore@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ForeXplore",
+      "properties": {
+        "forexplore.repositoryPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "检索相似实现时要扫描的本地代码仓库路径（绝对路径）。翻译开始前会检查这些路径是否可用，未配置时使用服务端已有索引或演示数据。"
+        },
+        "forexplore.retrievalApiUrl": {
+          "type": "string",
+          "default": "",
+          "description": "检索服务地址，如 http://127.0.0.1:8787。留空时使用扩展内置的演示模式。"
+        },
+        "forexplore.adaptationApiUrl": {
+          "type": "string",
+          "default": "",
+          "description": "翻译服务地址，如 http://127.0.0.1:8788。留空时使用扩展内置的演示模式。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "npm run build:webview && npm run build:extension",
+    "build:webview": "vite build",
+    "build:extension": "node esbuild.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.webview.json --noEmit",
+    "test": "vitest run",
+    "test:integration": "npm run build && node esbuild.integration.mjs && tsx src/test/integration/run-tests.ts",
+    "package": "vsce package --no-dependencies --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/vscode": "^1.90.0",
+    "@vitejs/plugin-react": "^6.0.3",
+    "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.28.1",
+    "jsdom": "^29.1.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
+  }
+}

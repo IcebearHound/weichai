@@ -1,0 +1,55 @@
+{
+  "candidateSource": "public Result settle(List<Item> items) { return gateway.send(items); }",
+  "targetContext": {
+    "targetSignature": "public async Task<SettlementOutcome> SettleAsync(IReadOnlyList<SettlementInstruction> instructions, CancellationToken cancellationToken)",
+    "targetFilePath": "src/Application/SettlementService.cs",
+    "enclosingType": "SettlementService",
+    "documentation": "Settles a batch and returns a target-domain outcome.",
+    "targetCode": "throw new NotImplementedException();",
+    "importsOrUsings": [],
+    "members": ["private readonly ISettlementGateway _gateway;"],
+    "constructorParameters": ["ISettlementGateway gateway"],
+    "dependencySummaries": ["ISettlementGateway.SendAsync accepts cancellation."],
+    "callerSummaries": [],
+    "immutableConstraints": ["Do not introduce the Java Result type."]
+  },
+  "requirement": "Adapt the batch request to the existing asynchronous gateway.",
+  "analysisReport": {
+    "schemaVersion": "1.0",
+    "applicability": {
+      "level": "adapt",
+      "confidence": 0.72,
+      "reasons": ["Core flow is reusable but types and async behavior differ."]
+    },
+    "behaviorMapping": [
+      {
+        "requirement": "Use async gateway",
+        "status": "partial",
+        "candidateEvidence": ["gateway.send(items)"],
+        "targetAction": "Use _gateway.SendAsync and map its response."
+      }
+    ],
+    "contractMapping": [
+      {
+        "source": "Result",
+        "target": "SettlementOutcome",
+        "action": "convert",
+        "note": "Map to the target domain result."
+      }
+    ],
+    "dependencyPlan": [
+      {
+        "sourceDependency": "gateway",
+        "targetDependency": "_gateway",
+        "action": "adapt"
+      }
+    ],
+    "implementationPlan": [
+      "Convert instructions for the existing gateway.",
+      "Map the gateway result to SettlementOutcome."
+    ],
+    "risks": ["Candidate does not propagate cancellation."],
+    "assumptions": [],
+    "unresolved": []
+  }
+}

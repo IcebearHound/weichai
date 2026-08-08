@@ -2,6 +2,53 @@
 
 Java → C# code adaptation: LLM translation → compile validation → auto-fix → backfill.
 
+## Analyzer-driven Translator Agent
+
+The Translator now has a structured member-C entry point:
+
+```ts
+const result = await translateWithAnalysis(
+  {
+    candidateSource,
+    targetContext,
+    requirement,
+    analysisReport,
+  },
+  { apiKey },
+  signal,
+);
+```
+
+The model receives target module context and `AnalysisReport v1` in a separate
+system/user call. Its decision order is fixed to target contract, requirement,
+analysis report, then candidate details. The response is parsed as a structured
+`TranslationResult` containing generated code, mappings, completed plan steps,
+and unresolved items.
+
+Runtime guards reject Analyzer `reject` decisions, unresolved dependencies,
+changed target signatures, omitted plan steps/mappings, and output that expands
+into using/namespace/enclosing-type changes. The existing
+`translateJavaToCSharp()` and `fixCompileErrors()` exports remain compatible for
+the current HTTP adapter while the Analyzer and orchestration work lands.
+
+Validator integration uses the reserved repair entry point:
+
+```ts
+const repaired = await repairTranslation(
+  {
+    ...translationInput,
+    previousResult,
+    validationFeedback,
+  },
+  { apiKey },
+  signal,
+);
+```
+
+A passing feedback result is idempotent and performs no model request. Failed
+feedback must contain structured syntax, contract, dependency, or behavior
+issues. Fixed member-C samples live in `testdata/translator-*.json`.
+
 `AdaptationAdapter` accepts only the `translate` strategy with a Java candidate
 and a `C#` target. Unsupported language pairs are rejected before any LLM
 request is made.
@@ -76,7 +123,9 @@ code-indexer (module 1) → retrieval-service (module 2) → adaptation-service 
 
 | File | Role |
 |------|------|
-| `src/translator.ts` | LLM Java→C# translation |
+| `src/translator.ts` | AnalysisReport-driven Translator, contract guards, structured output and repair |
+| `src/translator.test.ts` | Translator parsing, rejection, contract, planning and repair tests |
+| `testdata/translator-*.json` | direct/adapt/reject member-C fixtures |
 | `src/compiler.ts` | C# compile check (dotnet build) |
 | `src/model-config.ts` | Isolated temporary model provider configuration |
 | `src/adaptation-adapter.ts` | Main adapter, orchestrates translate→compile→fix |

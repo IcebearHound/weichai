@@ -11,8 +11,24 @@ export type { AdaptationAdapterOptions } from "./adaptation-adapter";
 export { BackfillAdapter } from "./backfill-adapter";
 export type { BackfillAdapterOptions } from "./backfill-adapter";
 
-export { translateJavaToCSharp, fixCompileErrors } from "./translator";
-export type { TranslateRequest } from "./translator";
+export {
+  fixCompileErrors,
+  repairTranslation,
+  translateJavaToCSharp,
+  translateWithAnalysis,
+} from "./translator";
+export type {
+  AnalyzeTranslationRequest,
+  ApplicabilityLevel,
+  RepairTranslationRequest,
+  TranslateRequest,
+  TranslationMapping,
+  TranslationResult,
+  TranslatorAnalysisReport,
+  TranslatorModelOptions,
+  TranslatorTargetContext,
+  ValidationFeedback,
+} from "./translator";
 
 export { compileStandalone, compileIntegrated } from "./compiler";
 export type { CompileResult } from "./compiler";

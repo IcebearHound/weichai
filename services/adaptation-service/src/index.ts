@@ -14,6 +14,21 @@ export type { BackfillAdapterOptions } from "./backfill-adapter";
 export { translateJavaToCSharp, fixCompileErrors } from "./translator";
 export type { TranslateRequest } from "./translator";
 
+export {
+  AnalyzerAgent,
+  buildAnalyzerMessages,
+  parseAnalysisReport,
+  validateAnalysisReport,
+} from "./analyzer";
+export type {
+  AnalyzerAgentOptions,
+  AnalyzerMessage,
+  AnalyzerModelClient,
+} from "./analyzer";
+
+export { collectTargetContext, serializeTargetContext } from "./context-collector";
+export type { ContextCollectorOptions } from "./context-collector";
+
 export { compileStandalone, compileIntegrated } from "./compiler";
 export type { CompileResult } from "./compiler";
 

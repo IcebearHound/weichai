@@ -77,9 +77,26 @@ code-indexer (module 1) → retrieval-service (module 2) → adaptation-service 
 | File | Role |
 |------|------|
 | `src/translator.ts` | LLM Java→C# translation |
+| `src/context-collector.ts` | Collects bounded target-module facts and direct dependencies |
+| `src/analyzer.ts` | Independent Analyzer Agent that returns validated `AnalysisReport` JSON |
 | `src/compiler.ts` | C# compile check (dotnet build) |
 | `src/model-config.ts` | Isolated temporary model provider configuration |
 | `src/adaptation-adapter.ts` | Main adapter, orchestrates translate→compile→fix |
 | `src/backfill-adapter.ts` | Backfill results into corpus |
 | `poc/translate_poc.py` | Standalone POC with 5 test cases |
 | `poc/e2e_pipeline.py` | End-to-end: calls retrieval-service /v1/search |
+
+## Analyzer boundary
+
+`collectTargetContext({ projectRoot, target })` reads the selected target file,
+its containing type, direct dependency definitions, relevant callers, and
+explicit `REQ:` constraints. It returns a bounded `TargetModuleContext`; paths
+inside the context are project-relative and the collector rejects traversal
+outside `projectRoot`.
+
+`new AnalyzerAgent({ apiKey }).analyze(request)` makes a separate model call
+with target facts, the user requirement, and one retrieval candidate. The
+response must be `AnalysisReport` schema version `1.0`; markdown fences are
+accepted for compatibility, but every field and enum is validated before the
+report is returned. Analyzer does not generate code, compile it, or run
+behavior tests. Those remain Translator and Validator responsibilities.

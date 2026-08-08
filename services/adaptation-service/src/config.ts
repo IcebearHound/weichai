@@ -28,10 +28,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdaptationServ
     throw new Error("DEEPSEEK_API_KEY is required to start the adaptation service.");
   }
 
-  const skeletonProjectPath = resolve(
+  const skeletonProjectPath = resolveConfiguredPath(
     env.ADAPTATION_SKELETON_PROJECT_PATH?.trim() ||
-      env.ADAPTATION_SKELETON_PATH?.trim() ||
-      defaultProjectPath,
+      env.ADAPTATION_SKELETON_PATH?.trim(),
+    defaultProjectPath,
   );
 
   return {
@@ -40,6 +40,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdaptationServ
     corsOrigin: env.ADAPTATION_CORS_ORIGIN?.trim() || "*",
     apiKey,
     skeletonProjectPath,
-    projectRoot: resolve(env.ADAPTATION_PROJECT_ROOT?.trim() || skeletonProjectPath),
+    projectRoot: resolveConfiguredPath(env.ADAPTATION_PROJECT_ROOT?.trim(), skeletonProjectPath),
   };
+}
+
+function resolveConfiguredPath(value: string | undefined, fallback: string): string {
+  if (!value) return resolve(fallback);
+  // Preserve POSIX paths supplied by WSL-oriented configurations on Windows;
+  // Node can still consume them, and this keeps environment values portable.
+  if (process.platform === "win32" && /^\/[^/]/.test(value)) return value;
+  return resolve(value);
 }

@@ -1,0 +1,55 @@
+{
+  "candidateSource": "public double calculate(String key) { return cache.get(key); }",
+  "targetContext": {
+    "targetSignature": "public async Task<decimal> CalculateAsync(string key, CancellationToken cancellationToken)",
+    "targetFilePath": "src/Application/Calculator.cs",
+    "enclosingType": "Calculator",
+    "documentation": "Returns the cached calculation for a key.",
+    "targetCode": "throw new NotImplementedException();",
+    "importsOrUsings": ["System.Threading", "System.Threading.Tasks"],
+    "members": ["private readonly ICalculationCache _cache;"],
+    "constructorParameters": ["ICalculationCache cache"],
+    "dependencySummaries": ["ICalculationCache.GetAsync returns Task<decimal>."],
+    "callerSummaries": ["Caller passes the request cancellation token."],
+    "immutableConstraints": ["Keep the method public and asynchronous.", "Propagate cancellationToken."]
+  },
+  "requirement": "Load the cached decimal result asynchronously and preserve cancellation.",
+  "analysisReport": {
+    "schemaVersion": "1.0",
+    "applicability": {
+      "level": "direct",
+      "confidence": 0.94,
+      "reasons": ["Candidate implements the same cache lookup behavior."]
+    },
+    "behaviorMapping": [
+      {
+        "requirement": "Load cached result",
+        "status": "covered",
+        "candidateEvidence": ["cache.get(key)"],
+        "targetAction": "Call _cache.GetAsync with key and cancellationToken."
+      }
+    ],
+    "contractMapping": [
+      {
+        "source": "double",
+        "target": "decimal",
+        "action": "convert",
+        "note": "Use the target domain numeric type."
+      }
+    ],
+    "dependencyPlan": [
+      {
+        "sourceDependency": "cache",
+        "targetDependency": "_cache",
+        "action": "reuse-existing"
+      }
+    ],
+    "implementationPlan": [
+      "Call the existing asynchronous cache dependency.",
+      "Forward the caller cancellation token."
+    ],
+    "risks": [],
+    "assumptions": ["_cache is initialized by the constructor."],
+    "unresolved": []
+  }
+}

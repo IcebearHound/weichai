@@ -1,0 +1,35 @@
+{
+  "candidateSource": "public void deleteEverything() { database.truncate(); }",
+  "targetContext": {
+    "targetSignature": "public Task<Quote> GetQuoteAsync(QuoteRequest request, CancellationToken cancellationToken)",
+    "importsOrUsings": [],
+    "members": [],
+    "constructorParameters": [],
+    "dependencySummaries": [],
+    "callerSummaries": [],
+    "immutableConstraints": ["Never delete persisted data."]
+  },
+  "requirement": "Return a quote.",
+  "analysisReport": {
+    "schemaVersion": "1.0",
+    "applicability": {
+      "level": "reject",
+      "confidence": 0.99,
+      "reasons": ["Candidate behavior is unrelated and destructive."]
+    },
+    "behaviorMapping": [
+      {
+        "requirement": "Return a quote",
+        "status": "missing",
+        "candidateEvidence": [],
+        "targetAction": "Reject this candidate."
+      }
+    ],
+    "contractMapping": [],
+    "dependencyPlan": [],
+    "implementationPlan": ["Reject the candidate."],
+    "risks": ["Destructive behavior."],
+    "assumptions": [],
+    "unresolved": []
+  }
+}

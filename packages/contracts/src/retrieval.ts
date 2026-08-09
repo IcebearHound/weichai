@@ -14,6 +14,8 @@ export interface SearchRequest {
    * Omit it when the caller can adapt candidates from any language.
    */
   candidateLanguages?: Language[];
+  /** Set to false to skip LLM reranking for this single request. */
+  rerank?: boolean;
 }
 
 export interface CandidateScore {
@@ -21,6 +23,8 @@ export interface CandidateScore {
   semantic: number;
   symbol: number;
   contract: number;
+  /** LLM reranking score (0–1), only present when reranking is active. */
+  rerank?: number;
 }
 
 export interface SearchCandidate {
@@ -38,4 +42,6 @@ export interface SearchCandidate {
   dependencies: string[];
   compatibility: string[];
   risks: string[];
+  /** LLM reranking rationale, only present when reranking is active. */
+  rerankReason?: string;
 }

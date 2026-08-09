@@ -138,6 +138,29 @@ describe('retrieval HTTP API', () => {
     expect(engine.search).not.toHaveBeenCalled();
   });
 
+  it('accepts only a boolean rerank option', async () => {
+    const engine: SearchEngine = { search: vi.fn(async () => []) };
+    const url = await listen(engine, store());
+
+    const disabled = { ...request, rerank: false };
+    const valid = await fetch(`${url}/v1/search`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(disabled),
+    });
+    expect(valid.status).toBe(200);
+    expect(engine.search).toHaveBeenCalledWith(disabled);
+
+    for (const rerank of ['false', 0, null]) {
+      const response = await fetch(`${url}/v1/search`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...request, rerank }),
+      });
+      expect(response.status).toBe(400);
+    }
+  });
+
   it('reports invalid JSON and oversized bodies as client errors', async () => {
     const engine: SearchEngine = { search: vi.fn(async () => []) };
     const url = await listen(engine, store());

@@ -75,6 +75,7 @@ function isSearchRequest(value: unknown): value is SearchRequest {
     ['hybrid', 'semantic', 'structure'].includes(String(body.retrievalMode)) &&
     Array.isArray(body.repositoryScopes) &&
     body.repositoryScopes.every((scope) => typeof scope === 'string') &&
+    (body.rerank === undefined || typeof body.rerank === 'boolean') &&
     (body.candidateLanguages === undefined ||
       (Array.isArray(body.candidateLanguages) &&
         body.candidateLanguages.length > 0 &&

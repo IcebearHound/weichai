@@ -1,6 +1,7 @@
 import type {
   IndexedCodeDocument,
   Language,
+  SearchCandidate,
   SearchRequest,
 } from '@forexplore/contracts';
 
@@ -42,5 +43,18 @@ export interface EmbeddingProvider {
 }
 
 export interface SearchEngine {
-  search(request: SearchRequest): Promise<import('@forexplore/contracts').SearchCandidate[]>;
+  search(request: SearchRequest): Promise<SearchCandidate[]>;
+}
+
+/** A single reranking result produced by the LLM. */
+export interface RerankResult {
+  id: string;
+  score: number;
+  reason: string;
+}
+
+/** LLM-based reranker — scores and reorders search candidates by behavioural semantics. */
+export interface LlmReranker {
+  readonly model: string;
+  rerank(request: SearchRequest, candidates: SearchCandidate[]): Promise<RerankResult[]>;
 }

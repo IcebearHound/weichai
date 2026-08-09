@@ -47,7 +47,12 @@ try {
   const batchSize = 32;
   for (let offset = 0; offset < documents.length; offset += batchSize) {
     const batch = documents.slice(offset, offset + batchSize);
-    const vectors = await embeddings.embed(batch.map(embeddingText));
+    const texts = batch.map(embeddingText);
+    const lengths = texts.map((t) => t.length);
+    console.log(
+      `Batch ${Math.floor(offset / batchSize) + 1}: text lengths [${Math.min(...lengths)}–${Math.max(...lengths)}] chars, total ${lengths.reduce((a, b) => a + b, 0)} chars`,
+    );
+    const vectors = await embeddings.embed(texts);
     await store.upsert(
       batch.map((document, index) => {
         const embedding = vectors[index];

@@ -36,3 +36,15 @@ Thumbs.db
 .project
 .settings/
 target/
+
+# Python
+__pycache__/
+*.pyc
+
+# Experiment / test output
+results/
+results_副本/
+output/
+
+# Claude Code local overrides (per-developer)
+.claude/settings.local.json

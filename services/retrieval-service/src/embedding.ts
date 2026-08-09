@@ -59,17 +59,111 @@ function apiErrorMessage(value: unknown): string | undefined {
   return typeof message === 'string' ? message : undefined;
 }
 
+const RETRYABLE_CODES = new Set([
+  'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE', 'ENOTFOUND',
+  'EAI_AGAIN', 'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT',
+]);
+
+class EmbeddingHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'EmbeddingHttpError';
+  }
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function isRetryable(error: unknown): boolean {
+  if (error instanceof EmbeddingHttpError) return isRetryableStatus(error.status);
+  if (
+    error instanceof DOMException &&
+    (error.name === 'AbortError' || error.name === 'TimeoutError')
+  ) {
+    return true;
+  }
+  if (!(error instanceof Error)) return false;
+  if (error.name === 'AbortError' || error.name === 'TimeoutError') return true;
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code && RETRYABLE_CODES.has(code)) return true;
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause instanceof Error) {
+    const causeCode = (cause as NodeJS.ErrnoException).code;
+    if (causeCode && RETRYABLE_CODES.has(causeCode)) return true;
+  }
+  return error.message.includes('fetch failed') || error.message.includes('network');
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export interface OpenAiCompatibleEmbeddingProviderOptions {
+  /** Set false for compatible models that reject OpenAI's dimensions parameter. */
+  supportsDimensions?: boolean;
+  request?: typeof globalThis.fetch;
+  timeoutMs?: number;
+  maxRetries?: number;
+  baseDelayMs?: number;
+}
+
 export class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
+  private readonly request: typeof globalThis.fetch;
+  private readonly timeoutMs: number;
+  private readonly maxRetries: number;
+  private readonly baseDelayMs: number;
+  private readonly supportsDimensions: boolean;
+
   constructor(
     readonly dimension: number,
     private readonly url: string,
     private readonly apiKey: string,
     private readonly model: string,
-    private readonly request: typeof globalThis.fetch = globalThis.fetch,
-    private readonly timeoutMs = 30_000,
-  ) {}
+    requestOrOptions:
+      | typeof globalThis.fetch
+      | OpenAiCompatibleEmbeddingProviderOptions = globalThis.fetch,
+    legacyTimeoutMs = 30_000,
+    legacyMaxRetries = 3,
+    legacyBaseDelayMs = 1000,
+  ) {
+    const options =
+      typeof requestOrOptions === 'function' ? undefined : requestOrOptions;
+    this.request =
+      typeof requestOrOptions === 'function'
+        ? requestOrOptions
+        : options?.request ?? globalThis.fetch;
+    this.timeoutMs = options?.timeoutMs ?? legacyTimeoutMs;
+    this.maxRetries = options?.maxRetries ?? legacyMaxRetries;
+    this.baseDelayMs = options?.baseDelayMs ?? legacyBaseDelayMs;
+    // Preserve the pre-reranking provider behavior: OpenAI-compatible models
+    // receive the requested dimension unless a caller explicitly opts out.
+    this.supportsDimensions = options?.supportsDimensions ?? true;
+  }
 
   async embed(texts: string[]): Promise<number[][]> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
+      try {
+        return await this.tryEmbed(texts);
+      } catch (error: unknown) {
+        lastError = error;
+        if (attempt === this.maxRetries || !isRetryable(error)) throw error;
+        const delay = this.baseDelayMs * 2 ** attempt;
+        console.warn(
+          `Embedding API request failed (attempt ${attempt + 1}/${this.maxRetries + 1}), ` +
+            `retrying in ${delay}ms: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        await sleep(delay);
+      }
+    }
+    throw lastError;
+  }
+
+  private async tryEmbed(texts: string[]): Promise<number[][]> {
     const response = await this.request(this.url, {
       method: 'POST',
       headers: {
@@ -79,7 +173,7 @@ export class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
       body: JSON.stringify({
         input: texts,
         model: this.model,
-        dimensions: this.dimension,
+        ...(this.supportsDimensions ? { dimensions: this.dimension } : {}),
         encoding_format: 'float',
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
@@ -88,10 +182,20 @@ export class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
     try {
       body = await response.json();
     } catch {
+      if (!response.ok) {
+        throw new EmbeddingHttpError(
+          response.status,
+          `Embedding API returned HTTP ${response.status} with an invalid JSON body.`,
+        );
+      }
       throw new Error(`Embedding API returned invalid JSON (HTTP ${response.status}).`);
     }
     if (!response.ok) {
-      throw new Error(apiErrorMessage(body) || `Embedding API returned HTTP ${response.status}.`);
+      throw new EmbeddingHttpError(
+        response.status,
+        apiErrorMessage(body) ||
+          `Embedding API returned HTTP ${response.status}. Body: ${JSON.stringify(body)}`,
+      );
     }
     if (typeof body !== 'object' || body === null) {
       throw new Error('Embedding API returned an invalid response body.');

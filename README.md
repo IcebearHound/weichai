@@ -84,6 +84,34 @@ dimension requires rebuilding the table/index so stored documents and queries
 use the same vector space. See `services/retrieval-service/README.md` and
 `docs/seekdb-docker-setup.md` for the detailed database and indexing guide.
 
+### Configure reranking
+
+The retrieval service supports an optional LLM-based reranking pass that
+scores candidates on behavioural-semantic match (not just vector distance or
+full-text relevance). Edit `services/retrieval-service/.env`:
+
+```env
+RERANK_PROVIDER=openai
+RERANK_OPENAI_URL=https://api.deepseek.com/v1/chat/completions
+RERANK_OPENAI_API_KEY=<server-side-key>
+RERANK_OPENAI_MODEL=deepseek-chat
+```
+
+For a local model (Ollama, vLLM, etc.):
+
+```env
+RERANK_PROVIDER=local
+RERANK_LOCAL_URL=http://127.0.0.1:11434/v1/chat/completions
+RERANK_LOCAL_MODEL=qwen2.5:7b
+```
+
+Leave `RERANK_PROVIDER=none` (the default) to skip LLM reranking entirely.
+Individual requests can also set `"rerank": false` on the `SearchRequest`
+payload to opt out per-request while keeping the global config.
+
+See `services/retrieval-service/README.md` for the full reranking pipeline
+description, scoring dimensions, and silent-degradation behaviour.
+
 ### Configure adaptation
 
 Set the server-side key in `services/adaptation-service/.env`:

@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
-import { DEFAULT_ADAPTATION_URL, DEFAULT_RETRIEVAL_URL } from './service-health';
+import type { ExecutionMode } from './ui-types';
 
 export interface ExtensionSettings {
+  executionMode: ExecutionMode;
   repositoryPaths: string[];
   retrievalApiUrl: string;
   adaptationApiUrl: string;
@@ -9,7 +10,9 @@ export interface ExtensionSettings {
 
 export function loadSettings(): ExtensionSettings {
   const config = vscode.workspace.getConfiguration('forexplore');
+  const configuredMode = config.get<string>('executionMode', 'guided-demo');
   return {
+    executionMode: configuredMode === 'real' ? 'real' : 'guided-demo',
     repositoryPaths: config.get<string[]>('repositoryPaths', []),
     retrievalApiUrl: config.get<string>('retrievalApiUrl', '').trim(),
     adaptationApiUrl: config.get<string>('adaptationApiUrl', '').trim(),

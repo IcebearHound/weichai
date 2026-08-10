@@ -1,9 +1,8 @@
 import * as vscode from 'vscode';
-import type { ServiceStatus } from './vendor/contracts';
-import { withAdaptationService } from './vendor/adapters/adaptation-http';
-import { mockWorkflowPorts } from './vendor/adapters/mock-ports';
-import { withSeekDbSearch } from './vendor/adapters/seekdb-search';
-import type { WorkflowPorts } from './vendor/workflow-core';
+import { AdaptationHttpAdapter } from '@forexplore/adaptation-http-adapter';
+import { mockWorkflowPorts } from '@forexplore/mock-adapters';
+import { withSeekDbSearch } from '@forexplore/seekdb-adapter';
+import type { WorkflowPorts } from '@forexplore/workflow-core';
 import {
   checkServiceHealth,
   DEFAULT_ADAPTATION_URL,
@@ -11,117 +10,157 @@ import {
 } from './service-health';
 import { localFetch } from './local-fetch';
 import { loadSettings } from './settings';
+import type { ExecutionMode, ServiceStatus } from './ui-types';
 
 export type ServiceKind = 'retrieval' | 'adaptation';
 
 export interface RuntimePorts {
   ports: WorkflowPorts;
-  searchProvider: 'SeekDB' | 'Mock';
-  adaptationProvider: 'DeepSeek' | 'Mock';
+  searchProvider: 'SeekDB' | 'Guided demo';
+  adaptationProvider: 'DeepSeek' | 'Guided demo';
+  executionMode: ExecutionMode;
 }
 
 /**
- * Resolves the runtime ports used by the workflow. The extension is a
- * self-contained client: it connects to configured retrieval/adaptation
- * service URLs (using a proxy-free local HTTP stack) and otherwise degrades
- * to the bundled demo adapters with a visible label.
+ * Explicitly selects either a real two-service runtime or a guided demo. A
+ * configured-but-unhealthy service is an error; it never silently falls back
+ * to mock adapters.
  */
 export class ServiceManager implements vscode.Disposable {
-  private status: ServiceStatus = { retrieval: 'mock', adaptation: 'mock' };
-  private lastDetail: Partial<Record<ServiceKind, string>> = {};
-  private startPromise: Promise<void> | null = null;
+  private status: ServiceStatus = {
+    retrieval: 'unconfigured',
+    adaptation: 'unconfigured',
+    executionMode: 'real',
+  };
 
   constructor(private readonly output: vscode.OutputChannel) {}
 
   get serviceStatus(): ServiceStatus {
-    return {
-      ...this.status,
-      message:
-        this.lastDetail.retrieval || this.lastDetail.adaptation
-          ? [
-              this.lastDetail.retrieval && `检索：${this.lastDetail.retrieval}`,
-              this.lastDetail.adaptation && `翻译：${this.lastDetail.adaptation}`,
-            ]
-              .filter(Boolean)
-              .join('；')
-          : undefined,
+    return { ...this.status };
+  }
+
+  /** Display-only provider labels that do not create or replace any port. */
+  getRuntimePresentation(): Omit<RuntimePorts, 'ports'> {
+    const executionMode = loadSettings().executionMode;
+    return executionMode === 'guided-demo'
+      ? {
+          searchProvider: 'Guided demo',
+          adaptationProvider: 'Guided demo',
+          executionMode,
+        }
+      : {
+          searchProvider: 'SeekDB',
+          adaptationProvider: 'DeepSeek',
+          executionMode,
+        };
+  }
+
+  async refresh(): Promise<ServiceStatus> {
+    const settings = loadSettings();
+    if (settings.executionMode === 'guided-demo') {
+      this.status = {
+        retrieval: 'demo',
+        adaptation: 'demo',
+        executionMode: 'guided-demo',
+        message: '引导演示模式：使用内置样例，不调用真实服务，且禁止写回。',
+      };
+      return this.serviceStatus;
+    }
+
+    if (!settings.retrievalApiUrl || !settings.adaptationApiUrl) {
+      this.status = {
+        retrieval: settings.retrievalApiUrl ? 'error' : 'unconfigured',
+        adaptation: settings.adaptationApiUrl ? 'error' : 'unconfigured',
+        executionMode: 'real',
+        message: '真实模式要求同时配置 forexplore.retrievalApiUrl 和 forexplore.adaptationApiUrl。',
+      };
+      return this.serviceStatus;
+    }
+
+    const [retrieval, adaptation] = await Promise.all([
+      checkServiceHealth(settings.retrievalApiUrl || DEFAULT_RETRIEVAL_URL, localFetch),
+      checkServiceHealth(settings.adaptationApiUrl || DEFAULT_ADAPTATION_URL, localFetch),
+    ]);
+    this.status = {
+      retrieval: retrieval.healthy ? 'connected' : 'error',
+      adaptation: adaptation.healthy ? 'connected' : 'error',
+      executionMode: 'real',
+      message: [
+        !retrieval.healthy && `检索：${retrieval.detail}`,
+        !adaptation.healthy && `翻译：${adaptation.detail}`,
+      ]
+        .filter(Boolean)
+        .join('；') || undefined,
     };
+    this.output.appendLine(
+      `[forexplore] runtime refreshed: retrieval=${this.status.retrieval}, adaptation=${this.status.adaptation}`,
+    );
+    return this.serviceStatus;
   }
 
   async ensureStarted(): Promise<ServiceStatus> {
-    if (!this.startPromise) {
-      this.startPromise = this.start();
-    }
-    await this.startPromise;
-    return this.status;
+    return this.refresh();
   }
 
   getRuntimePorts(): RuntimePorts {
     const settings = loadSettings();
-    let ports = mockWorkflowPorts;
-    let searchProvider: RuntimePorts['searchProvider'] = 'Mock';
-    let adaptationProvider: RuntimePorts['adaptationProvider'] = 'Mock';
-
-    if (this.status.retrieval === 'connected') {
-      ports = withSeekDbSearch(ports, {
-        baseUrl: settings.retrievalApiUrl || DEFAULT_RETRIEVAL_URL,
-        fetch: localFetch,
-      });
-      searchProvider = 'SeekDB';
+    if (settings.executionMode === 'guided-demo') {
+      return {
+        ports: mockWorkflowPorts,
+        searchProvider: 'Guided demo',
+        adaptationProvider: 'Guided demo',
+        executionMode: 'guided-demo',
+      };
     }
-    if (this.status.adaptation === 'connected') {
-      ports = withAdaptationService(ports, {
+    if (this.status.retrieval !== 'connected' || this.status.adaptation !== 'connected') {
+      throw new Error(this.status.message ?? '真实服务尚未就绪。');
+    }
+
+    let ports = withSeekDbSearch(realWorkflowPorts(), {
+      baseUrl: settings.retrievalApiUrl || DEFAULT_RETRIEVAL_URL,
+      fetch: localFetch,
+    });
+    ports = {
+      ...ports,
+      adaptation: new AdaptationHttpAdapter({
         baseUrl: settings.adaptationApiUrl || DEFAULT_ADAPTATION_URL,
         fetch: localFetch,
-      });
-      adaptationProvider = 'DeepSeek';
-    }
-    return { ports, searchProvider, adaptationProvider };
+      }),
+    };
+    return {
+      ports,
+      searchProvider: 'SeekDB',
+      adaptationProvider: 'DeepSeek',
+      executionMode: 'real',
+    };
   }
 
   dispose(): void {
     // The extension owns no child processes.
   }
+}
 
-  private async start(): Promise<void> {
-    const settings = loadSettings();
-    const retrievalUrl = settings.retrievalApiUrl || DEFAULT_RETRIEVAL_URL;
-    const adaptationUrl = settings.adaptationApiUrl || DEFAULT_ADAPTATION_URL;
-    const retrievalConfigured = Boolean(settings.retrievalApiUrl);
-    const adaptationConfigured = Boolean(settings.adaptationApiUrl);
-
-    const [retrievalStatus, adaptationStatus] = await Promise.all([
-      this.checkService('retrieval', retrievalUrl, retrievalConfigured),
-      this.checkService('adaptation', adaptationUrl, adaptationConfigured),
-    ]);
-    this.status = {
-      retrieval: retrievalStatus.status,
-      adaptation: adaptationStatus.status,
-    };
-    if (retrievalStatus.detail) this.lastDetail.retrieval = retrievalStatus.detail;
-    if (adaptationStatus.detail) this.lastDetail.adaptation = adaptationStatus.detail;
-    this.output.appendLine(
-      `[forexplore] services ready: retrieval=${this.status.retrieval}, adaptation=${this.status.adaptation}`,
-    );
-  }
-
-  private async checkService(
-    kind: ServiceKind,
-    url: string,
-    configured: boolean,
-  ): Promise<{ status: ServiceStatus[ServiceKind]; detail: string }> {
-    const health = await checkServiceHealth(url, localFetch);
-    if (health.healthy) {
-      this.output.appendLine(`[forexplore] ${kind} service healthy at ${url}`);
-      return { status: 'connected', detail: '' };
-    }
-
-    this.output.appendLine(`[forexplore] ${kind} health check failed: ${health.detail}`);
-    // A configured URL is the user's own service: surface the failure. Without
-    // a configured URL the extension simply falls back to the demo adapters.
-    if (health.reachable || configured) {
-      return { status: 'error', detail: health.detail };
-    }
-    return { status: 'mock', detail: health.detail };
-  }
+/**
+ * `WorkflowPorts` needs all three ports, but this extension owns write-back
+ * locally. Real mode must never inherit the Mock backfill adapter merely as a
+ * convenient placeholder.
+ */
+function realWorkflowPorts(): WorkflowPorts {
+  return {
+    search: {
+      async search() {
+        throw new Error('真实检索端口尚未初始化。');
+      },
+    },
+    adaptation: {
+      async adapt() {
+        throw new Error('真实适配端口尚未初始化。');
+      },
+    },
+    backfill: {
+      async apply() {
+        throw new Error('真实模式的写回由受信任的 VS Code 宿主执行，不能通过服务端端口调用。');
+      },
+    },
+  };
 }

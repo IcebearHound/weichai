@@ -1,4 +1,4 @@
-import type { RepositoryStatus } from './vendor/contracts';
+import type { RepositoryStatus } from './ui-types';
 import { checkRepositoryStatus } from './repository-check';
 import { loadSettings } from './settings';
 

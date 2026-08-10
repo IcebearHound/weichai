@@ -1,6 +1,7 @@
 import * as assert from 'node:assert';
 import * as vscode from 'vscode';
 const FIXTURE_FILE = process.env.FOREXPLORE_TEST_FIXTURE;
+const FIXTURE_WORKSPACE = process.env.FOREXPLORE_TEST_WORKSPACE;
 
 async function waitFor(
   predicate: () => boolean,
@@ -17,13 +18,20 @@ async function waitFor(
 
 async function openFixtureWithSelection(): Promise<void> {
   if (!FIXTURE_FILE) throw new Error('FOREXPLORE_TEST_FIXTURE env var is required.');
+  if (!FIXTURE_WORKSPACE) throw new Error('FOREXPLORE_TEST_WORKSPACE env var is required.');
   const document = await vscode.workspace.openTextDocument(vscode.Uri.file(FIXTURE_FILE));
   const editor = await vscode.window.showTextDocument(document);
+  const methodOffset = document.getText().indexOf('public async Task<Quote> GetQuoteAsync');
+  assert.ok(methodOffset >= 0, 'C# demo fixture must contain GetQuoteAsync');
   const fullRange = new vscode.Range(
-    document.positionAt(0),
-    document.positionAt(Math.min(document.getText().length, 80)),
+    document.positionAt(methodOffset),
+    document.positionAt(Math.min(document.getText().length, methodOffset + 360)),
   );
   editor.selection = new vscode.Selection(fullRange.start, fullRange.end);
+  assert.ok(
+    vscode.workspace.getWorkspaceFolder(document.uri),
+    'C# fixture must be inside the launched workspace folder',
+  );
 }
 
 function findTranslationTab(): vscode.Tab | undefined {
@@ -47,6 +55,7 @@ export async function run(): Promise<void> {
     'forexplore.showPanel',
     'forexplore.checkRepositories',
     'forexplore.reindex',
+    'forexplore.restoreLastCheckpoint',
   ]) {
     assert.ok(commands.includes(command), `command ${command} must be registered`);
   }

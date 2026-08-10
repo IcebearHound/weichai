@@ -1,15 +1,11 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import type {
-  ModuleTarget,
-  RepositoryStatus,
-  ServiceStatus,
-} from '../../src/vendor/contracts';
+import type { RepositoryStatus, ServiceStatus } from '../../src/ui-types';
 import {
   initialWorkflowState,
   selectedCandidate,
   workflowReducer,
   type WorkflowState,
-} from '../../src/vendor/workflow-core';
+} from '@forexplore/workflow-core';
 import type { PanelInitPayload } from '../../src/protocol/messages';
 import { AdaptationStage } from './components/AdaptationStage';
 import { CandidatesStage } from './components/CandidatesStage';
@@ -24,7 +20,6 @@ export default function App() {
   const bus: MessageBus = useMemo(() => createMessageBus(), []);
   const [state, dispatch] = useReducer(workflowReducer, initialWorkflowState);
   const [payload, setPayload] = useState<PanelInitPayload | null>(null);
-  const [target, setTarget] = useState<ModuleTarget | null>(null);
   const [repositoryStatuses, setRepositoryStatuses] = useState<RepositoryStatus[]>([]);
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +32,6 @@ export default function App() {
       switch (message.type) {
         case 'INIT':
           setPayload(message.payload);
-          setTarget(message.payload.target);
           setRepositoryStatuses(message.payload.repositoryStatuses);
           setServiceStatus(message.payload.serviceStatus);
           setError(null);
@@ -69,35 +63,25 @@ export default function App() {
   }, [bus]);
 
   function handleSearch(): void {
-    if (!target) return;
+    if (!state.target) return;
     setError(null);
     dispatch({ type: 'SEARCH_START' });
     bus.post({
       type: 'START_SEARCH',
-      request: {
-        target,
-        requirement: state.requirement.trim(),
-        topK: state.topK,
-        retrievalMode: state.retrievalMode,
-        repositoryScopes: ['configured-repositories'],
-      },
+      requirement: state.requirement.trim(),
+      topK: state.topK,
+      retrievalMode: state.retrievalMode,
     });
   }
 
   function handleAdapt(): void {
     const candidate = selectedCandidate(state);
-    if (!target || !candidate) return;
+    if (!state.target || !candidate) return;
     setError(null);
     dispatch({ type: 'ADAPT_START' });
     bus.post({
       type: 'START_ADAPT',
-      request: {
-        target,
-        candidate,
-        requirement: state.requirement,
-        strategy: state.strategy,
-        decisionNotes: state.decisionNotes,
-      },
+      decisionNotes: state.decisionNotes,
     });
   }
 
@@ -105,7 +89,7 @@ export default function App() {
     if (!state.adaptation) return;
     setError(null);
     dispatch({ type: 'APPLY_START' });
-    bus.post({ type: 'APPLY_PATCHES', files: state.adaptation.files });
+    bus.post({ type: 'APPLY_CURRENT_RUN' });
   }
 
   function handleCheckRepositories(): void {
@@ -113,11 +97,16 @@ export default function App() {
     bus.post({ type: 'CHECK_REPOSITORIES' });
   }
 
-  function handleOpenFile(pathValue: string, line: number): void {
-    bus.post({ type: 'OPEN_FILE', path: pathValue, line });
+  function handleSelectCandidate(candidateId: string): void {
+    dispatch({ type: 'SELECT_CANDIDATE', candidateId });
+    bus.post({ type: 'SELECT_CANDIDATE', candidateId });
   }
 
-  if (!payload || !target) {
+  function handleOpenTarget(): void {
+    bus.post({ type: 'OPEN_TARGET' });
+  }
+
+  if (!payload || !state.target) {
     return (
       <div className="app">
         <div className="loading-state">正在初始化 ForeXplore 翻译面板…</div>
@@ -147,10 +136,9 @@ export default function App() {
         {state.stage === 'requirement' ? (
           <RequirementStage
             state={state}
-            target={target}
+            target={state.target}
             dispatch={dispatch}
             repositoryStatuses={repositoryStatuses}
-            onTargetChange={setTarget}
             onSearch={handleSearch}
             onCheckRepositories={handleCheckRepositories}
           />
@@ -161,6 +149,7 @@ export default function App() {
             state={state}
             dispatch={dispatch}
             adaptationProvider={payload.adaptationProvider}
+            onSelectCandidate={handleSelectCandidate}
             onAdapt={handleAdapt}
           />
         ) : null}
@@ -174,7 +163,7 @@ export default function App() {
             state={state}
             onApply={handleApply}
             onBack={() => dispatch({ type: 'RETURN_TO_CANDIDATES' })}
-            onOpenFile={handleOpenFile}
+            onOpenTarget={handleOpenTarget}
           />
         ) : null}
       </main>

@@ -1,6 +1,12 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { RepositoryIndexRecord, RepositoryStatus } from './vendor/contracts';
+import type { RepositoryStatus } from './ui-types';
+
+export interface RepositoryIndexRecord {
+  path: string;
+  indexedAt: number;
+  symbolCount: number;
+}
 
 const SKIPPED_DIRECTORIES = new Set([
   '.git',

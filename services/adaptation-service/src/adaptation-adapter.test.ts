@@ -99,6 +99,8 @@ describe("buildFilePatch", () => {
     const patch = _buildFilePatch("src/Service.cs", newMethod, originalClass, 8);
 
     expect(patch.status).toBe("modified");
+    if (patch.status !== "modified") throw new Error("expected a modified patch");
+    expect(patch.expectedOriginalSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(patch.hunks).toHaveLength(1);
 
     const lines = patch.hunks[0].lines;
@@ -124,19 +126,21 @@ describe("buildFilePatch", () => {
     expect(addLines.some((l) => l.content.includes("return 0.92m"))).toBe(true);
   });
 
-  it("falls back to add-only patch when originalContent is null", () => {
-    const patch = _buildFilePatch("src/Service.cs", newMethod, null, 8);
-
-    const lines = patch.hunks[0].lines;
-    const types = [...new Set(lines.map((l) => l.type))];
-    expect(types).toEqual(["add"]);
+  it("refuses to create a blind patch without an original file snapshot", () => {
+    expect(() => _buildFilePatch("src/Service.cs", newMethod, null, 8)).toThrow(
+      "Cannot build a safe patch",
+    );
   });
 
-  it("falls back to add-only patch when targetLine is undefined", () => {
-    const patch = _buildFilePatch("src/Service.cs", newMethod, originalClass, undefined);
+  it("refuses to create a patch without a target declaration line", () => {
+    expect(() => _buildFilePatch("src/Service.cs", newMethod, originalClass, undefined)).toThrow(
+      "Cannot build a safe patch",
+    );
+  });
 
-    const lines = patch.hunks[0].lines;
-    const types = [...new Set(lines.map((l) => l.type))];
-    expect(types).toEqual(["add"]);
+  it("refuses a target line that does not start a C# method", () => {
+    expect(() => _buildFilePatch("src/Service.cs", newMethod, originalClass, 10)).toThrow(
+      "method declaration",
+    );
   });
 });

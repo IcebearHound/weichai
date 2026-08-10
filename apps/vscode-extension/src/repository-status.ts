@@ -1,23 +1,31 @@
-import type { RepositoryStatus, ServiceStatus } from './vendor/contracts';
+import type { RepositoryStatus, ServiceStatus } from './ui-types';
 
 /**
- * Decorates filesystem health results with the runtime index context so the
- * panel shows an accurate, actionable status per repository path.
+ * A readable local directory is not evidence that it has been indexed by the
+ * remote retrieval service. Keep that distinction visible in the review UI.
  */
 export function decorateRepositoryStatuses(
   statuses: RepositoryStatus[],
   serviceStatus: ServiceStatus,
 ): RepositoryStatus[] {
-  const serviceManaged = serviceStatus.retrieval === 'connected';
   return statuses.map((status) => {
     if (!status.exists || !status.readable) return status;
+    if (serviceStatus.executionMode === 'guided-demo') {
+      return {
+        ...status,
+        indexed: false,
+        stale: false,
+        message: '引导演示不读取此本地路径',
+      };
+    }
     return {
       ...status,
-      indexed: true,
+      indexed: false,
       stale: false,
-      message: serviceManaged
-        ? '就绪 · 索引由检索服务管理'
-        : '演示模式（未连接检索服务）',
+      message:
+        serviceStatus.retrieval === 'connected'
+          ? '本地路径可读；检索范围由服务端已索引仓库决定'
+          : '等待真实检索服务就绪，尚不能确认索引状态',
     };
   });
 }

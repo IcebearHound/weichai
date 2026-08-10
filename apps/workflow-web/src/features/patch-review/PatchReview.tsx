@@ -1,5 +1,6 @@
 import { Check, FilePlus2, FileSymlink, ShieldCheck, TriangleAlert } from 'lucide-react';
 import type { AdaptationResult, ApplyResult } from '@forexplore/contracts';
+import { canApplyAdaptation, evaluateValidationGate } from '@forexplore/workflow-core';
 
 interface PatchReviewProps {
   result: AdaptationResult;
@@ -18,6 +19,8 @@ export function PatchReview({
 }: PatchReviewProps) {
   const additions = result.files.reduce((sum, file) => sum + file.additions, 0);
   const deletions = result.files.reduce((sum, file) => sum + file.deletions, 0);
+  const validationGate = evaluateValidationGate(result.validation);
+  const canApply = canApplyAdaptation(result);
 
   return (
     <div className="patch-review">
@@ -27,11 +30,12 @@ export function PatchReview({
             <Check size={22} />
           </span>
           <div>
-            <div className="eyebrow">Mock Backfill Port 已完成</div>
-            <h2>回填事务已提交</h2>
+            <div className="eyebrow">回填结果</div>
+            <h2>补丁已应用</h2>
             <p>
               已处理 {applyResult.appliedFiles.length} 个文件；检查点：
               <code>{applyResult.checkpointId}</code>
+              {applyResult.rollbackAvailable ? '（可恢复）' : '（不可恢复）'}
             </p>
           </div>
         </div>
@@ -39,8 +43,8 @@ export function PatchReview({
         <header className="patch-heading">
           <div>
             <div className="eyebrow">生成结果 · {result.targetLanguage}</div>
-            <h2>接口校验与回填预览</h2>
-            <p>当前仍是预览状态；真实接入时由 CodeBackfillPort 创建工作区编辑事务。</p>
+            <h2>验证证据与回填预览</h2>
+            <p>编译通过不等同于业务行为、并发、超时或取消语义正确。</p>
           </div>
           <div className="patch-stat">
             <strong>{result.files.length}</strong>
@@ -53,19 +57,26 @@ export function PatchReview({
       <div className="patch-overview-grid">
         <section className="validation-panel">
           <h3>
-            <ShieldCheck size={15} /> 契约校验
+            <ShieldCheck size={15} /> 验证证据
           </h3>
           {result.validation.map((item) => (
-            <div className={`validation-row is-${item.status}`} key={item.label}>
+            <div className={`validation-row is-${item.status}`} key={item.id}>
               <span className="validation-icon">
                 {item.status === 'pass' ? <Check size={13} /> : <TriangleAlert size={13} />}
               </span>
               <span>
-                <strong>{item.label}</strong>
-                <small>{item.detail}</small>
+                <strong>{item.label} {item.required ? '（必需）' : '（可选）'}</strong>
+                <small>{item.summary}</small>
+                {item.command ? <small>命令：{item.command}</small> : null}
+                {item.failureReason ? <small>原因：{item.failureReason}</small> : null}
               </span>
             </div>
           ))}
+          {!validationGate.allowed ? (
+            <p className="validation-blocker">
+              写回已阻止：{validationGate.blockers.map((item) => item.label).join('、')} 尚未满足。
+            </p>
+          ) : null}
         </section>
 
         <section className="mapping-panel">
@@ -123,9 +134,15 @@ export function PatchReview({
           type="button"
           className="button-primary"
           onClick={onApply}
-          disabled={applying || Boolean(applyResult)}
+          disabled={applying || Boolean(applyResult) || !canApply}
         >
-          {applyResult ? '已完成回填' : applying ? '正在创建编辑事务…' : '确认并回填到模块'}
+          {applyResult
+            ? '已完成回填'
+            : applying
+              ? '正在创建编辑事务…'
+              : canApply
+                ? '确认并回填到模块'
+                : '必需验证未满足，禁止回填'}
         </button>
       </footer>
     </div>

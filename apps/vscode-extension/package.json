@@ -13,11 +13,17 @@
     "Other"
   ],
   "main": "./dist/extension/extension.js",
+  "files": [
+    "dist/extension/**",
+    "dist/webview/**",
+    "README.md"
+  ],
   "activationEvents": [
     "onCommand:forexplore.startTranslation",
     "onCommand:forexplore.showPanel",
     "onCommand:forexplore.checkRepositories",
-    "onCommand:forexplore.reindex"
+    "onCommand:forexplore.reindex",
+    "onCommand:forexplore.restoreLastCheckpoint"
   ],
   "contributes": {
     "commands": [
@@ -36,13 +42,17 @@
       {
         "command": "forexplore.reindex",
         "title": "ForeXplore: 重新索引检索仓库"
+      },
+      {
+        "command": "forexplore.restoreLastCheckpoint",
+        "title": "ForeXplore: 恢复最近一次回填"
       }
     ],
     "menus": {
       "editor/context": [
         {
           "command": "forexplore.startTranslation",
-          "when": "editorHasSelection && resourceScheme == file",
+          "when": "editorHasSelection && resourceScheme == file && resourceLangId == csharp",
           "group": "forexplore@1"
         }
       ]
@@ -50,23 +60,33 @@
     "configuration": {
       "title": "ForeXplore",
       "properties": {
+        "forexplore.executionMode": {
+          "type": "string",
+          "enum": ["guided-demo", "real"],
+          "enumDescriptions": [
+            "使用内置样例演示完整审阅流程；结果只能预览，不能写回工作区。",
+            "调用已部署的 SeekDB 检索服务和 Java → C# 适配服务；两个服务都必须健康。"
+          ],
+          "default": "guided-demo",
+          "description": "ForeXplore 的明确运行模式。扩展不会在真实模式失败时自动降级为演示数据。"
+        },
         "forexplore.repositoryPaths": {
           "type": "array",
           "items": {
             "type": "string"
           },
           "default": [],
-          "description": "检索相似实现时要扫描的本地代码仓库路径（绝对路径）。翻译开始前会检查这些路径是否可用，未配置时使用服务端已有索引或演示数据。"
+          "description": "仅检查本地目录是否可读，不能证明该目录已被远端检索服务索引。真实检索范围由服务端部署配置决定。"
         },
         "forexplore.retrievalApiUrl": {
           "type": "string",
           "default": "",
-          "description": "检索服务地址，如 http://127.0.0.1:8787。留空时使用扩展内置的演示模式。"
+          "description": "真实模式下的检索服务地址，如 http://127.0.0.1:8787。真实模式中不能为空。"
         },
         "forexplore.adaptationApiUrl": {
           "type": "string",
           "default": "",
-          "description": "翻译服务地址，如 http://127.0.0.1:8788。留空时使用扩展内置的演示模式。"
+          "description": "真实模式下的 Java → C# 翻译服务地址，如 http://127.0.0.1:8788。真实模式中不能为空。"
         }
       }
     }
@@ -80,6 +100,16 @@
     "test:integration": "npm run build && node esbuild.integration.mjs && tsx src/test/integration/run-tests.ts",
     "package": "vsce package --no-dependencies --allow-missing-repository"
   },
+  "dependencies": {
+    "@forexplore/adaptation-http-adapter": "0.1.0",
+    "@forexplore/contracts": "0.1.0",
+    "@forexplore/mock-adapters": "0.1.0",
+    "@forexplore/seekdb-adapter": "0.1.0",
+    "@forexplore/workflow-core": "0.1.0",
+    "lucide-react": "^1.24.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
   "devDependencies": {
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",
@@ -90,8 +120,6 @@
     "@vscode/vsce": "^3.2.1",
     "esbuild": "^0.28.1",
     "jsdom": "^29.1.1",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
     "typescript": "^7.0.2",
     "vite": "^8.1.4",
     "vitest": "^4.1.10"

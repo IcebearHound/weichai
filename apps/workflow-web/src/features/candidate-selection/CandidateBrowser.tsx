@@ -30,9 +30,9 @@ export function CandidateBrowser({
   onSelect,
   sourceLabel = 'CodeSearchPort',
 }: CandidateBrowserProps) {
-  const selected = candidates.find((candidate) => candidate.id === selectedId) ?? candidates[0];
+  const selected = candidates.find((candidate) => candidate.id === selectedId) ?? null;
 
-  if (!selected) return null;
+  if (candidates.length === 0) return null;
 
   return (
     <div className="candidate-browser">
@@ -42,7 +42,7 @@ export function CandidateBrowser({
           <span>{sourceLabel}</span>
         </div>
         {candidates.map((candidate, index) => {
-          const active = candidate.id === selected.id;
+          const active = candidate.id === selected?.id;
           return (
             <button
               type="button"
@@ -58,12 +58,15 @@ export function CandidateBrowser({
                   {candidate.language} · {candidate.repository}
                 </span>
               </span>
-              <span className="candidate-score">{scorePercent(candidate.score.overall)}</span>
+              <span className="candidate-score" title="用于排序，不代表正确率或兼容概率">
+                排序 {Math.round(candidate.score.overall * 100)}
+              </span>
             </button>
           );
         })}
       </aside>
 
+      {selected ? (
       <section className="candidate-detail">
         <header className="candidate-detail-header">
           <div>
@@ -73,7 +76,7 @@ export function CandidateBrowser({
           </div>
           <div className="overall-score">
             <strong>{Math.round(selected.score.overall * 100)}</strong>
-            <span>综合匹配</span>
+            <span>排序分</span>
           </div>
         </header>
 
@@ -128,6 +131,13 @@ export function CandidateBrowser({
           </div>
         </div>
       </section>
+      ) : (
+        <section className="candidate-detail candidate-selection-required">
+          <div className="eyebrow">候选证据</div>
+          <h2>请选择一个候选方案</h2>
+          <p>检索排名仅用于人工审阅；在明确选择前，不能进入适配阶段。</p>
+        </section>
+      )}
     </div>
   );
 }

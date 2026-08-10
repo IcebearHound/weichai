@@ -4,14 +4,16 @@
  * 流程: LLM翻译 → 独立编译 → 自动修复(最多3轮) → 集成编译 → 生成结果
  */
 
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { readFileSync, existsSync, realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import type {
   AdaptationRequest,
   AdaptationResult,
   FilePatch,
   InterfaceMapping,
   Language,
+  ValidationRecord,
 } from "@forexplore/contracts";
 import type { CodeAdaptationPort } from "@forexplore/workflow-core";
 import { translateJavaToCSharp, fixCompileErrors } from "./translator";
@@ -95,16 +97,19 @@ export class AdaptationAdapter implements CodeAdaptationPort {
     const mappings = buildMappings(request.candidate.preview, csharpCode);
 
     // ===== Step 4: 生成 FilePatch =====
-    const originalContent = readOriginalIfAvailable(
+    const targetContext = readOriginalIfAvailable(
       this.#projectRoot,
       request.target.path,
     );
-    const patch = buildFilePatch(
-      request.target.path,
-      csharpCode,
-      originalContent,
-      request.target.line,
-    );
+    const canBuildPatch = targetContext.content !== null && request.target.line != null;
+    const patch = canBuildPatch
+      ? buildFilePatch(
+          request.target.path,
+          csharpCode,
+          targetContext.content,
+          request.target.line,
+        )
+      : null;
 
     return {
       strategy: request.strategy,
@@ -112,24 +117,36 @@ export class AdaptationAdapter implements CodeAdaptationPort {
       generatedCode: csharpCode,
       interfaceMappings: mappings,
       validation: [
+        compileValidation("standalone-compile", "独立编译", standaloneResult, true),
+        integratedResult
+          ? compileValidation("integrated-compile", "目标工程集成编译", integratedResult, true)
+          : {
+              id: "integrated-compile",
+              label: "目标工程集成编译",
+              status: "unverified",
+              required: false,
+              summary: "未配置目标 skeleton 工程，因此未执行集成编译。",
+              failureReason: "skeleton-project-not-configured",
+            },
         {
-          label: "独立编译",
-          status: standaloneResult.success ? "pass" : "warn",
-          detail: standaloneResult.success
-            ? "编译通过"
-            : standaloneResult.errors.slice(0, 3).join("; "),
+          id: "target-context-snapshot",
+          label: "目标文件快照",
+          status: canBuildPatch ? "pass" : "unverified",
+          required: true,
+          summary: canBuildPatch
+            ? "已读取目标文件并生成带原始内容哈希的定点补丁。"
+            : targetContext.reason ?? "未能读取目标文件或确定目标行，未生成可写回补丁。",
+          failureReason: canBuildPatch ? undefined : "target-context-unavailable",
         },
         {
-          label: "集成编译",
-          status: integratedResult?.success ? "pass" : "warn",
-          detail: integratedResult
-            ? integratedResult.success
-              ? "编译通过"
-              : integratedResult.errors.slice(0, 3).join("; ")
-            : "未执行（需 skeleton 项目路径）",
+          id: "behavioral-semantics",
+          label: "业务行为验证",
+          status: "unverified",
+          required: false,
+          summary: "当前仅包含编译验证；尚未证明业务行为、并发、超时或取消语义正确。",
         },
       ],
-      files: [patch],
+      files: patch ? [patch] : [],
     };
   }
 }
@@ -148,6 +165,11 @@ function assertSupportedTranslation(request: AdaptationRequest): void {
   ) {
     throw new Error(
       `Unsupported adaptation language pair: ${request.candidate.language} -> ${request.target.language}. Expected Java -> C#.`,
+    );
+  }
+  if (!isSafeRelativePath(request.target.path)) {
+    throw new Error(
+      `Target path must be a non-escaping project-relative path; received "${request.target.path}".`,
     );
   }
 }
@@ -201,10 +223,26 @@ function typeMapNote(
 function readOriginalIfAvailable(
   projectRoot: string | undefined,
   filePath: string,
-): string | null {
-  if (!projectRoot) return null;
-  const fullPath = join(projectRoot, filePath);
-  return existsSync(fullPath) ? readFileSync(fullPath, "utf-8") : null;
+): { content: string | null; reason?: string } {
+  if (!projectRoot) {
+    return { content: null, reason: "未配置目标工程根目录，无法建立回填前置快照。" };
+  }
+  if (!existsSync(projectRoot)) {
+    return { content: null, reason: "配置的目标工程根目录不存在。" };
+  }
+  const root = realpathSync(resolve(projectRoot));
+  const fullPath = resolve(root, filePath);
+  if (!isInsideRoot(root, fullPath)) {
+    return { content: null, reason: "目标文件路径超出配置的目标工程根目录。" };
+  }
+  if (!existsSync(fullPath)) {
+    return { content: null, reason: "目标文件不存在，无法生成受保护的定点补丁。" };
+  }
+  const realFile = realpathSync(fullPath);
+  if (!isInsideRoot(root, realFile)) {
+    return { content: null, reason: "目标文件经符号链接解析后超出配置的目标工程根目录。" };
+  }
+  return { content: readFileSync(realFile, "utf-8") };
 }
 
 function buildFilePatch(
@@ -215,32 +253,25 @@ function buildFilePatch(
 ): FilePatch {
   const newLines = newCode.split("\n");
 
-  // 无法做定点 patch 时回退到全量替换
+  // A blind all-add patch is unsafe: callers must preserve an exact source
+  // precondition and regenerate after the target changed.
   if (!originalContent || targetLine == null) {
-    return {
-      path: filePath,
-      status: "modified",
-      additions: newLines.length,
-      deletions: 0,
-      hunks: [
-        {
-          header: `@@ -0,0 +1,${newLines.length} @@`,
-          lines: newLines.map((content) => ({
-            type: "add" as const,
-            content,
-          })),
-        },
-      ],
-    };
+    throw new Error("Cannot build a safe patch without target file content and line information.");
   }
 
   // 定点 patch：用括号匹配找到原方法体范围
   const originalLines = originalContent.replace(/\r\n/g, "\n").split("\n");
   const startIdx = Math.max(0, targetLine - 1);
+  if (startIdx >= originalLines.length || !isCSharpMethodStart(originalLines[startIdx] ?? "")) {
+    throw new Error("The target line must point at a C# method declaration before a safe patch can be built.");
+  }
 
   // 找到方法体的闭合大括号
   const endIdx = findMethodEnd(originalLines, startIdx);
   const removedLines = originalLines.slice(startIdx, endIdx + 1);
+  if (removedLines.length === 0) {
+    throw new Error("Cannot build a patch because the selected target method is empty.");
+  }
 
   // 用原方法签名作为 context 行来定位
   const contextBefore = startIdx > 0 ? originalLines[startIdx - 1] : null;
@@ -272,10 +303,54 @@ function buildFilePatch(
   return {
     path: filePath,
     status: "modified",
+    expectedOriginalSha256: sha256(originalContent),
     additions: newLines.length,
     deletions: removedLines.length,
     hunks: [{ header: `@@ -${startIdx + 1},${removedLines.length} +${startIdx + 1},${newLines.length} @@`, lines: hunkLines }],
   };
+}
+
+function compileValidation(
+  id: string,
+  label: string,
+  result: ReturnType<typeof compileStandalone>,
+  required: boolean,
+): ValidationRecord {
+  const unavailable = isCompilerUnavailable(result);
+  return {
+    id,
+    label,
+    status: unavailable ? "unverified" : result.success ? "pass" : "fail",
+    required,
+    command: "dotnet build --nologo -v q",
+    summary: result.success
+      ? "编译通过。编译通过不证明业务行为正确。"
+      : result.errors.slice(0, 3).join("; "),
+    failureReason: result.success ? undefined : unavailable ? "compiler-unavailable" : "compiler-failed",
+  };
+}
+
+function isSafeRelativePath(filePath: string): boolean {
+  if (!filePath || isAbsolute(filePath)) return false;
+  const normalized = filePath.replace(/\\/g, "/");
+  return normalized !== ".." && !normalized.startsWith("../");
+}
+
+function isInsideRoot(root: string, candidate: string): boolean {
+  const relativePath = relative(root, candidate);
+  return Boolean(relativePath) && relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath);
+}
+
+function isCSharpMethodStart(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed || /^(if|for|foreach|while|switch|catch|using|return|new|throw)\b/.test(trimmed)) {
+    return false;
+  }
+  return /\b[A-Za-z_][\w]*\s*(?:<[^>]+>)?\s*\(/.test(trimmed);
+}
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
 /** 从 startIdx 开始，用括号深度匹配找到方法/代码块的结束行（0-based 索引） */

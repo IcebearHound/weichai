@@ -1,23 +1,20 @@
 import type {
-  AdaptationRequest,
   AdaptationResult,
   ApplyResult,
-  FilePatch,
   ModuleTarget,
-  RepositoryStatus,
+  RetrievalMode,
   SearchCandidate,
-  SearchRequest,
-  ServiceStatus,
-} from '../vendor/contracts';
+} from '@forexplore/contracts';
+import type { RepositoryStatus, ServiceStatus } from '../ui-types';
 
-/** Snapshot sent by the extension host when the panel is created. */
+/** Snapshot sent by the trusted extension host when the panel is created. */
 export interface PanelInitPayload {
   target: ModuleTarget;
   workspaceRoot: string;
   repositoryStatuses: RepositoryStatus[];
   serviceStatus: ServiceStatus;
-  searchProvider: 'SeekDB' | 'Mock';
-  adaptationProvider: 'DeepSeek' | 'Mock';
+  searchProvider: 'SeekDB' | 'Guided demo';
+  adaptationProvider: 'DeepSeek' | 'Guided demo';
 }
 
 /** Messages the extension host posts into the Webview. */
@@ -30,23 +27,23 @@ export type HostToWebviewMessage =
   | { type: 'SERVICE_STATUS'; status: ServiceStatus }
   | { type: 'ERROR'; message: string };
 
-/** Messages the Webview posts to the extension host. */
+/**
+ * The Webview can express intent only. It never controls target paths,
+ * candidate objects, validation evidence, or patches to be written.
+ */
 export type WebviewToHostMessage =
   | { type: 'READY' }
-  | { type: 'START_SEARCH'; request: SearchRequest }
-  | { type: 'START_ADAPT'; request: AdaptationRequest }
-  | { type: 'APPLY_PATCHES'; files: FilePatch[] }
+  | {
+      type: 'START_SEARCH';
+      requirement: string;
+      topK: number;
+      retrievalMode: RetrievalMode;
+    }
+  | { type: 'SELECT_CANDIDATE'; candidateId: string }
+  | { type: 'START_ADAPT'; decisionNotes: string }
+  | { type: 'APPLY_CURRENT_RUN' }
   | { type: 'CHECK_REPOSITORIES' }
-  | { type: 'OPEN_FILE'; path: string; line: number };
-
-const webviewMessageTypes = new Set<string>([
-  'READY',
-  'START_SEARCH',
-  'START_ADAPT',
-  'APPLY_PATCHES',
-  'CHECK_REPOSITORIES',
-  'OPEN_FILE',
-]);
+  | { type: 'OPEN_TARGET' };
 
 const hostMessageTypes = new Set<string>([
   'INIT',
@@ -58,30 +55,55 @@ const hostMessageTypes = new Set<string>([
   'ERROR',
 ]);
 
-/** Structural guard for messages coming from the Webview. */
+const retrievalModes = new Set<RetrievalMode>(['hybrid', 'semantic', 'structure']);
+
+/** Strictly validates every Webview payload before it enters the host. */
 export function isWebviewToHostMessage(value: unknown): value is WebviewToHostMessage {
   if (typeof value !== 'object' || value === null) return false;
-  const message = value as { type?: unknown };
-  return typeof message.type === 'string' && webviewMessageTypes.has(message.type);
+  const message = value as Record<string, unknown>;
+  switch (message.type) {
+    case 'READY':
+    case 'APPLY_CURRENT_RUN':
+    case 'CHECK_REPOSITORIES':
+    case 'OPEN_TARGET':
+      return hasOnlyKeys(message, ['type']);
+    case 'START_SEARCH':
+      return (
+        hasOnlyKeys(message, ['type', 'requirement', 'topK', 'retrievalMode']) &&
+        typeof message.requirement === 'string' &&
+        message.requirement.length <= 8_000 &&
+        Number.isInteger(message.topK) &&
+        typeof message.topK === 'number' &&
+        message.topK >= 1 &&
+        message.topK <= 10 &&
+        typeof message.retrievalMode === 'string' &&
+        retrievalModes.has(message.retrievalMode as RetrievalMode)
+      );
+    case 'SELECT_CANDIDATE':
+      return (
+        hasOnlyKeys(message, ['type', 'candidateId']) &&
+        typeof message.candidateId === 'string' &&
+        message.candidateId.length > 0 &&
+        message.candidateId.length <= 256
+      );
+    case 'START_ADAPT':
+      return (
+        hasOnlyKeys(message, ['type', 'decisionNotes']) &&
+        typeof message.decisionNotes === 'string' &&
+        message.decisionNotes.length <= 8_000
+      );
+    default:
+      return false;
+  }
 }
 
-/** Structural guard for messages posted into the Webview. */
+function hasOnlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  const received = Object.keys(value);
+  return received.length === keys.length && received.every((key) => keys.includes(key));
+}
+
 export function isHostToWebviewMessage(value: unknown): value is HostToWebviewMessage {
   if (typeof value !== 'object' || value === null) return false;
   const message = value as { type?: unknown };
   return typeof message.type === 'string' && hostMessageTypes.has(message.type);
-}
-
-export function isModuleTarget(value: unknown): value is ModuleTarget {
-  if (typeof value !== 'object' || value === null) return false;
-  const target = value as Partial<ModuleTarget>;
-  return (
-    typeof target.id === 'string' &&
-    typeof target.name === 'string' &&
-    (target.kind === 'class' || target.kind === 'function') &&
-    typeof target.path === 'string' &&
-    typeof target.language === 'string' &&
-    typeof target.signature === 'string' &&
-    (target.line === undefined || Number.isInteger(target.line))
-  );
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyHunks, parseHunkHeader, resolvePatchPath } from './diff-apply';
+import { applyHunks, canonicalWorkspacePath, parseHunkHeader, resolvePatchPath } from './diff-apply';
 
 describe('parseHunkHeader', () => {
   it('parses old start line', () => {
@@ -10,53 +10,62 @@ describe('parseHunkHeader', () => {
 });
 
 describe('applyHunks', () => {
-  it('replaces a removed line with added lines', () => {
-    const content = ['line1', '        throw new NotImplementedException();', 'line3'].join('\n');
-    const next = applyHunks(content, [
-      {
-        header: '@@ -2,3 +2,4 @@',
-        lines: [
-          { type: 'remove', content: '        throw new NotImplementedException();' },
-          { type: 'add', content: '        return await cache.GetOrLoadAsync(request);' },
-          { type: 'context', content: 'line3' },
-        ],
-      },
-    ]);
-    expect(next.split('\n')).toEqual([
-      'line1',
-      '        return await cache.GetOrLoadAsync(request);',
-      'line3',
-    ]);
+  it('replaces source only when its exact old-side precondition matches', () => {
+    const content = ['line1', 'throw new NotImplementedException();', 'line3'].join('\n');
+    expect(
+      applyHunks(content, [
+        {
+          header: '@@ -2,2 +2,2 @@',
+          lines: [
+            { type: 'remove', content: 'throw new NotImplementedException();' },
+            { type: 'add', content: 'return value;' },
+            { type: 'context', content: 'line3' },
+          ],
+        },
+      ]),
+    ).toBe(['line1', 'return value;', 'line3'].join('\n'));
   });
 
-  it('handles multiple hunks anchored to the original file', () => {
-    const content = ['a', 'b', 'c', 'd'].join('\n');
-    const next = applyHunks(content, [
-      { header: '@@ -1,2 +1,2 @@', lines: [{ type: 'remove', content: 'a' }] },
-      { header: '@@ -4,1 +3,1 @@', lines: [{ type: 'add', content: 'x' }] },
-    ]);
-    expect(next.split('\n')).toEqual(['b', 'c', 'x', 'd']);
+  it('refuses a hunk whose source content is no longer present', () => {
+    expect(() =>
+      applyHunks('user-edited', [
+        {
+          header: '@@ -1,1 +1,1 @@',
+          lines: [
+            { type: 'remove', content: 'old' },
+            { type: 'add', content: 'new' },
+          ],
+        },
+      ]),
+    ).toThrow('no longer matches');
   });
 
-  it('keeps content unchanged when hunks do not match', () => {
-    const content = 'original';
-    expect(applyHunks(content, [])).toBe('original');
+  it('refuses blind add-only modification hunks', () => {
+    expect(() =>
+      applyHunks('existing', [
+        {
+          header: '@@ -1,0 +1,1 @@',
+          lines: [{ type: 'add', content: 'new' }],
+        },
+      ]),
+    ).toThrow('no source precondition');
   });
 });
 
 describe('resolvePatchPath', () => {
-  it('uses absolute paths verbatim', () => {
-    const absolute = '/Users/origin/projects/app/src/service.ts';
-    expect(resolvePatchPath('/Users/origin/projects/workspace', absolute)).toBe(absolute);
+  const root = '/Users/origin/projects/workspace';
+
+  it('anchors a relative path to the workspace root', () => {
+    expect(resolvePatchPath(root, 'src/service.cs')).toBe(`${root}/src/service.cs`);
+    expect(canonicalWorkspacePath(root, 'src/service.cs')).toBe('src/service.cs');
   });
 
-  it('anchors relative paths to the workspace root', () => {
-    expect(resolvePatchPath('/Users/origin/projects/workspace', 'src/service.ts')).toBe(
-      '/Users/origin/projects/workspace/src/service.ts',
-    );
+  it('rejects absolute paths and traversal', () => {
+    expect(() => resolvePatchPath(root, '/tmp/service.cs')).toThrow('相对路径');
+    expect(() => resolvePatchPath(root, '../service.cs')).toThrow('超出当前工作区');
   });
 
-  it('requires a workspace root for relative paths', () => {
-    expect(() => resolvePatchPath(undefined, 'src/service.ts')).toThrow('工作区文件夹');
+  it('requires a workspace root', () => {
+    expect(() => resolvePatchPath(undefined, 'src/service.cs')).toThrow('工作区文件夹');
   });
 });

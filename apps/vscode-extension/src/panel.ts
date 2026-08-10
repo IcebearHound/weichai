@@ -20,10 +20,18 @@ const PANEL_TITLE = 'ForeXplore 代码翻译';
 export class TranslationPanel {
   public static current: TranslationPanel | undefined;
 
+  private payload: PanelInitPayload;
+  private handlers: PanelHandlers;
+
   private constructor(
     readonly panel: vscode.WebviewPanel,
     private readonly context: vscode.ExtensionContext,
-  ) {}
+    payload: PanelInitPayload,
+    handlers: PanelHandlers,
+  ) {
+    this.payload = payload;
+    this.handlers = handlers;
+  }
 
   static async createOrShow(
     context: vscode.ExtensionContext,
@@ -31,6 +39,8 @@ export class TranslationPanel {
     handlers: PanelHandlers,
   ): Promise<TranslationPanel> {
     if (TranslationPanel.current) {
+      TranslationPanel.current.payload = payload;
+      TranslationPanel.current.handlers = handlers;
       TranslationPanel.current.panel.reveal(vscode.ViewColumn.Beside);
       TranslationPanel.current.post({ type: 'INIT', payload });
       return TranslationPanel.current;
@@ -47,17 +57,17 @@ export class TranslationPanel {
       },
     );
 
-    const instance = new TranslationPanel(panel, context);
+    const instance = new TranslationPanel(panel, context, payload, handlers);
     TranslationPanel.current = instance;
     // The Webview is not ready to receive messages until its scripts are
     // loaded, so hold the INIT payload until it announces itself with READY.
     panel.webview.onDidReceiveMessage((message: unknown) => {
       if (!isWebviewToHostMessage(message)) return;
       if (message.type === 'READY') {
-        instance.post({ type: 'INIT', payload });
+        instance.post({ type: 'INIT', payload: instance.payload });
         return;
       }
-      handlers.onMessage(message);
+      instance.handlers.onMessage(message);
     });
     panel.onDidDispose(() => {
       if (TranslationPanel.current === instance) TranslationPanel.current = undefined;

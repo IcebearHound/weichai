@@ -1,19 +1,12 @@
 import { Sparkles } from 'lucide-react';
-import type { AdaptationStrategy, SearchCandidate } from '../../../src/vendor/contracts';
-import type { WorkflowEvent, WorkflowState } from '../../../src/vendor/workflow-core';
-import { selectedCandidate } from '../../../src/vendor/workflow-core';
-
-const strategyOptions: Array<{ id: AdaptationStrategy; label: string; detail: string }> = [
-  { id: 'translate', label: '翻译实现', detail: '转换到目标语言并保持行为' },
-  { id: 'bridge', label: '运行时桥接', detail: '保留源实现，通过协议调用' },
-  { id: 'wrap', label: '适配器封装', detail: '添加目标接口与数据转换层' },
-  { id: 'reuse', label: '同语言复用', detail: '最小修改直接嵌入' },
-];
+import type { WorkflowEvent, WorkflowState } from '@forexplore/workflow-core';
+import { selectedCandidate } from '@forexplore/workflow-core';
 
 interface CandidatesStageProps {
   state: WorkflowState;
   dispatch: React.Dispatch<WorkflowEvent>;
-  adaptationProvider: 'DeepSeek' | 'Mock';
+  adaptationProvider: 'DeepSeek' | 'Guided demo';
+  onSelectCandidate: (candidateId: string) => void;
   onAdapt: () => void;
 }
 
@@ -21,11 +14,11 @@ export function CandidatesStage({
   state,
   dispatch,
   adaptationProvider,
+  onSelectCandidate,
   onAdapt,
 }: CandidatesStageProps) {
   const candidate = selectedCandidate(state);
   const adapting = state.pending === 'adapt';
-  const realAdaptation = adaptationProvider !== 'Mock';
 
   return (
     <div className="stage-stack">
@@ -42,7 +35,7 @@ export function CandidatesStage({
               type="button"
               key={item.id}
               className={`candidate-item ${active ? 'is-active' : ''}`}
-              onClick={() => dispatch({ type: 'SELECT_CANDIDATE', candidateId: item.id })}
+              onClick={() => onSelectCandidate(item.id)}
             >
               <span className="candidate-rank">{String(index + 1).padStart(2, '0')}</span>
               <span className="candidate-copy">
@@ -51,7 +44,9 @@ export function CandidatesStage({
                   {item.language} · {item.repository} · {item.kind}
                 </span>
               </span>
-              <span className="candidate-score">{Math.round(item.score.overall * 100)}</span>
+              <span className="candidate-score" title="用于候选排序，不是正确率或兼容概率">
+                排序 {Math.round(item.score.overall * 100)}
+              </span>
             </button>
           );
         })}
@@ -61,7 +56,7 @@ export function CandidatesStage({
         <section className="card candidate-detail">
           <div className="candidate-detail-header">
             <h3>{candidate.title}</h3>
-            <strong>{Math.round(candidate.score.overall * 100)}% 综合匹配</strong>
+            <strong title="用于排序，不代表正确率">排序分 {Math.round(candidate.score.overall * 100)}</strong>
           </div>
           <p className="candidate-summary">{candidate.summary}</p>
           <div className="score-bars">
@@ -79,6 +74,7 @@ export function CandidatesStage({
             ))}
           </div>
           <pre className="code-preview">{candidate.preview}</pre>
+          {candidate.rerankReason ? <p className="muted-copy">重排依据：{candidate.rerankReason}</p> : null}
           <details className="detail-fold">
             <summary>依赖与风险</summary>
             <dl className="risk-list">
@@ -101,29 +97,11 @@ export function CandidatesStage({
 
       <section className="card decision-card">
         <div className="decision-fields">
-          <label>
+          <div className="decision-static">
             <span>适配方式</span>
-            <select
-              value={state.strategy}
-              onChange={(event) =>
-                dispatch({
-                  type: 'SET_STRATEGY',
-                  value: event.target.value as AdaptationStrategy,
-                })
-              }
-            >
-              {strategyOptions.map((option) => (
-                <option
-                  key={option.id}
-                  value={option.id}
-                  disabled={realAdaptation && option.id !== 'translate'}
-                >
-                  {option.label} · {option.detail}
-                  {realAdaptation && option.id !== 'translate' ? '（真实服务暂不支持）' : ''}
-                </option>
-              ))}
-            </select>
-          </label>
+            <strong>translate · Java → C#</strong>
+            <small>{adaptationProvider === 'Guided demo' ? '引导演示：仅预览，不可写回。' : '真实服务：仅支持此语言对和策略。'}</small>
+          </div>
           <label>
             <span>人工备注 / 额外约束</span>
             <input
@@ -136,15 +114,15 @@ export function CandidatesStage({
             />
           </label>
         </div>
-        <button
+      <button
           type="button"
           className="primary-action"
           onClick={onAdapt}
-          disabled={adapting}
-        >
-          {adapting ? <span className="spinner" /> : <Sparkles size={15} />}
-          {adapting ? '正在生成适配…' : '使用此方案并生成适配'}
-        </button>
+        disabled={adapting || !candidate}
+      >
+        {adapting ? <span className="spinner" /> : <Sparkles size={15} />}
+          {adapting ? '正在生成适配…' : candidate ? '确认此方案并生成适配' : '请先明确选择一个候选'}
+      </button>
       </section>
     </div>
   );

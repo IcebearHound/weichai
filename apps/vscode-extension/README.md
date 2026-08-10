@@ -1,65 +1,90 @@
-# ForeXplore VSCode 扩展
+# ForeXplore VS Code 扩展
 
-在 VSCode 中运行 ForeXplore 代码翻译工作流：选中待翻译代码 → 右键「ForeXplore: 开始代码翻译」→ 在独立面板中完成 检索相似实现 → 选择方案 → 翻译/适配 → diff 预览确认回填。
+ForeXplore 将企业已有实现作为迁移证据：在 C# 目标方法上检索 Java 候选、由人明确选择候选、生成 Java → C# 补丁，再展示独立验证证据和受保护的回填结果。
 
-本扩展是一个**完全自包含**的模块：共享契约、工作流核心与各适配器均已内嵌在扩展包内，不依赖本仓库的其他目录，安装 VSIX 后即可独立运行。
+当前真实能力边界是 **`translate` 策略下的 Java → C#**。它不是通用代码生成器；候选排序分也不是正确率或兼容概率。
 
-## 功能
+## 两种明确模式
 
-- 编辑器右键入口：读取当前文件、语言与选区，构造翻译目标（启发式提取符号名与签名，可在面板中修正）。
-- 单列向导式 Webview Panel：目标 → 需求 → 方案 → 翻译 → 补丁五个阶段，窄面板（360px 起）与深浅主题均可用。
-- 服务连接：优先连接配置的检索/翻译服务地址（使用绕过代理的本地 HTTP 栈）；未配置或不可达时自动降级为内置演示模式并在面板中标注。
-- 检索仓库健康检查：扩展激活时预检，每次翻译开始前复查。路径不存在/不可读会阻止翻译并给出提示；索引由检索服务管理（在本仓库环境中通过 `npm run index:corpus` 构建）。
-- 回填安全：翻译结果先以 diff 展示，用户确认后才通过 `WorkspaceEdit` 写入工作区，并返回检查点 ID。
+| 模式 | 用途 | 写回 |
+| --- | --- | --- |
+| `guided-demo`（默认） | 用内置 Java 样例走完检索、人工选择、适配和补丁预览，适合交付演示。 | 禁止。结果会带必需的 `unverified` 验证记录。 |
+| `real` | 调用已部署的 SeekDB 检索服务和适配服务。两个服务必须同时健康。 | 仅当所有必需验证通过、补丁路径和原始文件哈希均匹配、且用户在 VS Code 确认后允许。 |
 
-## 开发
+真实模式连接失败时，扩展会明确报错，**不会**回退到演示数据。
+
+## 演示路径
+
+1. 在仓库根目录运行 `npm ci` 和 `npm run build:extension`。
+2. 用 VS Code 打开 `apps/vscode-extension`，按 F5 启动 Extension Development Host。
+3. 在开发宿主中打开 C# 工作区，例如 `fixtures/target-system/forexplore-csharp-workspace`。
+4. 在 `src/Application/QuoteOrchestrationService.cs` 选择 `GetQuoteAsync` 的方法声明或完整方法，运行 **ForeXplore: 开始代码翻译**。
+5. 输入需求、检索 Java 候选，并手动点击一个候选后再生成预览。
+
+默认引导演示会完整呈现证据与 diff，但“应用补丁”按钮会保持禁用。这是有意的：演示数据没有读取本地工程，也没有执行真实验证，不能作为写回依据。
+
+## 真实服务演示
+
+真实服务需要一台具备以下条件的机器：
+
+- SeekDB 检索服务已经建立并加载可访问的 Java 语料索引；
+- 适配服务具备 `DEEPSEEK_API_KEY` 和 .NET SDK；
+- `ADAPTATION_PROJECT_ROOT` 指向与插件选中目标**相同内容**的 C# 工程（通常应在同一受控开发环境或挂载路径中）；
+- 适配服务的 `ADAPTATION_SKELETON_PROJECT_PATH` 对应同一 C# skeleton，用于临时集成编译。
+
+启动服务示例：
 
 ```bash
-# 在仓库根目录
-npm install
-npm run build:extension        # 构建 Webview + 扩展宿主
-npm run test --workspace forexplore-vscode
+# 服务端环境；密钥只保留在这里
+export DEEPSEEK_API_KEY='…'
+export ADAPTATION_PROJECT_ROOT='/absolute/path/to/forexplore-csharp-workspace'
+export ADAPTATION_SKELETON_PROJECT_PATH="$ADAPTATION_PROJECT_ROOT"
+npm run dev:adaptation
 ```
 
-用 VSCode 打开 `apps/vscode-extension` 目录，按 F5 即可启动扩展宿主调试（预先执行构建任务）。
+随后在 VS Code 设置中配置：
 
-### 集成测试
+```json
+{
+  "forexplore.executionMode": "real",
+  "forexplore.retrievalApiUrl": "http://127.0.0.1:8787",
+  "forexplore.adaptationApiUrl": "http://127.0.0.1:8788"
+}
+```
+
+`forexplore.repositoryPaths` 仅检查本地目录是否可读；它不等于服务端“已经索引”。真实检索范围由检索服务的已授权索引决定。
+
+## 写回保护
+
+- Webview 只能发送“检索、选择候选、生成、应用”的意图，不能提交路径、候选对象或补丁。
+- 扩展宿主保存当前运行的 C# 目标、候选、原始文件 SHA-256 和适配结果；候选必须由用户明确选择。
+- 仅接受工作区内、当前选中目标对应的一个相对路径修改补丁；路径遍历、绝对路径和经符号链接逃逸都会被拒绝。
+- 应用前和应用时都会重新校验 SHA-256，hunk 必须精确匹配原始内容。
+- 写入建立持久恢复点。可使用 **ForeXplore: 恢复最近一次回填** 恢复；若文件随后又被编辑，恢复会拒绝覆盖该编辑。
+- HTTP `POST /v1/backfill` 已禁用。写回只能由经过用户确认的 VS Code 宿主执行。
+
+编译或集成编译通过仅代表相应工程检查通过；它不证明业务行为、并发、超时、取消或幂等语义正确。
+
+## 开发与验证
 
 ```bash
-# 使用系统已安装的 VSCode（推荐，无需下载运行时）
-FOREXPLORE_TEST_VSCODE_PATH="/Applications/Visual Studio Code.app/Contents/MacOS/Code" \
-  npm run test:integration --workspace forexplore-vscode
+npm ci
+npm run typecheck --workspace forexplore-vscode
+npm run test --workspace forexplore-vscode
+npm run build:extension
+npm run package:extension
+```
 
-# 或让测试框架自动下载一个 VSCode 副本
+集成测试需要图形界面 VS Code 运行时：
+
+```bash
 npm run test:integration --workspace forexplore-vscode
 ```
 
-集成测试需要图形界面环境。若下载的 VSCode 副本被 macOS 提示“已损坏”，删除
-`apps/vscode-extension/.vscode-test` 目录后重试即可（该目录不进入版本库）。
-
-## 设置项
-
-| 设置 | 默认 | 说明 |
-| --- | --- | --- |
-| `forexplore.repositoryPaths` | `[]` | 检索相似实现的本地代码仓库路径（绝对路径数组）。 |
-| `forexplore.retrievalApiUrl` | 空 | 检索服务地址，如 `http://127.0.0.1:8787`；留空使用内置演示模式。 |
-| `forexplore.adaptationApiUrl` | 空 | 翻译服务地址，如 `http://127.0.0.1:8788`；留空使用内置演示模式。 |
-
-真实检索需要 SeekDB/MySQL 与已构建的语料索引；翻译服务需要 DeepSeek Key（配置在服务端环境）。模型/Embedding Key 只存在于服务端环境，不会下发到 Webview。扩展自身只作为客户端调用已部署的服务，未配置服务地址时使用内置演示数据走完整流程。
-
 ## 消息协议
 
-Webview 与扩展宿主通过 `postMessage` 通信（见 `src/protocol/messages.ts`）：
+Webview → 宿主：`READY`、`START_SEARCH`、`SELECT_CANDIDATE`、`START_ADAPT`、`APPLY_CURRENT_RUN`、`CHECK_REPOSITORIES`、`OPEN_TARGET`。
 
-- Webview → 宿主：`READY`、`START_SEARCH`、`START_ADAPT`、`APPLY_PATCHES`、`REINDEX`、`OPEN_FILE`
-- 宿主 → Webview：`INIT`、`SEARCH_RESULT`、`ADAPT_RESULT`、`APPLY_RESULT`、`REPOSITORY_STATUS`、`SERVICE_STATUS`、`ERROR`
+宿主 → Webview：`INIT`、`SEARCH_RESULT`、`ADAPT_RESULT`、`APPLY_RESULT`、`REPOSITORY_STATUS`、`SERVICE_STATUS`、`ERROR`。
 
-Webview 不直接访问本地服务，所有检索/翻译/索引调用由扩展宿主代理，避免 CSP 与跨源问题。
-
-## 打包
-
-```bash
-npm run package:extension      # 生成 .vsix（需要 @vscode/vsce）
-```
-
-所有依赖（含 monorepo workspace 包）已通过 esbuild/Vite 打进构建产物，安装扩展无需额外依赖。
+共享类型和状态机在 monorepo 的 `@forexplore/contracts`、`@forexplore/workflow-core` 中维护；打包时 Webview 与扩展宿主会将所需代码纳入 VSIX 构建产物。

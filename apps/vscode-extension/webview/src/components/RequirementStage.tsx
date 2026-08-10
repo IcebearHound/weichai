@@ -1,6 +1,7 @@
 import { RefreshCw, Search } from 'lucide-react';
-import type { ModuleTarget, RepositoryStatus, RetrievalMode } from '../../../src/vendor/contracts';
-import type { WorkflowEvent, WorkflowState } from '../../../src/vendor/workflow-core';
+import type { ModuleTarget, RetrievalMode } from '@forexplore/contracts';
+import type { WorkflowEvent, WorkflowState } from '@forexplore/workflow-core';
+import type { RepositoryStatus } from '../../../src/ui-types';
 
 const retrievalOptions: Array<{ id: RetrievalMode; label: string; detail: string }> = [
   { id: 'hybrid', label: '混合', detail: '语义 + 结构' },
@@ -13,7 +14,6 @@ interface RequirementStageProps {
   target: ModuleTarget;
   dispatch: React.Dispatch<WorkflowEvent>;
   repositoryStatuses: RepositoryStatus[];
-  onTargetChange: (target: ModuleTarget) => void;
   onSearch: () => void;
   onCheckRepositories: () => void;
 }
@@ -23,7 +23,6 @@ export function RequirementStage({
   target,
   dispatch,
   repositoryStatuses,
-  onTargetChange,
   onSearch,
   onCheckRepositories,
 }: RequirementStageProps) {
@@ -39,43 +38,27 @@ export function RequirementStage({
             {target.language} · {target.kind}
           </span>
         </div>
-        <div className="target-edit-fields">
-          <label>
+        <div className="target-edit-fields target-readonly-fields">
+          <div>
             <span>符号名</span>
-            <input
-              type="text"
-              value={target.name}
-              onChange={(event) => onTargetChange({ ...target, name: event.target.value })}
-            />
-          </label>
-          <label>
+            <strong>{target.name}</strong>
+          </div>
+          <div>
             <span>类型</span>
-            <select
-              value={target.kind}
-              onChange={(event) =>
-                onTargetChange({
-                  ...target,
-                  kind: event.target.value === 'class' ? 'class' : 'function',
-                })
-              }
-            >
-              <option value="function">function</option>
-              <option value="class">class</option>
-            </select>
-          </label>
-          <label className="target-signature-field">
+            <strong>{target.kind}</strong>
+          </div>
+          <div className="target-signature-field">
             <span>签名</span>
-            <input
-              type="text"
-              value={target.signature}
-              onChange={(event) => onTargetChange({ ...target, signature: event.target.value })}
-            />
-          </label>
+            <code>{target.signature}</code>
+          </div>
         </div>
         <div className="target-location">
           <code>{target.path}</code>
           <span>第 {target.line} 行</span>
         </div>
+        <p className="muted-copy">
+          目标由扩展宿主从已保存的编辑器选择建立快照。若要更换目标，请返回编辑器重新启动迁移。
+        </p>
       </section>
 
       <section className="card">
@@ -144,7 +127,7 @@ export function RequirementStage({
         </div>
         {repositoryStatuses.length === 0 ? (
           <p className="muted-copy">
-            未配置仓库路径（设置中 forexplore.repositoryPaths）。将使用服务端索引或演示数据检索。
+            未配置本地路径。真实模式使用服务端已有索引；引导演示使用内置样例。
           </p>
         ) : (
           <ul className="repository-list">
@@ -192,6 +175,6 @@ function summarizeRepositories(statuses: RepositoryStatus[]): string | null {
   const parts: string[] = [];
   if (unavailable > 0) parts.push(`${unavailable} 个不可用`);
   if (stale > 0) parts.push(`${stale} 个索引过期`);
-  if (pending > 0) parts.push(`${pending} 个未索引`);
-  return parts.length > 0 ? `仓库提示：${parts.join('、')}。` : '仓库状态正常。';
+  if (pending > 0) parts.push(`${pending} 个本地路径尚未由服务端确认索引`);
+  return parts.length > 0 ? `仓库提示：${parts.join('、')}。` : '本地路径可读；服务端索引范围另行确认。';
 }

@@ -6,18 +6,14 @@ import {
 } from "node:http";
 import type {
   AdaptationRequest,
-  FilePatch,
   Language,
 } from "@forexplore/contracts";
-import type {
-  CodeAdaptationPort,
-  CodeBackfillPort,
-} from "@forexplore/workflow-core";
+import type { CodeAdaptationPort } from "@forexplore/workflow-core";
 
 export interface HttpServerOptions {
   adapter: CodeAdaptationPort;
-  backfill: CodeBackfillPort;
-  corsOrigin: string;
+  /** Browser CORS is opt-in; the VS Code extension host uses local HTTP directly. */
+  corsOrigin?: string;
 }
 
 class HttpError extends Error {
@@ -43,14 +39,15 @@ function json(
   response: ServerResponse,
   status: number,
   body: unknown,
-  corsOrigin: string,
+  corsOrigin: string | undefined,
 ): void {
-  response.writeHead(status, {
-    "access-control-allow-origin": corsOrigin,
+  const headers: Record<string, string> = {
     "access-control-allow-headers": "content-type",
     "access-control-allow-methods": "GET, POST, OPTIONS",
     "content-type": "application/json; charset=utf-8",
-  });
+  };
+  if (corsOrigin) headers["access-control-allow-origin"] = corsOrigin;
+  response.writeHead(status, headers);
   response.end(status === 204 ? undefined : JSON.stringify(body));
 }
 
@@ -128,31 +125,11 @@ function isAdaptationRequest(value: unknown): value is AdaptationRequest {
   );
 }
 
-function isFilePatch(value: unknown): value is FilePatch {
-  if (typeof value !== "object" || value === null) return false;
-  const patch = value as Partial<FilePatch>;
-  return (
-    typeof patch.path === "string" &&
-    patch.path.length > 0 &&
-    (patch.status === "modified" || patch.status === "created") &&
-    Number.isInteger(patch.additions) &&
-    Number.isInteger(patch.deletions) &&
-    Array.isArray(patch.hunks) &&
-    patch.hunks.every(
-      (hunk) =>
-        typeof hunk === "object" &&
-        hunk !== null &&
-        typeof hunk.header === "string" &&
-        Array.isArray(hunk.lines) &&
-        hunk.lines.every(
-          (line) =>
-            typeof line === "object" &&
-            line !== null &&
-            ["context", "add", "remove"].includes(line.type) &&
-            typeof line.content === "string",
-        ),
-    )
-  );
+function requireJson(request: IncomingMessage): void {
+  const contentType = request.headers["content-type"] ?? "";
+  if (!contentType.toLowerCase().startsWith("application/json")) {
+    throw new HttpError(415, "Content-Type must be application/json.");
+  }
 }
 
 function requestSignal(request: IncomingMessage): AbortSignal {
@@ -180,6 +157,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
       }
 
       if (request.method === "POST" && request.url === "/v1/adapt") {
+        requireJson(request);
         const body = await readBody(request);
         if (!isAdaptationRequest(body)) {
           json(
@@ -196,18 +174,15 @@ export function createHttpServer(options: HttpServerOptions): Server {
       }
 
       if (request.method === "POST" && request.url === "/v1/backfill") {
-        const body = await readBody(request);
-        if (!Array.isArray(body) || !body.every(isFilePatch)) {
-          json(
-            response,
-            400,
-            { error: "Invalid payload: expected FilePatch[]." },
-            options.corsOrigin,
-          );
-          return;
-        }
-        const result = await options.backfill.apply(body, requestSignal(request));
-        json(response, 200, result, options.corsOrigin);
+        // A bare HTTP client is not an approval authority. Until this service
+        // has a server-owned run manifest and authorization layer, write-back
+        // stays in the trusted VS Code extension host.
+        json(
+          response,
+          410,
+          { error: "HTTP write-back is disabled. Apply an approved migration from the VS Code host." },
+          options.corsOrigin,
+        );
         return;
       }
 

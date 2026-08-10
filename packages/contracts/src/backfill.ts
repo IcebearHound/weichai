@@ -3,15 +3,46 @@ export interface PatchHunk {
   lines: Array<{ type: 'context' | 'add' | 'remove'; content: string }>;
 }
 
-export interface FilePatch {
+interface BaseFilePatch {
   path: string;
-  status: 'modified' | 'created';
   additions: number;
   deletions: number;
   hunks: PatchHunk[];
 }
 
+/**
+ * A modification is valid only against the exact source bytes inspected when
+ * the patch was produced. Paths are always relative to the authorized root.
+ */
+export interface ModifiedFilePatch extends BaseFilePatch {
+  status: 'modified';
+  expectedOriginalSha256: string;
+}
+
+/** New-file write-back is explicit about the required absence precondition. */
+export interface CreatedFilePatch extends BaseFilePatch {
+  status: 'created';
+  expectedAbsent: true;
+}
+
+export type FilePatch = ModifiedFilePatch | CreatedFilePatch;
+
+export interface CheckpointFile {
+  path: string;
+  status: FilePatch['status'];
+  beforeSha256: string | null;
+  afterSha256: string;
+}
+
+export interface WorkspaceCheckpoint {
+  id: string;
+  createdAt: string;
+  recoverable: boolean;
+  files: CheckpointFile[];
+}
+
 export interface ApplyResult {
   appliedFiles: string[];
   checkpointId: string;
+  rollbackAvailable: boolean;
 }

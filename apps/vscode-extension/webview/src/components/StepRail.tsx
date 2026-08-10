@@ -3,7 +3,7 @@ import {
   getStepStatus,
   workflowSteps,
   type WorkflowStage,
-} from '../../../src/vendor/workflow-core';
+} from '@forexplore/workflow-core';
 
 export function StepRail({ stage }: { stage: WorkflowStage }) {
   return (

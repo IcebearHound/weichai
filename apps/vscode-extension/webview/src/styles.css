@@ -256,6 +256,37 @@ kbd {
   font-size: 11px;
 }
 
+.target-readonly-fields > div,
+.decision-static {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.target-readonly-fields > div > span,
+.decision-static > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.target-readonly-fields strong,
+.decision-static strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.target-readonly-fields code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.decision-static small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .target-signature-field {
   grid-column: 1 / -1;
 }
@@ -769,6 +800,12 @@ button:disabled {
   flex: none;
 }
 
+.validation.is-fail > svg,
+.validation.is-unverified > svg {
+  color: var(--error);
+  flex: none;
+}
+
 .validation span {
   display: flex;
   flex-direction: column;
@@ -777,6 +814,13 @@ button:disabled {
 
 .validation small {
   color: var(--muted);
+}
+
+.validation-blocker {
+  margin: 10px 0 0;
+  color: var(--error);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .mapping-list li {
@@ -947,9 +991,12 @@ button:disabled {
   background: var(--ok);
 }
 
-.status-dot.is-starting::before,
-.status-dot.is-mock::before {
+.status-dot.is-demo::before {
   background: var(--warning);
+}
+
+.status-dot.is-unconfigured::before {
+  background: var(--muted);
 }
 
 .status-dot.is-error::before {

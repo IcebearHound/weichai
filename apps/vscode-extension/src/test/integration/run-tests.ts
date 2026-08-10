@@ -8,13 +8,19 @@
 import { downloadAndUnzipVSCode, runTests } from '@vscode/test-electron';
 import { existsSync, symlinkSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const extensionRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const suitePath = fileURLToPath(new URL('../../../dist/test/integration/suite.js', import.meta.url));
 const extensionDevelopmentPath = path.resolve(extensionRoot);
-const fixtureFile = fileURLToPath(
-  new URL('../fixtures/sample-project/src/quote.ts', import.meta.url),
+const fixtureWorkspace = fileURLToPath(
+  new URL('../../../../../fixtures/target-system/forexplore-csharp-workspace', import.meta.url),
+);
+const fixtureFile = path.join(
+  fixtureWorkspace,
+  'src',
+  'Application',
+  'QuoteOrchestrationService.cs',
 );
 
 async function main(): Promise<void> {
@@ -30,12 +36,15 @@ async function main(): Promise<void> {
       extensionTestsPath: suitePath,
       extensionTestsEnv: {
         FOREXPLORE_TEST_FIXTURE: fixtureFile,
+        FOREXPLORE_TEST_WORKSPACE: fixtureWorkspace,
       },
       launchArgs: [
         '--disable-extensions',
         '--disable-workspace-trust',
         '--user-data-dir',
         path.join(extensionRoot, '.vscode-test-user'),
+        '--folder-uri',
+        pathToFileURL(fixtureWorkspace).toString(),
       ],
     });
   } catch (error) {

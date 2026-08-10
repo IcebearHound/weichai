@@ -1,56 +1,63 @@
-import type { PatchHunk } from './vendor/contracts';
 import path from 'node:path';
+import { realpathSync } from 'node:fs';
+import type { PatchHunk } from '@forexplore/contracts';
+import { applyHunksStrict } from '@forexplore/workflow-core';
 
 export function parseHunkHeader(header: string): { oldStart: number } | null {
   const match = header.match(/^@@ -(\d+)(?:,\d+)? \+/);
-  if (!match?.[1]) return null;
-  return { oldStart: Number(match[1]) };
+  return match?.[1] ? { oldStart: Number(match[1]) } : null;
 }
 
-/** Applies hunks (anchored at their `oldStart` line) onto the current content. */
+/** Compatibility export with strict source-content preconditions. */
 export function applyHunks(content: string, hunks: PatchHunk[]): string {
-  const lines = content.split(/\r?\n/);
-  let lineDelta = 0;
-  for (const hunk of hunks) {
-    const parsed = parseHunkHeader(hunk.header);
-    if (!parsed) continue;
-    let cursor = Math.max(0, Math.min(parsed.oldStart - 1 + lineDelta, lines.length));
-    for (const line of hunk.lines) {
-      if (line.type === 'remove') {
-        if (cursor < lines.length) {
-          lines.splice(cursor, 1);
-          lineDelta -= 1;
-        }
-      } else if (line.type === 'add') {
-        lines.splice(cursor, 0, line.content);
-        cursor += 1;
-        lineDelta += 1;
-      } else {
-        cursor += 1;
-      }
-    }
-  }
-  return lines.join('\n');
-}
-
-export function linesFromHunks(hunks: PatchHunk[]): string[] {
-  return hunks.flatMap((hunk) =>
-    hunk.lines.filter((line) => line.type === 'add').map((line) => line.content),
-  );
+  return applyHunksStrict(content, hunks);
 }
 
 /**
- * Resolves a patch path against the workspace root. Absolute patch paths
- * (as produced by the adaptation services from editor targets) are used
- * verbatim; relative paths are anchored to the opened workspace folder.
+ * Resolves only a relative path that remains inside the opened workspace.
+ * Absolute paths and traversal are rejected instead of being treated as an
+ * implementation detail supplied by a remote service or Webview.
  */
-export function resolvePatchPath(
-  workspaceRoot: string | undefined,
-  filePath: string,
-): string {
-  if (path.isAbsolute(filePath)) return filePath;
-  if (!workspaceRoot) {
-    throw new Error('请先打开一个工作区文件夹，再应用翻译补丁。');
+export function resolvePatchPath(workspaceRoot: string | undefined, filePath: string): string {
+  if (!workspaceRoot) throw new Error('请先打开一个工作区文件夹，再应用翻译补丁。');
+  if (!filePath || path.isAbsolute(filePath)) {
+    throw new Error('补丁路径必须是工作区内的相对路径。');
   }
-  return path.resolve(workspaceRoot, filePath);
+  const root = path.resolve(workspaceRoot);
+  const resolved = path.resolve(root, filePath);
+  const relativePath = path.relative(root, resolved);
+  if (
+    !relativePath ||
+    relativePath === '..' ||
+    relativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativePath)
+  ) {
+    throw new Error('补丁路径超出当前工作区，已拒绝写入。');
+  }
+  return resolved;
+}
+
+export function canonicalWorkspacePath(workspaceRoot: string, filePath: string): string {
+  return path.relative(path.resolve(workspaceRoot), resolvePatchPath(workspaceRoot, filePath)).replace(/\\/g, '/');
+}
+
+/**
+ * A lexical `..` check is insufficient when a workspace contains symlinks.
+ * Resolve both ends before a local write so a symlink cannot redirect the
+ * approved relative target outside the opened workspace.
+ */
+export function resolveRealWorkspaceFile(workspaceRoot: string, filePath: string): string {
+  const lexicalPath = resolvePatchPath(workspaceRoot, filePath);
+  const realRoot = realpathSync(path.resolve(workspaceRoot));
+  const realFile = realpathSync(lexicalPath);
+  const relativePath = path.relative(realRoot, realFile);
+  if (
+    !relativePath ||
+    relativePath === '..' ||
+    relativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativePath)
+  ) {
+    throw new Error('补丁目标经符号链接解析后超出当前工作区，已拒绝写入。');
+  }
+  return realFile;
 }

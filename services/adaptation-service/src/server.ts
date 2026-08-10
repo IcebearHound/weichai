@@ -2,7 +2,6 @@ import 'dotenv/config';
 import { loadConfig } from './config.js';
 import { createHttpServer } from './http-server.js';
 import { AdaptationAdapter } from './adaptation-adapter.js';
-import { BackfillAdapter } from './backfill-adapter.js';
 
 const config = loadConfig();
 
@@ -12,13 +11,8 @@ const adapter = new AdaptationAdapter({
   projectRoot: config.projectRoot,
 });
 
-const backfill = new BackfillAdapter({
-  projectRoot: config.projectRoot,
-});
-
 const server = createHttpServer({
   adapter,
-  backfill,
   corsOrigin: config.corsOrigin,
 });
 

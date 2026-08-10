@@ -1,6 +1,20 @@
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import * as vscode from 'vscode';
+import type {
+  AdaptationResult,
+  FilePatch,
+  ModuleTarget,
+  SearchCandidate,
+  ValidationRecord,
+} from '@forexplore/contracts';
+import {
+  applyHunksStrict,
+  canApplyAdaptation,
+  evaluateValidationGate,
+} from '@forexplore/workflow-core';
 import { WorkspaceBackfill } from './backfill';
+import { canonicalWorkspacePath } from './diff-apply';
 import { TranslationPanel } from './panel';
 import type {
   HostToWebviewMessage,
@@ -10,12 +24,35 @@ import { RepositoryHealthCheck } from './repository-health';
 import { decorateRepositoryStatuses } from './repository-status';
 import { ServiceManager } from './service-manager';
 import { buildModuleTarget } from './target-builder';
-import type { RepositoryStatus } from './vendor/contracts';
+import type { RepositoryStatus } from './ui-types';
 
-interface ForeXploreServices {
+interface ExtensionHost {
+  context: vscode.ExtensionContext;
   services: ServiceManager;
   health: RepositoryHealthCheck;
 }
+
+interface ActiveMigrationRun {
+  workspaceFolder: vscode.WorkspaceFolder;
+  targetUri: vscode.Uri;
+  target: ModuleTarget;
+  /** Exact bytes read before retrieval / adaptation began. */
+  originalSha256: string;
+  originalContent: string;
+  requirement: string;
+  candidates: SearchCandidate[];
+  /** Null until the user expressly clicks a candidate in this run. */
+  selectedCandidateId: string | null;
+  adaptation: AdaptationResult | null;
+}
+
+interface LastCheckpoint {
+  checkpointId: string;
+  workspaceUri: string;
+  targetPath: string;
+}
+
+let activeRun: ActiveMigrationRun | null = null;
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel('ForeXplore');
@@ -35,28 +72,31 @@ export function activate(context: vscode.ExtensionContext): void {
       const statuses = await refreshRepositoryStatus(services, health);
       const summary = summarizeRepositoryStatus(statuses);
       void vscode.window.showInformationMessage(
-        summary ?? '未配置检索仓库路径（forexplore.repositoryPaths）。',
+        summary ?? '未配置本地仓库路径；检索范围由当前运行模式决定。',
       );
     }),
     vscode.commands.registerCommand('forexplore.reindex', async () => {
-      await services.ensureStarted();
-      const statuses = await refreshRepositoryStatus(services, health);
-      if (services.serviceStatus.retrieval === 'connected') {
+      const status = await services.refresh();
+      const repositories = await refreshRepositoryStatus(services, health);
+      if (status.executionMode === 'guided-demo') {
         void vscode.window.showInformationMessage(
-          '仓库状态已刷新。索引由检索服务管理，如需重建请在部署检索服务的环境中运行索引器。',
+          '当前为引导演示模式：没有本地索引操作，使用内置样例。',
         );
       } else {
         void vscode.window.showInformationMessage(
-          '演示模式（未连接检索服务），无需本地索引。',
+          '扩展不会把本地目录误标为已索引。请在检索服务部署环境运行索引器，然后重新检查服务状态。',
         );
       }
-      void statuses;
+      void repositories;
     }),
+    vscode.commands.registerCommand('forexplore.restoreLastCheckpoint', () =>
+      restoreLastCheckpoint(context),
+    ),
   );
 
-  // Activation-time preflight: probe configured services and repository paths.
+  // Keep status informative, but never start servers or silently switch modes.
   void services
-    .ensureStarted()
+    .refresh()
     .then(() => refreshRepositoryStatus(services, health))
     .catch((error) => {
       output.appendLine(`[forexplore] preflight failed: ${String(error)}`);
@@ -64,7 +104,7 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
-  // ServiceManager disposal is registered through context.subscriptions.
+  activeRun = null;
 }
 
 async function startTranslation(
@@ -74,39 +114,66 @@ async function startTranslation(
 ): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
-    void vscode.window.showInformationMessage('请先打开并选中要翻译的代码。');
+    void vscode.window.showInformationMessage('请先打开并选中一个 C# 目标方法。');
     return;
   }
   if (editor.selection.isEmpty) {
-    void vscode.window.showWarningMessage('请先在编辑器中选中要翻译的代码。');
+    void vscode.window.showWarningMessage('请先选中待实现的 C# 目标方法或其签名。');
     return;
   }
 
   const document = editor.document;
+  if (document.uri.scheme !== 'file') {
+    void vscode.window.showErrorMessage('仅支持工作区中的本地 C# 文件。');
+    return;
+  }
+  if (document.isDirty) {
+    void vscode.window.showWarningMessage('请先保存目标文件，再开始迁移，以便建立可校验的文件快照。');
+    return;
+  }
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+  if (!workspaceFolder) {
+    void vscode.window.showErrorMessage('目标文件必须位于已打开的工作区文件夹中。');
+    return;
+  }
+
   const target = buildModuleTarget({
     languageId: document.languageId,
     selectedText: document.getText(editor.selection),
     filePath: document.uri.fsPath,
     fileBaseName: path.basename(document.uri.fsPath),
+    workspaceRoot: workspaceFolder.uri.fsPath,
     startLine: editor.selection.start.line,
   });
   if (!target) {
     void vscode.window.showErrorMessage(
-      `暂不支持该文件语言（${document.languageId}）。支持：TypeScript、Python、Java、C#、Rust、Go。`,
+      `当前演示 MVP 仅支持 Java → C#：请在工作区内选择 C# 目标方法（当前为 ${document.languageId}）。`,
     );
     return;
   }
 
-  const serviceStatus = services.serviceStatus;
+  const originalBytes = await vscode.workspace.fs.readFile(document.uri);
+  activeRun = {
+    workspaceFolder,
+    targetUri: document.uri,
+    target,
+    originalSha256: sha256(originalBytes),
+    originalContent: Buffer.from(originalBytes).toString('utf8'),
+    requirement: '',
+    candidates: [],
+    selectedCandidateId: null,
+    adaptation: null,
+  };
+
+  const serviceStatus = await services.refresh();
   const statuses = await refreshRepositoryStatus(services, health);
-  const runtime = services.getRuntimePorts();
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+  const runtime = services.getRuntimePresentation();
 
   await TranslationPanel.createOrShow(
     context,
     {
       target,
-      workspaceRoot,
+      workspaceRoot: workspaceFolder.uri.fsPath,
       repositoryStatuses: statuses,
       serviceStatus,
       searchProvider: runtime.searchProvider,
@@ -114,24 +181,10 @@ async function startTranslation(
     },
     {
       onMessage: (message) => {
-        void handlePanelMessage({ services, health }, message);
+        void handlePanelMessage({ context, services, health }, message);
       },
     },
   );
-
-  // Refresh service connectivity and repository status in the background; the
-  // panel opens immediately and receives live status updates as they land.
-  void (async () => {
-    try {
-      await services.ensureStarted();
-      publish({ type: 'SERVICE_STATUS', status: services.serviceStatus });
-      const ready = await refreshRepositoryStatus(services, health);
-      publish({ type: 'REPOSITORY_STATUS', statuses: ready });
-    } catch (error) {
-      publish({ type: 'SERVICE_STATUS', status: services.serviceStatus });
-      publishError(errorMessage(error, '服务准备失败'));
-    }
-  })();
 }
 
 async function showPanel(
@@ -139,7 +192,7 @@ async function showPanel(
   services: ServiceManager,
   health: RepositoryHealthCheck,
 ): Promise<void> {
-  if (TranslationPanel.current) {
+  if (TranslationPanel.current && activeRun) {
     TranslationPanel.current.panel.reveal(vscode.ViewColumn.Beside);
     return;
   }
@@ -148,79 +201,329 @@ async function showPanel(
     await startTranslation(context, services, health);
     return;
   }
-  void vscode.window.showInformationMessage('请先在编辑器中选中要翻译的代码。');
+  void vscode.window.showInformationMessage('请先在 C# 文件中选中待实现的目标方法。');
 }
 
 async function handlePanelMessage(
-  host: ForeXploreServices,
+  host: ExtensionHost,
   message: WebviewToHostMessage,
 ): Promise<void> {
   switch (message.type) {
     case 'READY':
       return;
-    case 'START_SEARCH': {
-      try {
-        await host.services.ensureStarted();
-        // Pre-translation repository gate: block when a configured path is unusable.
-        const statuses = await refreshRepositoryStatus(host.services, host.health);
-        const blocked = statuses.find((status) => !status.exists || !status.readable);
-        if (blocked) {
-          const error = `检索仓库路径不可用：${blocked.path}（${blocked.message}）。请在设置中修复 forexplore.repositoryPaths 后重试。`;
-          publishError(error);
-          return;
-        }
-        const candidates = await host.services
-          .getRuntimePorts()
-          .ports.search.search(message.request);
-        publish({ type: 'SEARCH_RESULT', candidates });
-      } catch (error) {
-        publishError(errorMessage(error, '检索失败'));
-      }
+    case 'START_SEARCH':
+      await startSearch(host, message);
+      return;
+    case 'SELECT_CANDIDATE':
+      selectCandidate(message.candidateId);
+      return;
+    case 'START_ADAPT':
+      await startAdaptation(host, message.decisionNotes);
+      return;
+    case 'APPLY_CURRENT_RUN':
+      await applyCurrentRun(host.context);
+      return;
+    case 'CHECK_REPOSITORIES':
+      await refreshPanelStatus(host);
+      return;
+    case 'OPEN_TARGET':
+      await openTarget();
+      return;
+  }
+}
+
+async function startSearch(
+  host: ExtensionHost,
+  message: Extract<WebviewToHostMessage, { type: 'START_SEARCH' }>,
+): Promise<void> {
+  try {
+    const run = requireActiveRun();
+    await assertTargetUnchanged(run);
+    const status = await host.services.refresh();
+    publish({ type: 'SERVICE_STATUS', status });
+    const runtime = host.services.getRuntimePorts();
+    const candidates = await runtime.ports.search.search({
+      target: run.target,
+      requirement: message.requirement.trim(),
+      topK: message.topK,
+      retrievalMode: message.retrievalMode,
+      // Local paths are presentation-only checks; only the server can state
+      // which repositories were indexed. An empty scope means its configured
+      // authorized index, not a fake "configured-repositories" filter.
+      repositoryScopes: [],
+      candidateLanguages: ['Java'],
+    });
+    run.requirement = message.requirement.trim();
+    run.candidates = candidates.filter((candidate) => candidate.language === 'Java');
+    run.selectedCandidateId = null;
+    run.adaptation = null;
+    publish({ type: 'SEARCH_RESULT', candidates: run.candidates });
+  } catch (error) {
+    publishError(errorMessage(error, '检索失败'));
+  }
+}
+
+function selectCandidate(candidateId: string): void {
+  try {
+    const run = requireActiveRun();
+    const candidate = run.candidates.find((item) => item.id === candidateId);
+    if (!candidate || candidate.language !== 'Java') {
+      throw new Error('该候选不属于当前检索结果，或不满足 Java → C# 的迁移边界。');
+    }
+    // This is deliberately the only operation that changes this field. A
+    // retrieval ranking never becomes consent by itself.
+    run.selectedCandidateId = candidateId;
+    run.adaptation = null;
+  } catch (error) {
+    publishError(errorMessage(error, '候选选择无效'));
+  }
+}
+
+async function startAdaptation(host: ExtensionHost, decisionNotes: string): Promise<void> {
+  try {
+    const run = requireActiveRun();
+    const candidate = selectedRunCandidate(run);
+    await assertTargetUnchanged(run);
+    const status = await host.services.refresh();
+    publish({ type: 'SERVICE_STATUS', status });
+    const runtime = host.services.getRuntimePorts();
+    const rawResult = await runtime.ports.adaptation.adapt({
+      target: run.target,
+      candidate,
+      requirement: run.requirement,
+      strategy: 'translate',
+      decisionNotes,
+    });
+    const result = validateHostOwnedResult(run, rawResult, runtime.executionMode);
+    run.adaptation = result;
+    publish({ type: 'ADAPT_RESULT', result });
+  } catch (error) {
+    publishError(errorMessage(error, '翻译失败'));
+  }
+}
+
+async function applyCurrentRun(context: vscode.ExtensionContext): Promise<void> {
+  try {
+    const run = requireActiveRun();
+    const adaptation = run.adaptation;
+    if (!adaptation) throw new Error('尚未生成当前迁移运行的补丁。');
+    const gate = evaluateValidationGate(adaptation.validation);
+    if (!canApplyAdaptation(adaptation)) {
+      const labels = gate.blockers.map((record) => record.label).join('、');
+      throw new Error(`必需验证未通过或尚未验证：${labels || '缺少可写回补丁'}。`);
+    }
+    await assertTargetUnchanged(run);
+    const choice = await vscode.window.showWarningMessage(
+      '将把已预览的补丁写入当前选中的 C# 文件，并创建可恢复检查点。确认继续？',
+      { modal: true },
+      '应用补丁',
+    );
+    if (choice !== '应用补丁') {
+      publishError('已取消应用补丁。');
       return;
     }
-    case 'START_ADAPT': {
-      try {
-        const result = await host.services
-          .getRuntimePorts()
-          .ports.adaptation.adapt(message.request);
-        publish({ type: 'ADAPT_RESULT', result });
-      } catch (error) {
-        publishError(errorMessage(error, '翻译失败'));
-      }
-      return;
+
+    const result = await new WorkspaceBackfill({
+      workspaceFolder: run.workspaceFolder,
+      storageUri: context.globalStorageUri,
+      allowedTargetPath: run.target.path,
+    }).apply(adaptation.files);
+    await context.workspaceState.update('forexplore.lastCheckpoint', {
+      checkpointId: result.checkpointId,
+      workspaceUri: run.workspaceFolder.uri.toString(),
+      targetPath: run.target.path,
+    });
+    publish({ type: 'APPLY_RESULT', result });
+  } catch (error) {
+    publishError(errorMessage(error, '回填失败'));
+  }
+}
+
+async function restoreLastCheckpoint(context: vscode.ExtensionContext): Promise<void> {
+  const checkpoint = context.workspaceState.get<LastCheckpoint>('forexplore.lastCheckpoint');
+  const run = activeRun;
+  if (!checkpoint || !run) {
+    void vscode.window.showInformationMessage('没有与当前迁移运行关联的可恢复检查点。');
+    return;
+  }
+  if (
+    checkpoint.workspaceUri !== run.workspaceFolder.uri.toString() ||
+    checkpoint.targetPath !== run.target.path
+  ) {
+    void vscode.window.showWarningMessage('恢复点不属于当前选中的迁移目标，已拒绝恢复。');
+    return;
+  }
+  const choice = await vscode.window.showWarningMessage(
+    '将恢复最近一次 ForeXplore 写入前的文件内容；若文件后来又被编辑，恢复会被拒绝。确认继续？',
+    { modal: true },
+    '恢复检查点',
+  );
+  if (choice !== '恢复检查点') return;
+  try {
+    const result = await new WorkspaceBackfill({
+      workspaceFolder: run.workspaceFolder,
+      storageUri: context.globalStorageUri,
+      allowedTargetPath: run.target.path,
+    }).restore(checkpoint.checkpointId);
+    await context.workspaceState.update('forexplore.lastCheckpoint', undefined);
+    void vscode.window.showInformationMessage(`已恢复 ${result.appliedFiles.join('、')}。`);
+  } catch (error) {
+    void vscode.window.showErrorMessage(errorMessage(error, '恢复失败'));
+  }
+}
+
+async function refreshPanelStatus(host: ExtensionHost): Promise<void> {
+  try {
+    const status = await host.services.refresh();
+    publish({ type: 'SERVICE_STATUS', status });
+    const statuses = await refreshRepositoryStatus(host.services, host.health);
+    publish({ type: 'REPOSITORY_STATUS', statuses });
+  } catch (error) {
+    publishError(errorMessage(error, '状态检查失败'));
+  }
+}
+
+async function openTarget(): Promise<void> {
+  try {
+    const run = requireActiveRun();
+    await vscode.window.showTextDocument(run.targetUri, {
+      preview: true,
+      selection: new vscode.Range(
+        Math.max(0, (run.target.line ?? 1) - 1),
+        0,
+        Math.max(0, (run.target.line ?? 1) - 1),
+        0,
+      ),
+    });
+  } catch (error) {
+    publishError(errorMessage(error, '无法打开当前目标文件'));
+  }
+}
+
+function validateHostOwnedResult(
+  run: ActiveMigrationRun,
+  result: AdaptationResult,
+  executionMode: 'real' | 'guided-demo',
+): AdaptationResult {
+  const validation = [...result.validation];
+  const failures: string[] = [];
+  let files: FilePatch[] = result.files;
+
+  if (result.strategy !== 'translate' || result.targetLanguage !== 'C#') {
+    failures.push('服务返回的策略或目标语言超出 Java → C# translate MVP。');
+  }
+  if (files.length !== 1) {
+    failures.push('演示写回只接受当前目标文件的一个修改补丁。');
+  }
+
+  const patch = files[0];
+  if (patch) {
+    const expectedPath = canonicalWorkspacePath(run.workspaceFolder.uri.fsPath, run.target.path);
+    let returnedPath: string | undefined;
+    try {
+      returnedPath = canonicalWorkspacePath(run.workspaceFolder.uri.fsPath, patch.path);
+    } catch {
+      failures.push('服务返回的补丁路径不是工作区内的相对路径。');
     }
-    case 'APPLY_PATCHES': {
-      try {
-        const folder = vscode.workspace.workspaceFolders?.[0];
-        const result = await new WorkspaceBackfill(folder).apply(message.files);
-        publish({ type: 'APPLY_RESULT', result });
-      } catch (error) {
-        publishError(errorMessage(error, '回填失败'));
-      }
-      return;
+    if (patch.status !== 'modified' || returnedPath !== expectedPath) {
+      failures.push('服务返回的补丁不严格对应当前选中的目标文件。');
     }
-    case 'CHECK_REPOSITORIES': {
-      try {
-        await host.services.ensureStarted();
-        const statuses = await refreshRepositoryStatus(host.services, host.health);
-        publish({ type: 'REPOSITORY_STATUS', statuses });
-      } catch (error) {
-        publishError(errorMessage(error, '仓库检查失败'));
+    if (patch.status === 'modified') {
+      if (executionMode === 'real' && patch.expectedOriginalSha256 !== run.originalSha256) {
+        failures.push('服务补丁的原始文件哈希与扩展宿主快照不一致。');
       }
-      return;
-    }
-    case 'OPEN_FILE': {
       try {
-        const uri = vscode.Uri.file(message.path);
-        await vscode.window.showTextDocument(uri, {
-          preview: true,
-          selection: new vscode.Range(message.line - 1, 0, message.line - 1, 0),
-        });
+        applyHunksStrict(run.originalContent, patch.hunks);
       } catch (error) {
-        publishError(errorMessage(error, '无法打开文件'));
+        failures.push(
+          `补丁不能精确应用到本次目标快照：${error instanceof Error ? error.message : String(error)}`,
+        );
       }
-      return;
     }
+  }
+
+  if (executionMode === 'guided-demo') {
+    // The sample adapter does not read the editor. Preserve the visual diff,
+    // but stamp it with the host snapshot only for display; a required
+    // unverified record below keeps this result non-writable.
+    files = files.map((file) =>
+      file.status === 'modified'
+        ? { ...file, expectedOriginalSha256: run.originalSha256 }
+        : file,
+    );
+    validation.push({
+      id: 'extension-guided-demo',
+      label: '引导演示写回门禁',
+      status: 'unverified',
+      required: true,
+      summary: '当前结果来自引导演示；可以预览，不能写入工作区。',
+      failureReason: 'guided-demo-mode',
+    });
+  } else {
+    validation.push({
+      id: 'extension-target-snapshot',
+      label: '扩展目标快照',
+      status: failures.length === 0 ? 'pass' : 'fail',
+      required: true,
+      command: 'VS Code workspace.fs.readFile + SHA-256',
+      summary:
+        failures.length === 0
+          ? '补丁路径、原始哈希和 hunk 均与本次编辑器目标快照一致。'
+          : failures.join(' '),
+      failureReason: failures.length === 0 ? undefined : 'host-owned-patch-validation-failed',
+    });
+  }
+
+  if (failures.length > 0) {
+    validation.push({
+      id: 'extension-patch-scope',
+      label: '补丁范围与前置条件',
+      status: 'fail',
+      required: true,
+      summary: failures.join(' '),
+      failureReason: 'unsafe-or-stale-patch',
+    });
+    files = [];
+  }
+
+  return { ...result, validation: deduplicateValidation(validation), files };
+}
+
+function deduplicateValidation(records: ValidationRecord[]): ValidationRecord[] {
+  const ids = new Set<string>();
+  return records.filter((record) => {
+    if (ids.has(record.id)) return false;
+    ids.add(record.id);
+    return true;
+  });
+}
+
+function requireActiveRun(): ActiveMigrationRun {
+  if (!activeRun) throw new Error('请先从已保存的 C# 目标方法启动一次迁移。');
+  return activeRun;
+}
+
+function selectedRunCandidate(run: ActiveMigrationRun): SearchCandidate {
+  if (!run.selectedCandidateId) {
+    throw new Error('请先明确点击并选择一个 Java 候选实现。');
+  }
+  const candidate = run.candidates.find((item) => item.id === run.selectedCandidateId);
+  if (!candidate || candidate.language !== 'Java') {
+    throw new Error('当前候选已失效；请重新检索并明确选择。');
+  }
+  return candidate;
+}
+
+async function assertTargetUnchanged(run: ActiveMigrationRun): Promise<void> {
+  const openDocument = vscode.workspace.textDocuments.find(
+    (document) => document.uri.toString() === run.targetUri.toString(),
+  );
+  if (openDocument?.isDirty) {
+    throw new Error('目标文件有未保存的编辑；请先保存并重新启动迁移以建立新快照。');
+  }
+  const current = await vscode.workspace.fs.readFile(run.targetUri);
+  if (sha256(current) !== run.originalSha256) {
+    throw new Error('目标文件已在本次迁移开始后发生变化；请重新启动迁移以生成新快照。');
   }
 }
 
@@ -244,7 +547,11 @@ function publishError(message: string): void {
 function summarizeRepositoryStatus(statuses: RepositoryStatus[]): string | null {
   if (statuses.length === 0) return null;
   const unavailable = statuses.filter((status) => !status.exists || !status.readable).length;
-  return `检索仓库：${statuses.length} 个路径，${unavailable} 个不可用。`;
+  return `本地仓库路径：${statuses.length} 个，${unavailable} 个不可用。索引状态由检索服务确认。`;
+}
+
+function sha256(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex');
 }
 
 function errorMessage(error: unknown, fallback: string): string {

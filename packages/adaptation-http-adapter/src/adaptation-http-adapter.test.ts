@@ -54,6 +54,7 @@ const patches: FilePatch[] = [];
 const applyResult: ApplyResult = {
   appliedFiles: [],
   checkpointId: 'checkpoint-1',
+  rollbackAvailable: false,
 };
 
 describe('adaptation HTTP adapters', () => {

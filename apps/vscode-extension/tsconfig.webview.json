@@ -15,7 +15,6 @@
   "include": [
     "webview/src",
     "src/protocol",
-    "src/vendor/contracts",
-    "src/vendor/workflow-core"
+    "src/ui-types.ts"
   ]
 }

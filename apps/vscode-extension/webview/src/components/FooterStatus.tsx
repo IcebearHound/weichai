@@ -1,4 +1,4 @@
-import type { RepositoryStatus, ServiceStatus } from '../../../src/vendor/contracts';
+import type { RepositoryStatus, ServiceConnection, ServiceStatus } from '../../../src/ui-types';
 
 export function FooterStatus({
   serviceStatus,
@@ -41,16 +41,18 @@ export function FooterStatus({
   );
 }
 
-function serviceLabel(availability: ServiceStatus[keyof ServiceStatus] | undefined): string {
+function serviceLabel(availability: ServiceConnection | undefined): string {
   if (availability === 'connected') return '已连接';
-  if (availability === 'starting') return '启动中';
+  if (availability === 'demo') return '引导演示';
+  if (availability === 'unconfigured') return '未配置';
   if (availability === 'error') return '异常';
-  return '演示模式';
+  return '未知';
 }
 
-function serviceDot(availability: ServiceStatus[keyof ServiceStatus] | undefined): string {
+function serviceDot(availability: ServiceConnection | undefined): string {
   if (availability === 'connected') return 'status-dot is-connected';
-  if (availability === 'starting') return 'status-dot is-starting';
+  if (availability === 'demo') return 'status-dot is-demo';
+  if (availability === 'unconfigured') return 'status-dot is-unconfigured';
   if (availability === 'error') return 'status-dot is-error';
-  return 'status-dot is-mock';
+  return 'status-dot is-unconfigured';
 }

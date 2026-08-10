@@ -8,7 +8,8 @@ const defaultProjectPath = fileURLToPath(
 export interface AdaptationServiceConfig {
   host: string;
   port: number;
-  corsOrigin: string;
+  /** Optional explicit browser origin. Extension-host requests do not need CORS. */
+  corsOrigin?: string;
   apiKey: string;
   skeletonProjectPath: string;
   projectRoot: string;
@@ -37,7 +38,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdaptationServ
   return {
     host: env.ADAPTATION_HOST?.trim() || "127.0.0.1",
     port: positiveInteger(env.ADAPTATION_PORT, 8788, "ADAPTATION_PORT"),
-    corsOrigin: env.ADAPTATION_CORS_ORIGIN?.trim() || "*",
+    corsOrigin: env.ADAPTATION_CORS_ORIGIN?.trim() || undefined,
     apiKey,
     skeletonProjectPath,
     projectRoot: resolveConfiguredPath(env.ADAPTATION_PROJECT_ROOT?.trim(), skeletonProjectPath),

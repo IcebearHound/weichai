@@ -1,6 +1,6 @@
 # Adaptation Service (Module 3)
 
-Java → C# code adaptation: LLM translation → compile validation → auto-fix → backfill.
+Java → C# code adaptation: LLM translation → compile validation → limited auto-fix → protected patch generation.
 
 ## Analyzer-driven Translator Agent
 
@@ -67,7 +67,8 @@ When `skeletonProjectPath` is configured, integration validation copies the
 delivered C# skeleton to a temporary directory, replaces only the target
 method, and runs `dotnet build`. The real workspace is never modified during
 validation. Compiler errors drive at most three model repair attempts; a
-missing compiler stops the repair loop and is reported as a warning.
+missing compiler stops the repair loop, produces required `unverified`
+evidence, and blocks protected write-back.
 
 The model endpoint and model name are loaded by `src/model-config.ts` so the
 translator does not own provider configuration. `DEEPSEEK_MODEL` defaults to
@@ -106,8 +107,10 @@ curl http://127.0.0.1:8788/health
 ```
 
 The Web demo uses the real service only for Java method → C# method translation.
-Backfill remains the Mock port, so clicking the final backfill action does not
-change the delivered skeleton.
+`POST /v1/backfill` is intentionally disabled. A bare HTTP client is not an
+approval authority; the VS Code extension host owns the selected target,
+original hash, validation gate, user confirmation and recovery point before it
+performs any local write.
 
 ## Python POC
 

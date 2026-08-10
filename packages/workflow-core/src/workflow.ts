@@ -93,7 +93,9 @@ export function workflowReducer(
         pending: null,
         stage: 'candidates',
         candidates: event.candidates,
-        selectedCandidateId: event.candidates[0]?.id ?? null,
+        // Retrieval ranking is evidence for review, never an implicit human
+        // selection. The caller must dispatch SELECT_CANDIDATE explicitly.
+        selectedCandidateId: null,
         adaptation: null,
         applyResult: null,
       };

@@ -29,7 +29,8 @@ function isApplyResult(value: unknown): value is ApplyResult {
   return (
     Array.isArray(result.appliedFiles) &&
     result.appliedFiles.every((path) => typeof path === 'string') &&
-    typeof result.checkpointId === 'string'
+    typeof result.checkpointId === 'string' &&
+    typeof result.rollbackAvailable === 'boolean'
   );
 }
 

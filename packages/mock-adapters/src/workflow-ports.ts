@@ -14,13 +14,16 @@ import type {
 } from '@forexplore/workflow-core';
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  const effectiveDelay = import.meta.env.MODE === 'test' ? 0 : ms;
+  const runtime = globalThis as typeof globalThis & {
+    process?: { env?: Record<string, string | undefined> };
+  };
+  const effectiveDelay = runtime.process?.env?.VITEST ? 0 : ms;
   return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(resolve, effectiveDelay);
+    const timer = globalThis.setTimeout(resolve, effectiveDelay);
     signal?.addEventListener(
       'abort',
       () => {
-        window.clearTimeout(timer);
+        globalThis.clearTimeout(timer);
         reject(new DOMException('Operation aborted', 'AbortError'));
       },
       { once: true },
@@ -235,6 +238,10 @@ function createPatch(request: AdaptationRequest): FilePatch[] {
     {
       path: request.target.path,
       status: 'modified',
+      // A guided-demo adapter never read the user's document. The extension
+      // treats this deliberately impossible precondition as unverified and
+      // blocks write-back.
+      expectedOriginalSha256: '0'.repeat(64),
       additions: code.length,
       deletions: 3,
       hunks: [
@@ -281,10 +288,21 @@ class MockCodeAdaptationAdapter implements CodeAdaptationPort {
         },
       ],
       validation: [
-        { label: '目标签名保持', status: 'pass', detail: request.target.signature },
-        { label: '异步语义', status: 'pass', detail: 'Promise 与源方案异步边界一致。' },
-        { label: '依赖注入', status: 'pass', detail: '新增能力通过 QuoteCachePort 注入。' },
-        { label: '行为差异', status: 'warn', detail: 'stale TTL 默认值需在真实配置层确认。' },
+        {
+          id: 'guided-demo',
+          label: '引导演示数据',
+          status: 'unverified',
+          required: true,
+          summary: '当前结果来自内置演示数据，未调用检索、翻译或编译服务。',
+          failureReason: 'guided-demo-mode',
+        },
+        {
+          id: 'behavioral-semantics',
+          label: '业务行为验证',
+          status: 'unverified',
+          required: false,
+          summary: '演示数据不构成业务语义正确性证据。',
+        },
       ],
       files: createPatch(request),
     };
@@ -297,6 +315,7 @@ class MockCodeBackfillAdapter implements CodeBackfillPort {
     return {
       appliedFiles: files.map((file) => file.path),
       checkpointId: `mock-checkpoint-${Date.now().toString(36)}`,
+      rollbackAvailable: false,
     };
   }
 }

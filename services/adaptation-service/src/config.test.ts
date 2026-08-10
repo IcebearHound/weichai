@@ -7,7 +7,7 @@ describe("adaptation service config", () => {
 
     expect(config.host).toBe("127.0.0.1");
     expect(config.port).toBe(8788);
-    expect(config.corsOrigin).toBe("*");
+    expect(config.corsOrigin).toBeUndefined();
     expect(config.apiKey).toBe("demo-key");
     expect(config.skeletonProjectPath).toMatch(/forexplore-csharp-workspace$/);
     expect(config.projectRoot).toBe(config.skeletonProjectPath);

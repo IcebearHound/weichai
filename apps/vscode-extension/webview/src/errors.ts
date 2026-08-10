@@ -1,4 +1,4 @@
-import type { WorkflowEvent } from '../../src/vendor/workflow-core';
+import type { WorkflowEvent } from '@forexplore/workflow-core';
 
 /**
  * Maps a host-side error to the workflow failure event that clears the

@@ -1,19 +1,21 @@
 import { Check, FilePlus2, FileSymlink, ShieldCheck, TriangleAlert } from 'lucide-react';
-import type { WorkflowState } from '../../../src/vendor/workflow-core';
+import { canApplyAdaptation, evaluateValidationGate, type WorkflowState } from '@forexplore/workflow-core';
 
 interface PatchStageProps {
   state: WorkflowState;
   onApply: () => void;
   onBack: () => void;
-  onOpenFile: (path: string, line: number) => void;
+  onOpenTarget: () => void;
 }
 
-export function PatchStage({ state, onApply, onBack, onOpenFile }: PatchStageProps) {
+export function PatchStage({ state, onApply, onBack, onOpenTarget }: PatchStageProps) {
   const result = state.adaptation;
   if (!result) return null;
   const applying = state.pending === 'apply';
   const additions = result.files.reduce((sum, file) => sum + file.additions, 0);
   const deletions = result.files.reduce((sum, file) => sum + file.deletions, 0);
+  const gate = evaluateValidationGate(result.validation);
+  const canApply = canApplyAdaptation(result);
 
   return (
     <div className="stage-stack">
@@ -30,10 +32,11 @@ export function PatchStage({ state, onApply, onBack, onOpenFile }: PatchStagePro
             <Check size={20} />
           </span>
           <div>
-            <h3>回填事务已提交</h3>
+            <h3>补丁已应用到当前目标</h3>
             <p>
               已处理 {state.applyResult.appliedFiles.length} 个文件；检查点：
               <code>{state.applyResult.checkpointId}</code>
+              {state.applyResult.rollbackAvailable ? '（可通过命令恢复）' : '（不可恢复）'}
             </p>
           </div>
         </section>
@@ -41,19 +44,29 @@ export function PatchStage({ state, onApply, onBack, onOpenFile }: PatchStagePro
 
       <section className="card">
         <h3 className="section-title">
-          <ShieldCheck size={14} /> 契约校验
+          <ShieldCheck size={14} /> 验证证据
         </h3>
         <ul className="validation-list">
           {result.validation.map((item) => (
-            <li key={item.label} className={`validation is-${item.status}`}>
+            <li key={item.id} className={`validation is-${item.status}`}>
               {item.status === 'pass' ? <Check size={13} /> : <TriangleAlert size={13} />}
               <span>
-                <strong>{item.label}</strong>
-                <small>{item.detail}</small>
+                <strong>{item.label} {item.required ? '（必需）' : '（可选）'}</strong>
+                <small>{item.summary}</small>
+                {item.command ? <small>命令：<code>{item.command}</code></small> : null}
+                {item.failureReason ? <small>原因：{item.failureReason}</small> : null}
               </span>
             </li>
           ))}
         </ul>
+        <p className="muted-copy">
+          编译或集成编译通过仅表示相应工程检查通过，尚不证明业务行为、并发、超时或取消语义正确。
+        </p>
+        {!gate.allowed ? (
+          <p className="validation-blocker" role="alert">
+            写回已阻止：{gate.blockers.map((item) => item.label).join('、')} 尚未满足。
+          </p>
+        ) : null}
       </section>
 
       <section className="card">
@@ -83,7 +96,7 @@ export function PatchStage({ state, onApply, onBack, onOpenFile }: PatchStagePro
               <button
                 type="button"
                 className="text-button"
-                onClick={() => onOpenFile(file.path, 1)}
+                onClick={onOpenTarget}
               >
                 打开文件
               </button>
@@ -112,7 +125,8 @@ export function PatchStage({ state, onApply, onBack, onOpenFile }: PatchStagePro
             type="button"
             className="primary-action"
             onClick={onApply}
-            disabled={applying}
+            disabled={applying || !canApply}
+            title={canApply ? '应用已审阅、已验证的当前补丁' : '必需验证尚未通过或尚未验证，不能写回'}
           >
             {applying ? <span className="spinner" /> : <Check size={15} />}
             {applying ? '正在写入工作区…' : '应用补丁到工作区'}

@@ -1,6 +1,7 @@
 import type { FilePatch } from './backfill';
 import type { Language, ModuleTarget } from './module';
 import type { SearchCandidate } from './retrieval';
+import type { ValidationRecord } from './validation';
 
 export type AdaptationStrategy = 'translate' | 'bridge' | 'wrap' | 'reuse';
 
@@ -24,7 +25,7 @@ export interface AdaptationResult {
   targetLanguage: Language;
   generatedCode: string;
   interfaceMappings: InterfaceMapping[];
-  validation: Array<{ label: string; status: 'pass' | 'warn'; detail: string }>;
+  validation: ValidationRecord[];
   files: FilePatch[];
 }
 

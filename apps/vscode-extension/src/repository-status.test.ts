@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RepositoryStatus, ServiceStatus } from './vendor/contracts';
+import type { RepositoryStatus, ServiceStatus } from './ui-types';
 import { decorateRepositoryStatuses } from './repository-status';
 
 const baseStatuses: RepositoryStatus[] = [
@@ -23,23 +23,35 @@ const baseStatuses: RepositoryStatus[] = [
 
 describe('decorateRepositoryStatuses', () => {
   it('marks usable paths as service-managed when retrieval is connected', () => {
-    const serviceStatus: ServiceStatus = { retrieval: 'connected', adaptation: 'connected' };
+    const serviceStatus: ServiceStatus = {
+      retrieval: 'connected',
+      adaptation: 'connected',
+      executionMode: 'real',
+    };
     const decorated = decorateRepositoryStatuses(baseStatuses, serviceStatus);
     expect(decorated[0]).toMatchObject({
-      indexed: true,
+      indexed: false,
       stale: false,
-      message: '就绪 · 索引由检索服务管理',
+      message: '本地路径可读；检索范围由服务端已索引仓库决定',
     });
   });
 
   it('marks usable paths as demo mode without a retrieval service', () => {
-    const serviceStatus: ServiceStatus = { retrieval: 'mock', adaptation: 'mock' };
+    const serviceStatus: ServiceStatus = {
+      retrieval: 'demo',
+      adaptation: 'demo',
+      executionMode: 'guided-demo',
+    };
     const decorated = decorateRepositoryStatuses(baseStatuses, serviceStatus);
-    expect(decorated[0]?.message).toContain('演示模式');
+    expect(decorated[0]?.message).toContain('引导演示');
   });
 
   it('keeps unusable paths untouched', () => {
-    const serviceStatus: ServiceStatus = { retrieval: 'connected', adaptation: 'mock' };
+    const serviceStatus: ServiceStatus = {
+      retrieval: 'connected',
+      adaptation: 'error',
+      executionMode: 'real',
+    };
     const decorated = decorateRepositoryStatuses(baseStatuses, serviceStatus);
     expect(decorated[1]).toEqual(baseStatuses[1]);
   });

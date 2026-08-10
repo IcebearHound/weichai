@@ -1,0 +1,51 @@
+import { describe, expect, it } from 'vitest';
+import { isWebviewToHostMessage } from './messages';
+
+describe('Webview message boundary', () => {
+  it('accepts bounded intent messages', () => {
+    expect(
+      isWebviewToHostMessage({
+        type: 'START_SEARCH',
+        requirement: '迁移报价缓存',
+        topK: 4,
+        retrievalMode: 'hybrid',
+      }),
+    ).toBe(true);
+    expect(isWebviewToHostMessage({ type: 'SELECT_CANDIDATE', candidateId: 'java-quote-cache' })).toBe(true);
+    expect(isWebviewToHostMessage({ type: 'APPLY_CURRENT_RUN' })).toBe(true);
+  });
+
+  it('rejects a Webview-supplied target, patch, file path, or old protocol action', () => {
+    expect(
+      isWebviewToHostMessage({
+        type: 'START_SEARCH',
+        requirement: '',
+        topK: 4,
+        retrievalMode: 'hybrid',
+        request: { target: { path: '../../outside.cs' } },
+      }),
+    ).toBe(false);
+    expect(isWebviewToHostMessage({ type: 'APPLY_PATCHES', files: [] })).toBe(false);
+    expect(isWebviewToHostMessage({ type: 'OPEN_FILE', path: '/tmp/secret', line: 1 })).toBe(false);
+  });
+
+  it('rejects unbounded or malformed intent payloads', () => {
+    expect(
+      isWebviewToHostMessage({
+        type: 'START_SEARCH',
+        requirement: 'x'.repeat(8_001),
+        topK: 4,
+        retrievalMode: 'hybrid',
+      }),
+    ).toBe(false);
+    expect(
+      isWebviewToHostMessage({
+        type: 'START_SEARCH',
+        requirement: '',
+        topK: 11,
+        retrievalMode: 'hybrid',
+      }),
+    ).toBe(false);
+    expect(isWebviewToHostMessage({ type: 'SELECT_CANDIDATE', candidateId: '' })).toBe(false);
+  });
+});

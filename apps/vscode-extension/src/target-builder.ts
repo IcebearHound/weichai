@@ -1,4 +1,5 @@
-import type { Language, ModuleTarget } from './vendor/contracts';
+import type { Language, ModuleTarget } from '@forexplore/contracts';
+import path from 'node:path';
 
 const languageByLanguageId: Record<string, Language> = {
   typescript: 'TypeScript',
@@ -12,7 +13,7 @@ const languageByLanguageId: Record<string, Language> = {
   go: 'Go',
 };
 
-const supportedLanguageIds = new Set(Object.keys(languageByLanguageId));
+const supportedLanguageIds = new Set(['csharp']);
 
 export function languageFromLanguageId(languageId: string): Language | null {
   return languageByLanguageId[languageId.toLowerCase()] ?? null;
@@ -58,6 +59,8 @@ export interface EditorSelectionInput {
   selectedText: string;
   filePath: string;
   fileBaseName: string;
+  /** Root of the active editor's workspace folder. */
+  workspaceRoot: string;
   /** Zero-based line of the selection start. */
   startLine: number;
 }
@@ -70,7 +73,13 @@ const MAX_SIGNATURE_LENGTH = 240;
  */
 export function buildModuleTarget(input: EditorSelectionInput): ModuleTarget | null {
   const language = languageFromLanguageId(input.languageId);
-  if (!language) return null;
+  // The actual adaptation service is deliberately limited to Java → C#.
+  // The selected editor code is the C# target, not source code to translate.
+  if (language !== 'C#') return null;
+  const relativePath = path.relative(input.workspaceRoot, input.filePath);
+  if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+    return null;
+  }
 
   const firstLine = input.selectedText
     .split(/\r?\n/)
@@ -81,10 +90,10 @@ export function buildModuleTarget(input: EditorSelectionInput): ModuleTarget | n
   const line = input.startLine + 1;
 
   return {
-    id: `editor://${input.filePath}#L${line}`,
+    id: `workspace://${relativePath.replace(/\\/g, '/')}#L${line}`,
     name,
     kind: kindFromSignature(signature),
-    path: input.filePath,
+    path: relativePath.replace(/\\/g, '/'),
     language,
     signature,
     line,

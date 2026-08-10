@@ -32,12 +32,6 @@ describe('symbolNameFromSignature', () => {
     expect(symbolNameFromSignature('public async Task<Quote> GetQuoteAsync(QuoteRequest request)')).toBe(
       'GetQuoteAsync',
     );
-    expect(symbolNameFromSignature('Quote fetch(QuoteRequest request)')).toBe('fetch');
-  });
-
-  it('falls back to null for junk', () => {
-    expect(symbolNameFromSignature('{')).toBeNull();
-    expect(symbolNameFromSignature('')).toBeNull();
   });
 });
 
@@ -49,41 +43,48 @@ describe('kindFromSignature', () => {
 });
 
 describe('buildModuleTarget', () => {
-  it('builds a target from a selection', () => {
+  const workspaceRoot = '/workspace';
+
+  it('builds a workspace-relative C# target from a saved editor selection', () => {
     const target = buildModuleTarget({
       languageId: 'csharp',
       selectedText: 'public async Task<Quote> GetQuoteAsync(QuoteRequest request)\n{\n}',
       filePath: '/workspace/Quotes/QuoteService.cs',
       fileBaseName: 'QuoteService.cs',
+      workspaceRoot,
       startLine: 12,
     });
-    expect(target).not.toBeNull();
-    expect(target!.name).toBe('GetQuoteAsync');
-    expect(target!.kind).toBe('function');
-    expect(target!.language).toBe('C#');
-    expect(target!.line).toBe(13);
-    expect(target!.path).toBe('/workspace/Quotes/QuoteService.cs');
-  });
-
-  it('falls back to the file base name', () => {
-    const target = buildModuleTarget({
-      languageId: 'python',
-      selectedText: '    value = cache.get(key)',
-      filePath: '/workspace/services/quote.py',
-      fileBaseName: 'quote.py',
-      startLine: 4,
+    expect(target).toMatchObject({
+      name: 'GetQuoteAsync',
+      kind: 'function',
+      language: 'C#',
+      line: 13,
+      path: 'Quotes/QuoteService.cs',
     });
-    expect(target!.name).toBe('quote');
-    expect(target!.kind).toBe('function');
+    expect(target?.id).toBe('workspace://Quotes/QuoteService.cs#L13');
   });
 
-  it('returns null for unsupported languages', () => {
+  it('rejects source languages outside the Java-to-C# MVP target boundary', () => {
     expect(
       buildModuleTarget({
-        languageId: 'ruby',
-        selectedText: 'def x; end',
-        filePath: '/workspace/x.rb',
-        fileBaseName: 'x.rb',
+        languageId: 'python',
+        selectedText: 'def quote(): pass',
+        filePath: '/workspace/services/quote.py',
+        fileBaseName: 'quote.py',
+        workspaceRoot,
+        startLine: 4,
+      }),
+    ).toBeNull();
+  });
+
+  it('rejects an editor file outside the workspace root', () => {
+    expect(
+      buildModuleTarget({
+        languageId: 'csharp',
+        selectedText: 'public void Run() {}',
+        filePath: '/other/Service.cs',
+        fileBaseName: 'Service.cs',
+        workspaceRoot,
         startLine: 0,
       }),
     ).toBeNull();

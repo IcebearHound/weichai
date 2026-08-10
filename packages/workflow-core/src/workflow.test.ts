@@ -55,6 +55,9 @@ describe('workflowReducer', () => {
 
     state = workflowReducer(state, { type: 'SEARCH_SUCCESS', candidates: [candidate] });
     expect(state.stage).toBe('candidates');
+    expect(state.selectedCandidateId).toBeNull();
+
+    state = workflowReducer(state, { type: 'SELECT_CANDIDATE', candidateId: candidate.id });
     expect(state.selectedCandidateId).toBe(candidate.id);
 
     state = workflowReducer(state, { type: 'ADAPT_START' });
@@ -67,7 +70,11 @@ describe('workflowReducer', () => {
     state = workflowReducer(state, { type: 'APPLY_START' });
     state = workflowReducer(state, {
       type: 'APPLY_SUCCESS',
-      result: { appliedFiles: ['services/rate-quote.service.ts'], checkpointId: 'cp-1' },
+      result: {
+        appliedFiles: ['services/rate-quote.service.ts'],
+        checkpointId: 'cp-1',
+        rollbackAvailable: true,
+      },
     });
     expect(state.stage).toBe('complete');
     expect(state.applyResult?.checkpointId).toBe('cp-1');

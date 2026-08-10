@@ -33,6 +33,14 @@ describe('ForeXplore vertical workflow', () => {
       expect(search).toHaveBeenCalledWith(
         expect.objectContaining({ candidateLanguages: ['Java'] }),
       );
+      expect(screen.getByRole('button', { name: /QuoteCache\.getOrLoad/ })).toBeTruthy();
+      expect(
+        screen.queryByRole('button', { name: '使用此方案并生成适配' }),
+      ).toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /QuoteCache\.getOrLoad/ }));
+    await waitFor(() => {
       expect(
         (screen.getByRole('button', {
           name: '使用此方案并生成适配',
@@ -58,7 +66,7 @@ describe('ForeXplore vertical workflow', () => {
     });
   });
 
-  it('lets a user select a function, retrieve candidates, adapt and backfill', async () => {
+  it('lets a user select a function, retrieve candidates, adapt, and observes the write gate', async () => {
     const moduleTree = await workspaceModuleSymbols.loadTree(csharpWorkspaceId);
     render(<App ports={mockWorkflowPorts} moduleTree={moduleTree} />);
 
@@ -91,13 +99,10 @@ describe('ForeXplore vertical workflow', () => {
     fireEvent.click(screen.getByRole('button', { name: /使用此方案并生成适配/ }));
 
     await waitFor(() => {
-      expect(screen.getByText('接口校验与回填预览')).toBeTruthy();
+      expect(screen.getByText('验证证据与回填预览')).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: '确认并回填到模块' }));
-
-    await waitFor(() => {
-      expect(screen.getByText('回填事务已提交')).toBeTruthy();
-    });
+    const apply = screen.getByRole('button', { name: '必需验证未满足，禁止回填' });
+    expect((apply as HTMLButtonElement).disabled).toBe(true);
   });
 });

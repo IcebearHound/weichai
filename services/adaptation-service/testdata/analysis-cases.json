@@ -1,0 +1,44 @@
+[
+  {
+    "id": "direct-match",
+    "requirement": "Preserve the provider fallback behavior.",
+    "candidatePreview": "public Quote route(QuoteRequest request) { return providers.get(0).fetch(request); }",
+    "expectedApplicability": "direct",
+    "expectedStatus": "covered"
+  },
+  {
+    "id": "async-adaptation",
+    "requirement": "Keep the operation asynchronous and propagate cancellation.",
+    "candidatePreview": "public Quote route(QuoteRequest request) { return provider.fetch(request); }",
+    "expectedApplicability": "adapt",
+    "expectedStatus": "partial"
+  },
+  {
+    "id": "reference-only",
+    "requirement": "Use the existing cache and audit dependencies.",
+    "candidatePreview": "public String formatRate(double value) { return String.format(\"%f\", value); }",
+    "expectedApplicability": "reference",
+    "expectedStatus": "missing"
+  },
+  {
+    "id": "reject-conflicting",
+    "requirement": "Return a Quote and preserve the target method contract.",
+    "candidatePreview": "public static void route(String value) { System.exit(0); }",
+    "expectedApplicability": "reject",
+    "expectedStatus": "conflict"
+  },
+  {
+    "id": "missing-behavior",
+    "requirement": "Record every provider failure in the audit journal.",
+    "candidatePreview": "public Quote route(QuoteRequest request) { return provider.fetch(request); }",
+    "expectedApplicability": "adapt",
+    "expectedStatus": "missing"
+  },
+  {
+    "id": "dependency-conflict",
+    "requirement": "Use only dependencies available in the target project.",
+    "candidatePreview": "return ExternalQuoteClient.fetch(request);",
+    "expectedApplicability": "reject",
+    "expectedStatus": "conflict"
+  }
+]

@@ -1,4 +1,10 @@
-import type { AdaptationRequest, SearchCandidate } from "@forexplore/contracts";
+import { fileURLToPath } from "node:url";
+import type {
+  AnalysisReport,
+  AnalysisRequest,
+  AdaptationRequest,
+  SearchCandidate,
+} from "@forexplore/contracts";
 import { describe, expect, it } from "vitest";
 import { AdaptationAdapter, _buildFilePatch } from "./adaptation-adapter";
 
@@ -63,6 +69,128 @@ describe("AdaptationAdapter language gate", () => {
     await expect(adapter.adapt({ ...request, strategy: "wrap" })).rejects.toThrow(
       'AdaptationAdapter only supports the "translate" strategy; received "wrap".',
     );
+  });
+});
+
+describe("AdaptationAdapter analyzer-translator integration", () => {
+  const projectRoot = fileURLToPath(
+    new URL("../../../fixtures/target-system/forexplore-csharp-workspace", import.meta.url),
+  );
+  const integrationRequest: AdaptationRequest = {
+    ...request,
+    target: {
+      id: "get-quote-async-function",
+      name: "GetQuoteAsync",
+      kind: "function",
+      path: "src/Application/QuoteOrchestrationService.cs",
+      language: "C#",
+      signature: "Task<Quote> GetQuoteAsync(QuoteRequest request, CancellationToken cancellationToken)",
+      documentation: "Gets a quote through cache and provider fallback.",
+      line: 24,
+    },
+    candidate: {
+      ...javaCandidate,
+      title: "route",
+      signature: "public Quote route(QuoteRequest request)",
+      preview: "public Quote route(QuoteRequest request) { return provider.fetch(request); }",
+      dependencies: ["ProviderClient"],
+    },
+    requirement: "Preserve the asynchronous quote fallback contract.",
+  };
+  const analysisReport: AnalysisReport = {
+    schemaVersion: "1.0",
+    applicability: {
+      level: "adapt",
+      confidence: 0.86,
+      reasons: ["The candidate behavior maps to the target contract with async adaptation."],
+    },
+    behaviorMapping: [{
+      requirement: integrationRequest.requirement,
+      status: "partial",
+      candidateEvidence: ["provider.fetch(request)"],
+      targetAction: "Keep the target asynchronous boundary and existing provider dependency.",
+    }],
+    contractMapping: [{
+      source: "route",
+      target: "GetQuoteAsync",
+      action: "rename",
+      note: "Preserve the target method name and signature.",
+    }],
+    dependencyPlan: [{
+      sourceDependency: "ProviderClient",
+      targetDependency: "IQuoteProvider",
+      action: "adapt",
+    }],
+    implementationPlan: [
+      "Preserve the exact target signature.",
+      "Use the existing target provider dependency asynchronously.",
+    ],
+    risks: [],
+    assumptions: [],
+    unresolved: [],
+  };
+
+  it("collects real target context and passes the Analyzer report into Translator", async () => {
+    let analyzerRequest: AnalysisRequest | undefined;
+    const analyzer = {
+      async analyze(value: AnalysisRequest): Promise<AnalysisReport> {
+        analyzerRequest = value;
+        return analysisReport;
+      },
+    };
+    const generatedCode = `${integrationRequest.target.signature}\n{\n    throw new NotImplementedException();\n}`;
+    const modelBodies: Array<Record<string, unknown>> = [];
+    const translatorRequest = (async (_input: URL | RequestInfo, init?: RequestInit) => {
+      modelBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              schemaVersion: "1.0",
+              generatedCode,
+              interfaceMappings: analysisReport.contractMapping,
+              completedSteps: analysisReport.implementationPlan,
+              unresolved: [],
+            }),
+          },
+        }],
+      }), { status: 200 });
+    }) as typeof globalThis.fetch;
+    const unavailable = {
+      success: false,
+      errors: [".NET SDK not installed; test validator skipped compilation."],
+      output: "",
+    };
+    const adapter = new AdaptationAdapter({
+      apiKey: "test-key",
+      projectRoot,
+      analyzer,
+      translatorRequest,
+      validator: {
+        compileStandalone: () => unavailable,
+        compileIntegrated: () => unavailable,
+        isUnavailable: () => true,
+      },
+    });
+
+    const result = await adapter.adapt(integrationRequest);
+
+    expect(analyzerRequest?.targetContext.source.method).toContain("GetQuoteAsync");
+    expect(analyzerRequest?.targetContext.source.containingType).toContain(
+      "QuoteOrchestrationService",
+    );
+    expect(analyzerRequest?.candidate).toEqual(integrationRequest.candidate);
+    expect(modelBodies).toHaveLength(1);
+    const messages = modelBodies[0]?.messages as Array<{ content: string }>;
+    expect(messages[1]?.content).toContain("ANALYSIS_REPORT_JSON");
+    expect(messages[1]?.content).toContain("IQuoteProvider");
+    expect(result.generatedCode).toBe(generatedCode);
+    expect(result.interfaceMappings).toEqual(analysisReport.contractMapping);
+    expect(result.validation[0]).toEqual({
+      label: "Analyzer",
+      status: "pass",
+      detail: "adapt (86%)",
+    });
   });
 });
 

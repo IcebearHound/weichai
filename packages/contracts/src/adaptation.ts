@@ -15,7 +15,7 @@ export interface AdaptationRequest {
 export interface InterfaceMapping {
   source: string;
   target: string;
-  action: 'rename' | 'convert' | 'inject' | 'preserve';
+  action: ContractAction;
   note: string;
 }
 
@@ -26,4 +26,103 @@ export interface AdaptationResult {
   interfaceMappings: InterfaceMapping[];
   validation: Array<{ label: string; status: 'pass' | 'warn'; detail: string }>;
   files: FilePatch[];
+}
+
+/** Stable schema version shared by Analyzer and Translator. */
+export const analysisSchemaVersion = '1.0' as const;
+
+export type ApplicabilityLevel = 'direct' | 'adapt' | 'reference' | 'reject';
+export type BehaviorStatus = 'covered' | 'partial' | 'missing' | 'conflict';
+export type ContractAction = 'preserve' | 'rename' | 'convert' | 'inject' | 'replace';
+export type DependencyAction = 'reuse-existing' | 'adapt' | 'inline' | 'unresolved';
+
+export interface TargetDependencyContext {
+  name: string;
+  kind: 'field' | 'constructor' | 'signature' | 'invocation' | 'type';
+  declaration: string;
+  path?: string;
+  memberSignatures?: string[];
+}
+
+export interface RelatedTypeContext {
+  name: string;
+  kind: 'class' | 'record' | 'interface' | 'struct' | 'enum' | 'unknown';
+  path: string;
+  declaration: string;
+  source: string;
+}
+
+export interface CallerContext {
+  path: string;
+  line: number;
+  excerpt: string;
+}
+
+/**
+ * Facts collected from the target workspace. This intentionally contains no
+ * model judgement; it is the target-side input to Analyzer.
+ */
+export interface TargetModuleContext {
+  schemaVersion: typeof analysisSchemaVersion;
+  target: ModuleTarget;
+  source: {
+    namespace?: string;
+    usings: string[];
+    method: string;
+    containingType: string;
+    fields: string[];
+    constructor?: string;
+    relatedMembers: string[];
+  };
+  dependencies: TargetDependencyContext[];
+  relatedTypes: RelatedTypeContext[];
+  callers: CallerContext[];
+  constraints: string[];
+  collection: {
+    projectRoot: string;
+    targetFile: string;
+    maxChars: number;
+    actualChars: number;
+    truncated: boolean;
+    truncatedSections: string[];
+  };
+}
+
+export interface AnalysisRequest {
+  schemaVersion: typeof analysisSchemaVersion;
+  targetContext: TargetModuleContext;
+  candidate: SearchCandidate;
+  requirement: string;
+  immutableConstraints?: string[];
+  decisionNotes?: string;
+}
+
+export interface AnalysisReport {
+  schemaVersion: typeof analysisSchemaVersion;
+  applicability: {
+    level: ApplicabilityLevel;
+    confidence: number;
+    reasons: string[];
+  };
+  behaviorMapping: Array<{
+    requirement: string;
+    status: BehaviorStatus;
+    candidateEvidence: string[];
+    targetAction: string;
+  }>;
+  contractMapping: Array<{
+    source: string;
+    target: string;
+    action: ContractAction;
+    note: string;
+  }>;
+  dependencyPlan: Array<{
+    sourceDependency: string;
+    targetDependency?: string;
+    action: DependencyAction;
+  }>;
+  implementationPlan: string[];
+  risks: string[];
+  assumptions: string[];
+  unresolved: string[];
 }

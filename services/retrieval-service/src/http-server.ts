@@ -72,7 +72,6 @@ function isSearchRequest(value: unknown): value is SearchRequest {
     Number.isInteger(body.topK) &&
     Number(body.topK) >= 1 &&
     Number(body.topK) <= 50 &&
-    ['hybrid', 'semantic', 'structure'].includes(String(body.retrievalMode)) &&
     Array.isArray(body.repositoryScopes) &&
     body.repositoryScopes.every((scope) => typeof scope === 'string') &&
     (body.rerank === undefined || typeof body.rerank === 'boolean') &&

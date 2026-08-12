@@ -3,8 +3,9 @@
   "tasks": [
     {
       "label": "forexplore: build extension",
-      "type": "npm",
-      "script": "build",
+      "type": "process",
+      "command": "npm",
+      "args": ["run", "build"],
       "problemMatcher": [],
       "group": "build"
     }

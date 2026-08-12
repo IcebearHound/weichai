@@ -2,7 +2,6 @@ import type {
   AdaptationResult,
   ApplyResult,
   ModuleTarget,
-  RetrievalMode,
   SearchCandidate,
 } from '@forexplore/contracts';
 import type { RepositoryStatus, ServiceStatus } from '../ui-types';
@@ -13,8 +12,8 @@ export interface PanelInitPayload {
   workspaceRoot: string;
   repositoryStatuses: RepositoryStatus[];
   serviceStatus: ServiceStatus;
-  searchProvider: 'SeekDB' | 'Guided demo';
-  adaptationProvider: 'DeepSeek' | 'Guided demo';
+  searchProvider: 'SeekDB';
+  adaptationProvider: 'DeepSeek';
 }
 
 /** Messages the extension host posts into the Webview. */
@@ -37,7 +36,6 @@ export type WebviewToHostMessage =
       type: 'START_SEARCH';
       requirement: string;
       topK: number;
-      retrievalMode: RetrievalMode;
     }
   | { type: 'SELECT_CANDIDATE'; candidateId: string }
   | { type: 'START_ADAPT'; decisionNotes: string }
@@ -55,8 +53,6 @@ const hostMessageTypes = new Set<string>([
   'ERROR',
 ]);
 
-const retrievalModes = new Set<RetrievalMode>(['hybrid', 'semantic', 'structure']);
-
 /** Strictly validates every Webview payload before it enters the host. */
 export function isWebviewToHostMessage(value: unknown): value is WebviewToHostMessage {
   if (typeof value !== 'object' || value === null) return false;
@@ -69,15 +65,13 @@ export function isWebviewToHostMessage(value: unknown): value is WebviewToHostMe
       return hasOnlyKeys(message, ['type']);
     case 'START_SEARCH':
       return (
-        hasOnlyKeys(message, ['type', 'requirement', 'topK', 'retrievalMode']) &&
+        hasOnlyKeys(message, ['type', 'requirement', 'topK']) &&
         typeof message.requirement === 'string' &&
         message.requirement.length <= 8_000 &&
         Number.isInteger(message.topK) &&
         typeof message.topK === 'number' &&
         message.topK >= 1 &&
-        message.topK <= 10 &&
-        typeof message.retrievalMode === 'string' &&
-        retrievalModes.has(message.retrievalMode as RetrievalMode)
+        message.topK <= 10
       );
     case 'SELECT_CANDIDATE':
       return (

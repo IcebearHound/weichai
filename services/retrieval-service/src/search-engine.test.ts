@@ -34,7 +34,6 @@ const request: SearchRequest = {
   },
   requirement: 'add ttl cache and stale fallback',
   topK: 2,
-  retrievalMode: 'hybrid',
   repositoryScopes: ['configured-repositories', 'repo:demo/cache'],
 };
 
@@ -79,25 +78,6 @@ describe('SeekDbSearchEngine', () => {
       50,
     );
     expect(store.textSearch).toHaveBeenCalledOnce();
-  });
-
-  it('uses only full-text search for structure mode', async () => {
-    const store = fakeStore();
-    const provider: EmbeddingProvider = {
-      dimension: 3,
-      embed: vi.fn(async () => [[1, 0, 0]]),
-    };
-    const engine = new SeekDbSearchEngine(store, provider);
-
-    await engine.search({ ...request, retrievalMode: 'structure' });
-
-    expect(provider.embed).not.toHaveBeenCalled();
-    expect(store.semanticSearch).not.toHaveBeenCalled();
-    expect(store.textSearch).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ kind: 'function' }),
-      50,
-    );
   });
 
   it('pushes candidate language constraints to storage and rejects mismatched rows', async () => {

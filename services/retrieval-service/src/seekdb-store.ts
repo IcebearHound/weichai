@@ -88,10 +88,6 @@ function filterSql(filters: SearchFilters): { sql: string; parameters: string[] 
     clauses.push(`language IN (${filters.languages.map(() => '?').join(', ')})`);
     parameters.push(...filters.languages);
   }
-  if (filters.kind) {
-    clauses.push('kind = ?');
-    parameters.push(filters.kind);
-  }
   return {
     sql: clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '',
     parameters,

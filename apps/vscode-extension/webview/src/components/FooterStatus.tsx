@@ -43,7 +43,6 @@ export function FooterStatus({
 
 function serviceLabel(availability: ServiceConnection | undefined): string {
   if (availability === 'connected') return '已连接';
-  if (availability === 'demo') return '引导演示';
   if (availability === 'unconfigured') return '未配置';
   if (availability === 'error') return '异常';
   return '未知';
@@ -51,7 +50,6 @@ function serviceLabel(availability: ServiceConnection | undefined): string {
 
 function serviceDot(availability: ServiceConnection | undefined): string {
   if (availability === 'connected') return 'status-dot is-connected';
-  if (availability === 'demo') return 'status-dot is-demo';
   if (availability === 'unconfigured') return 'status-dot is-unconfigured';
   if (availability === 'error') return 'status-dot is-error';
   return 'status-dot is-unconfigured';

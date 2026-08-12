@@ -13,7 +13,6 @@ const request: SearchRequest = {
   },
   requirement: 'add caching and stale fallback',
   topK: 3,
-  retrievalMode: 'hybrid',
   repositoryScopes: [],
 };
 

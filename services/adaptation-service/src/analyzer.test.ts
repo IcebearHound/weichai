@@ -130,6 +130,44 @@ describe("AnalyzerAgent", () => {
     expect(parseAnalysisReport(`Here is the report:\n\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\``)).toEqual(value);
   });
 
+  it("feeds schema validation feedback back to the Analyzer before failing", async () => {
+    const invalid = report("adapt", "partial");
+    invalid.contractMapping.push({
+      source: "Audit record",
+      target: "IAuditJournal",
+      action: "adapt" as never,
+      note: "Use the target journal dependency.",
+    });
+    const corrected = report("adapt", "partial");
+    const calls: Array<readonly AnalyzerMessage[]> = [];
+    const complete: AnalyzerModelClient["complete"] = async (messages) => {
+      calls.push(messages);
+      return JSON.stringify(calls.length === 1 ? invalid : corrected);
+    };
+    const agent = new AnalyzerAgent({ client: { complete } });
+
+    await expect(agent.analyze(request(cases[0]))).resolves.toEqual(corrected);
+    expect(calls).toHaveLength(2);
+
+    const repairMessages = calls[1] ?? [];
+    expect(repairMessages.map((message) => message.role)).toEqual(["system", "user", "user"]);
+    expect(repairMessages[2]?.content).toContain("contractMapping[1].action");
+    expect(repairMessages[2]?.content).toContain("preserve | rename | convert | inject | replace");
+    expect(repairMessages[2]?.content).toContain('"action":"adapt"');
+  });
+
+  it("stops after two failed schema repairs", async () => {
+    const invalid = report("adapt", "partial");
+    invalid.contractMapping[0].action = "adapt" as never;
+    const complete = vi.fn(async () => JSON.stringify(invalid));
+    const agent = new AnalyzerAgent({ client: { complete } });
+
+    await expect(agent.analyze(request(cases[0]))).rejects.toThrow(
+      "contractMapping[0].action must be one of",
+    );
+    expect(complete).toHaveBeenCalledTimes(3);
+  });
+
   it("rejects malformed and structurally invalid reports", () => {
     expect(() => parseAnalysisReport("not json")).toThrow("does not contain a JSON object");
     expect(() => parseAnalysisReport(JSON.stringify({ schemaVersion: "1.0" }))).toThrow("applicability");

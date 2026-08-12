@@ -14,7 +14,6 @@ const request: SearchRequest = {
   },
   requirement: 'load a quote from cache',
   topK: 2,
-  retrievalMode: 'hybrid',
   repositoryScopes: [],
 };
 

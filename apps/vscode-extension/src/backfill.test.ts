@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import path from 'node:path';
 import { applyHunks, canonicalWorkspacePath, parseHunkHeader, resolvePatchPath } from './diff-apply';
 
 describe('parseHunkHeader', () => {
@@ -56,7 +57,7 @@ describe('resolvePatchPath', () => {
   const root = '/Users/origin/projects/workspace';
 
   it('anchors a relative path to the workspace root', () => {
-    expect(resolvePatchPath(root, 'src/service.cs')).toBe(`${root}/src/service.cs`);
+    expect(resolvePatchPath(root, 'src/service.cs')).toBe(path.join(path.resolve(root), 'src/service.cs'));
     expect(canonicalWorkspacePath(root, 'src/service.cs')).toBe('src/service.cs');
   });
 

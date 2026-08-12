@@ -4,15 +4,12 @@ This service is the production `CodeSearchPort` boundary for ForeXplore. It
 stores code-symbol documents in [SeekDB](https://github.com/oceanbase/seekdb)
 and exposes the stable workflow search contract over HTTP.
 
-## Retrieval modes
+## Hybrid retrieval
 
-- `semantic`: HNSW cosine-distance search over dense embeddings.
-- `structure`: SeekDB full-text search, constrained to the target symbol kind.
-- `hybrid`: parallel vector and full-text queries followed by weighted
-  reciprocal-rank fusion and contract-aware reranking.
-
-Each mode retrieves a broader, bounded candidate pool before final reranking,
-which keeps small result sets useful when the index contains many repositories.
+The service always runs vector and full-text queries in parallel, fuses them with
+weighted reciprocal-rank fusion, and applies the deterministic contract-aware
+score. It retrieves a broader, bounded candidate pool before returning the
+requested result count. Optional LLM reranking can run after this hybrid recall.
 
 The schema uses SeekDB's `VECTOR`, `VECTOR INDEX ... TYPE=hnsw`,
 `FULLTEXT INDEX`, and `ORDER BY cosine_distance(...) APPROXIMATE` features.
@@ -152,7 +149,6 @@ searchable on supported SeekDB versions.
 | `target` | `ModuleTarget` | The module to find candidates for. |
 | `requirement` | `string` | Natural-language context; `""` searches by target metadata. |
 | `topK` | `number` | Desired result count (1–50). Internally expanded for recall. |
-| `retrievalMode` | `"hybrid" \| "semantic" \| "structure"` | Selects the retrieval strategy. |
 | `repositoryScopes` | `string[]` | `"owner/repo"` filters; empty = all indexed repos. |
 | `candidateLanguages` | `Language[]?` | Hard source-language constraint. |
 | `rerank` | `boolean?` | Set to `false` to skip LLM reranking for this request. |

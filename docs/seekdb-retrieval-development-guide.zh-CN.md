@@ -20,7 +20,7 @@
 4. 提供 Java→C# LLM 翻译、独立编译、自动修复和回填 Adapter。
 
 Web 运行时的适配和回填仍默认使用 Mock Adapter。`adaptation-service` 已提供真实
-Adapter，但尚未在 `apps/workflow-web/src/main.tsx` 组合。只有配置了
+Adapter，但尚未在 `web/src/main.tsx` 组合。只有配置了
 `VITE_RETRIEVAL_API_URL`，前端才会把 `CodeSearchPort` 替换为 SeekDB HTTP
 Adapter；未配置时行为与原项目一致。
 
@@ -75,7 +75,7 @@ fixtures/target-system/forexplore-csharp-workspace
 ModuleSymbolPort
             |
             v
-apps/workflow-web
+web
   |  未配置 VITE_RETRIEVAL_API_URL -> Mock CodeSearchPort
   |
   +-- 已配置 VITE_RETRIEVAL_API_URL
@@ -120,7 +120,7 @@ adaptation-service -> workflow-core + contracts + DeepSeek/.NET
 ```
 
 生产代码没有反向依赖 Mock Adapter。前端的运行时组合入口只有
-`apps/workflow-web/src/main.tsx`。
+`web/src/main.tsx`。
 
 ## 4. 代码目录与职责
 
@@ -149,11 +149,11 @@ type ImplementationStatus = 'implemented' | 'unimplemented';
 | `packages/workspace-adapters/src/csharp-workspace.ts` | 当前 C# fixture 的静态工作区树 |
 | `packages/workspace-adapters/src/static-module-symbol.adapter.ts` | 实现 `ModuleSymbolPort.loadTree/resolveTarget` |
 | `packages/workspace-adapters/src/index.ts` | 导出当前 workspace ID 与 Adapter 实例 |
-| `apps/workflow-web/build/target-module-tree.ts` | 扫描 TypeScript 文件，通过 Babel AST 提取 class、方法和顶层 function |
-| `apps/workflow-web/build/target-module-tree.test.ts` | 验证符号、签名、行号和未实现状态 |
-| `apps/workflow-web/vite.config.ts` | 注册 `virtual:target-module-tree`，监听目标工程源码变化并触发页面重载 |
-| `apps/workflow-web/src/main.tsx` | 通过 `workspaceModuleSymbols.loadTree()` 加载 C# 树并注入 `App` |
-| `apps/workflow-web/src/features/target-selection/ModuleTree.tsx` | 展示真实目录和符号节点，只允许选择 class/function |
+| `web/build/target-module-tree.ts` | 扫描 TypeScript 文件，通过 Babel AST 提取 class、方法和顶层 function |
+| `web/build/target-module-tree.test.ts` | 验证符号、签名、行号和未实现状态 |
+| `web/vite.config.ts` | 注册 `virtual:target-module-tree`，监听目标工程源码变化并触发页面重载 |
+| `web/src/main.tsx` | 通过 `workspaceModuleSymbols.loadTree()` 加载 C# 树并注入 `App` |
+| `web/src/features/target-selection/ModuleTree.tsx` | 展示真实目录和符号节点，只允许选择 class/function |
 
 当前运行时流程：
 
@@ -176,7 +176,7 @@ fixture 的声明、路径或行号后，需要同步更新 `csharp-workspace.ts
 - Windows 路径统一转换为 `/` 后再做监听范围判断。
 
 要切换当前运行时目标，应提供新的 `ModuleSymbolPort` Adapter，并在
-`apps/workflow-web/src/main.tsx` 替换：
+`web/src/main.tsx` 替换：
 
 ```ts
 const moduleTree = await workspaceModuleSymbols.loadTree(csharpWorkspaceId);
@@ -269,7 +269,6 @@ interface SearchRequest {
   target: ModuleTarget;
   requirement: string;
   topK: number;
-  retrievalMode: 'hybrid' | 'semantic' | 'structure';
   repositoryScopes: string[];
   candidateLanguages?: Language[];
 }
@@ -585,8 +584,8 @@ docker compose -f services/retrieval-service/docker-compose.yml ps
 ```powershell
 Copy-Item services/retrieval-service/.env.example `
   services/retrieval-service/.env
-Copy-Item apps/workflow-web/.env.example `
-  apps/workflow-web/.env
+Copy-Item web/.env.example `
+  web/.env
 ```
 
 默认前端配置：
@@ -650,7 +649,7 @@ Invoke-RestMethod http://127.0.0.1:8787/health
 
 如果前端显示 `Mock Search Port`，优先检查：
 
-1. `apps/workflow-web/.env` 是否存在。
+1. `web/.env` 是否存在。
 2. `VITE_RETRIEVAL_API_URL` 是否正确。
 3. 修改 `.env` 后是否重启了 Vite。
 4. 检索服务是否监听 `8787`。
@@ -670,7 +669,6 @@ $body = @{
   }
   requirement = "批量结算，保证幂等并处理失败重试"
   topK = 5
-  retrievalMode = "hybrid"
   repositoryScopes = @("configured-repositories")
   candidateLanguages = @("Java")
 } | ConvertTo-Json -Depth 5
@@ -863,19 +861,19 @@ packages/seekdb-adapter/src/seekdb-code-search.test.ts
 ### Web 和工作区模块树
 
 ```text
-apps/workflow-web/.env.example
-apps/workflow-web/build/target-module-tree.ts
-apps/workflow-web/build/target-module-tree.test.ts
-apps/workflow-web/package.json
-apps/workflow-web/src/App.tsx
-apps/workflow-web/src/App.test.tsx
-apps/workflow-web/src/main.tsx
-apps/workflow-web/src/styles.css
-apps/workflow-web/src/vite-env.d.ts
-apps/workflow-web/src/features/candidate-selection/CandidateBrowser.tsx
-apps/workflow-web/src/features/target-selection/ModuleTree.tsx
-apps/workflow-web/tsconfig.node.json
-apps/workflow-web/vite.config.ts
+web/.env.example
+web/build/target-module-tree.ts
+web/build/target-module-tree.test.ts
+web/package.json
+web/src/App.tsx
+web/src/App.test.tsx
+web/src/main.tsx
+web/src/styles.css
+web/src/vite-env.d.ts
+web/src/features/candidate-selection/CandidateBrowser.tsx
+web/src/features/target-selection/ModuleTree.tsx
+web/tsconfig.node.json
+web/vite.config.ts
 ```
 
 ### Code Indexer

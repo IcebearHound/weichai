@@ -42,7 +42,7 @@ describe('target module tree scanner', () => {
 
   it('loads SettlementService from the real target workspace', async () => {
     const workspaceRoot = fileURLToPath(
-      new URL('../../../fixtures/target-system/currency-platform', import.meta.url),
+  new URL('../../fixtures/target-system/currency-platform', import.meta.url),
     );
     const tree = await scanTargetModuleTree(path.resolve(workspaceRoot));
     const nodes = flatten(tree);

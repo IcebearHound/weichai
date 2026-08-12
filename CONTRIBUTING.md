@@ -2,7 +2,8 @@
 
 Keep changes inside the narrowest owning module:
 
-- UI and interaction changes belong in `apps/workflow-web`.
+- VS Code UI and interaction changes belong in `apps/vscode-extension`; the
+  standalone prototype belongs in `web`.
 - shared data shapes belong in `packages/contracts`.
 - workflow sequencing and ports belong in `packages/workflow-core`.
 - demonstration behavior belongs in `packages/mock-adapters`.

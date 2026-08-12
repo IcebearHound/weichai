@@ -34,10 +34,12 @@ import {
   compileIntegrated,
   compileStandalone,
   isCompilerUnavailable,
+  resolveProjectTargetFile,
   type CompileResult,
 } from "./compiler";
 
 const MAX_RETRIES = 3;
+const STANDALONE_CLASS_NAME = "ForeXploreStandalone";
 
 export interface AdaptationAdapterOptions {
   /** DeepSeek API key */
@@ -138,7 +140,7 @@ export class AdaptationAdapter implements CodeAdaptationPort {
     let csharpCode = translationResult.generatedCode;
 
     // ===== Step 2: 编译 + 自动修复 =====
-    let standaloneResult = this.#validator.compileStandalone(csharpCode, request.target.name);
+    let standaloneResult = this.#validator.compileStandalone(csharpCode, STANDALONE_CLASS_NAME);
     let integratedResult = this.#skeletonProjectPath
       ? this.#validator.compileIntegrated(
           csharpCode,
@@ -164,7 +166,7 @@ export class AdaptationAdapter implements CodeAdaptationPort {
         signal,
       );
       csharpCode = translationResult.generatedCode;
-      standaloneResult = this.#validator.compileStandalone(csharpCode, request.target.name);
+      standaloneResult = this.#validator.compileStandalone(csharpCode, STANDALONE_CLASS_NAME);
       integratedResult = this.#skeletonProjectPath
         ? this.#validator.compileIntegrated(
             csharpCode,
@@ -206,11 +208,9 @@ export class AdaptationAdapter implements CodeAdaptationPort {
             analysisReport.applicability.confidence * 100,
           )}%)`,
         },
-        compileValidation(
-          "standalone-compile",
-          "独立编译",
+        standaloneCompileValidation(
           standaloneResult,
-          true,
+          integratedResult,
           this.#validator.isUnavailable(standaloneResult),
         ),
         integratedResult
@@ -306,14 +306,15 @@ function readOriginalIfAvailable(
     return { content: null, reason: "配置的目标工程根目录不存在。" };
   }
   const root = realpathSync(resolve(projectRoot));
-  const fullPath = resolve(root, filePath);
-  if (!isInsideRoot(root, fullPath)) {
-    return { content: null, reason: "目标文件路径超出配置的目标工程根目录。" };
-  }
-  if (!existsSync(fullPath)) {
+  const resolvedTarget = resolveProjectTargetFile(root, filePath);
+  if (!resolvedTarget) {
+    const fullPath = resolve(root, filePath);
+    if (!isInsideRoot(root, fullPath)) {
+      return { content: null, reason: "目标文件路径超出配置的目标工程根目录。" };
+    }
     return { content: null, reason: "目标文件不存在，无法生成受保护的定点补丁。" };
   }
-  const realFile = realpathSync(fullPath);
+  const realFile = realpathSync(resolvedTarget.sourcePath);
   if (!isInsideRoot(root, realFile)) {
     return { content: null, reason: "目标文件经符号链接解析后超出配置的目标工程根目录。" };
   }
@@ -403,6 +404,39 @@ function compileValidation(
       : result.errors.slice(0, 3).join("; "),
     failureReason: result.success ? undefined : unavailable ? "compiler-unavailable" : "compiler-failed",
   };
+}
+
+/**
+ * A minimal wrapper cannot resolve members supplied by the real target type.
+ * Once the complete skeleton project has compiled, that project result is the
+ * authoritative compilation evidence and a wrapper-only error is diagnostic.
+ */
+function standaloneCompileValidation(
+  result: CompileResult,
+  integratedResult: CompileResult | null,
+  unavailable: boolean,
+): ValidationRecord {
+  const required = integratedResult === null;
+  const record = compileValidation(
+    "standalone-compile",
+    "独立编译",
+    result,
+    required,
+    unavailable,
+  );
+
+  if (integratedResult?.success && !result.success) {
+    return {
+      ...record,
+      status: "warn",
+      summary:
+        `最小 wrapper 未包含目标类字段或项目依赖：${result.errors.slice(0, 3).join("; ")}` +
+        " 目标工程集成编译已通过，集成结果为权威编译证据。",
+      failureReason: undefined,
+    };
+  }
+
+  return record;
 }
 
 function isSafeRelativePath(filePath: string): boolean {

@@ -3,7 +3,7 @@
 ## Dependency direction
 
 ```text
-apps/workflow-web
+web
     |            |                 |                 |
     v            v                 v                 v
 workflow-core <- mock-adapters  workspace-adapters  seekdb-adapter
@@ -21,7 +21,9 @@ forwards user decisions.
 
 ## Composition root
 
-`apps/workflow-web/src/main.tsx` is the only runtime composition root. It selects
+`apps/vscode-extension` is the primary runtime composition root. It owns the
+editor target, trusted write-back, and calls to the local services.
+`web/src/main.tsx` is a standalone prototype composition root. It selects
 the concrete workflow adapters and loads the module tree through
 `ModuleSymbolPort`, then injects both into `App`. Feature components depend only
 on contracts and workflow-core, so replacing the fixture workspace provider or
@@ -33,7 +35,8 @@ the SeekDB HTTP adapter.
 
 | Path | Responsibility |
 | --- | --- |
-| `apps/workflow-web` | React presentation and interaction |
+| `apps/vscode-extension` | Primary VS Code extension application and trusted write-back host |
+| `web` | Standalone React workflow prototype |
 | `packages/contracts` | Cross-module request and result types |
 | `packages/workflow-core` | Workflow state, transitions, and ports |
 | `packages/workspace-adapters` | Workspace discovery and module-symbol implementations |

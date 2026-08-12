@@ -1,13 +1,7 @@
 import { RefreshCw, Search } from 'lucide-react';
-import type { ModuleTarget, RetrievalMode } from '@forexplore/contracts';
+import type { ModuleTarget } from '@forexplore/contracts';
 import type { WorkflowEvent, WorkflowState } from '@forexplore/workflow-core';
 import type { RepositoryStatus } from '../../../src/ui-types';
-
-const retrievalOptions: Array<{ id: RetrievalMode; label: string; detail: string }> = [
-  { id: 'hybrid', label: '混合', detail: '语义 + 结构' },
-  { id: 'semantic', label: '语义', detail: '实现意图' },
-  { id: 'structure', label: '树级', detail: '符号结构' },
-];
 
 interface RequirementStageProps {
   state: WorkflowState;
@@ -82,20 +76,7 @@ export function RequirementStage({
 
       <section className="card">
         <div className="card-heading">
-          <span>检索配置</span>
-        </div>
-        <div className="segmented">
-          {retrievalOptions.map((option) => (
-            <button
-              type="button"
-              key={option.id}
-              className={state.retrievalMode === option.id ? 'is-active' : ''}
-              onClick={() => dispatch({ type: 'SET_RETRIEVAL_MODE', value: option.id })}
-            >
-              <strong>{option.label}</strong>
-              <span>{option.detail}</span>
-            </button>
-          ))}
+          <span>混合检索</span>
         </div>
         <label className="range-field">
           <span>
@@ -127,7 +108,7 @@ export function RequirementStage({
         </div>
         {repositoryStatuses.length === 0 ? (
           <p className="muted-copy">
-            未配置本地路径。真实模式使用服务端已有索引；引导演示使用内置样例。
+            未配置本地路径。检索范围由真实服务端已有索引决定。
           </p>
         ) : (
           <ul className="repository-list">

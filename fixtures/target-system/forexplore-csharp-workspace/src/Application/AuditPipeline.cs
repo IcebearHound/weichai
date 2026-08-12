@@ -13,9 +13,9 @@ public sealed class AuditPipeline
     public AuditPipeline(IAuditJournal journal) { this.journal = journal; }
     // REQ: Sequence allocation and persistence are one observable operation to callers.
     /// <summary>Appends an audit entry and returns its durable sequence number.</summary>
-    public ValueTask<long> AppendAsync(string action, string subject, string payload, CancellationToken cancellationToken)
+public ValueTask<long> AppendAsync(string action, string subject, string payload, CancellationToken cancellationToken)
     {
-        throw new NotImplementedException("Translation exercise: implement canonical hash-chain append");
+        return journal.AppendAsync(action, subject, payload, cancellationToken);
     }
     // REQ: Return false with diagnostics captured by the journal adapter when a link is broken.
     /// <summary>Verifies the integrity of the persisted audit chain.</summary>

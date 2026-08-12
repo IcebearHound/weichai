@@ -36,16 +36,6 @@ describe('decorateRepositoryStatuses', () => {
     });
   });
 
-  it('marks usable paths as demo mode without a retrieval service', () => {
-    const serviceStatus: ServiceStatus = {
-      retrieval: 'demo',
-      adaptation: 'demo',
-      executionMode: 'guided-demo',
-    };
-    const decorated = decorateRepositoryStatuses(baseStatuses, serviceStatus);
-    expect(decorated[0]?.message).toContain('引导演示');
-  });
-
   it('keeps unusable paths untouched', () => {
     const serviceStatus: ServiceStatus = {
       retrieval: 'connected',

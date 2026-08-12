@@ -125,5 +125,10 @@ export interface AnalysisReport {
   implementationPlan: string[];
   risks: string[];
   assumptions: string[];
+  /**
+   * Open questions for human review. These do not block translation by
+   * themselves; hard dependency blockers belong in dependencyPlan with the
+   * `unresolved` action.
+   */
   unresolved: string[];
 }

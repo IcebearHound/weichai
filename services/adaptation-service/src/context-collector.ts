@@ -4,7 +4,7 @@ import {
   readFileSync,
   statSync,
 } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import type {
   CallerContext,
   ModuleTarget,
@@ -591,12 +591,39 @@ function applyBudget(context: TargetModuleContext, maxChars: number): void {
 }
 
 function resolveInsideRoot(root: string, path: string): string {
-  const resolved = resolve(root, path);
-  const relativePath = relative(root, resolved);
-  if (!relativePath || relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+  const normalizedPath = path.replace(/\\/g, "/");
+  const segments = normalizedPath.split("/");
+  if (isAbsolute(path) || segments.includes("..")) {
     throw new Error(`Target path must stay inside the project root: ${path}`);
   }
-  return resolved;
+
+  const directPath = resolve(root, normalizedPath);
+  if (isInsideRoot(root, directPath) && existsSync(directPath)) {
+    return directPath;
+  }
+
+  // VS Code can report a workspace-relative path prefixed by the project
+  // folder (for example, `repo/.../forexplore-csharp-workspace/src/...`).
+  // Accept that form only by stripping the exact configured root directory.
+  const rootNameIndex = segments.indexOf(basename(root));
+  if (rootNameIndex >= 0 && rootNameIndex < segments.length - 1) {
+    const projectRelativePath = segments.slice(rootNameIndex + 1).join("/");
+    const resolved = resolve(root, projectRelativePath);
+    if (isInsideRoot(root, resolved)) return resolved;
+  }
+
+  if (!isInsideRoot(root, directPath)) {
+    throw new Error(`Target path must stay inside the project root: ${path}`);
+  }
+  return directPath;
+}
+
+function isInsideRoot(root: string, candidate: string): boolean {
+  const relativePath = relative(root, candidate);
+  return Boolean(relativePath) &&
+    relativePath !== ".." &&
+    !relativePath.startsWith(`..${sep}`) &&
+    !isAbsolute(relativePath);
 }
 
 function toProjectRelativePath(root: string, path: string): string {

@@ -8,7 +8,6 @@ describe('Webview message boundary', () => {
         type: 'START_SEARCH',
         requirement: '迁移报价缓存',
         topK: 4,
-        retrievalMode: 'hybrid',
       }),
     ).toBe(true);
     expect(isWebviewToHostMessage({ type: 'SELECT_CANDIDATE', candidateId: 'java-quote-cache' })).toBe(true);
@@ -21,7 +20,6 @@ describe('Webview message boundary', () => {
         type: 'START_SEARCH',
         requirement: '',
         topK: 4,
-        retrievalMode: 'hybrid',
         request: { target: { path: '../../outside.cs' } },
       }),
     ).toBe(false);
@@ -35,7 +33,6 @@ describe('Webview message boundary', () => {
         type: 'START_SEARCH',
         requirement: 'x'.repeat(8_001),
         topK: 4,
-        retrievalMode: 'hybrid',
       }),
     ).toBe(false);
     expect(
@@ -43,7 +40,6 @@ describe('Webview message boundary', () => {
         type: 'START_SEARCH',
         requirement: '',
         topK: 11,
-        retrievalMode: 'hybrid',
       }),
     ).toBe(false);
     expect(isWebviewToHostMessage({ type: 'SELECT_CANDIDATE', candidateId: '' })).toBe(false);

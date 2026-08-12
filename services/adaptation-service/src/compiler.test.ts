@@ -1,12 +1,35 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { compileIntegrated, compilerInternals } from "./compiler";
 
-const skeletonProjectPath = new URL(
-  "../../../fixtures/target-system/forexplore-csharp-workspace",
-  import.meta.url,
-).pathname;
+const skeletonProjectPath = fileURLToPath(
+  new URL("../../../fixtures/target-system/forexplore-csharp-workspace", import.meta.url),
+);
 
 describe("integrated compiler source replacement", () => {
+  it("adds framework usings without using the target method as the wrapper type", () => {
+    const source = compilerInternals.buildWrapperSource(
+      "public ValueTask<long> AppendAsync(CancellationToken cancellationToken) { return ValueTask.FromResult(1L); }",
+      "ForeXploreStandalone",
+    );
+
+    expect(source).toContain("using System.Threading;");
+    expect(source).toContain("using System.Threading.Tasks;");
+    expect(source).toContain("public class ForeXploreStandalone");
+    expect(source).not.toContain("public class AppendAsync");
+  });
+
+  it("resolves paths prefixed by the skeleton project directory", () => {
+    const resolved = compilerInternals.resolveProjectTargetFile(
+      skeletonProjectPath,
+      "weichai/fixtures/target-system/forexplore-csharp-workspace/src/Application/AuditPipeline.cs",
+    );
+
+    expect(resolved?.relativePath.replace(/\\/g, "/")).toBe(
+      "src/Application/AuditPipeline.cs",
+    );
+  });
+
   it("replaces only the selected method and keeps the surrounding class", () => {
     const source = `public sealed class Quotes
 {

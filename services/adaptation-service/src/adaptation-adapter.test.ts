@@ -7,6 +7,7 @@ import type {
 } from "@forexplore/contracts";
 import { describe, expect, it } from "vitest";
 import { AdaptationAdapter, _buildFilePatch } from "./adaptation-adapter";
+import type { CompileResult } from "./compiler";
 
 const javaCandidate: SearchCandidate = {
   id: "java-candidate",
@@ -193,6 +194,55 @@ describe("AdaptationAdapter analyzer-translator integration", () => {
       required: true,
       summary: "adapt (86%)",
     });
+  });
+
+  it("uses integrated compilation as the required gate when the standalone wrapper lacks target fields", async () => {
+    const analyzer = {
+      async analyze(): Promise<AnalysisReport> {
+        return analysisReport;
+      },
+    };
+    const generatedCode = `${integrationRequest.target.signature}\n{\n    return await cache.GetOrLoadAsync(request, token => FetchWithFallbackAsync(request, token), cancellationToken);\n}`;
+    const translatorRequest = (async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            schemaVersion: "1.0",
+            generatedCode,
+            interfaceMappings: analysisReport.contractMapping,
+            completedSteps: analysisReport.implementationPlan,
+            unresolved: [],
+          }),
+        },
+      }],
+    }), { status: 200 })) as typeof globalThis.fetch;
+    const standaloneFailure: CompileResult = {
+      success: false,
+      errors: ['The name "cache" does not exist in the current context.'],
+      output: "",
+    };
+    const integratedSuccess: CompileResult = { success: true, errors: [], output: "" };
+    const adapter = new AdaptationAdapter({
+      apiKey: "test-key",
+      projectRoot,
+      skeletonProjectPath: projectRoot,
+      analyzer,
+      translatorRequest,
+      validator: {
+        compileStandalone: () => standaloneFailure,
+        compileIntegrated: () => integratedSuccess,
+        isUnavailable: () => false,
+      },
+    });
+
+    const result = await adapter.adapt(integrationRequest);
+    const standalone = result.validation.find((item) => item.id === "standalone-compile");
+    const integrated = result.validation.find((item) => item.id === "integrated-compile");
+
+    expect(standalone).toMatchObject({ status: "warn", required: false });
+    expect(standalone?.summary).toContain("集成结果为权威编译证据");
+    expect(integrated).toMatchObject({ status: "pass", required: true });
+    expect(result.files).toHaveLength(1);
   });
 });
 

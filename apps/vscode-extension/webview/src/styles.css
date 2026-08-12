@@ -337,42 +337,6 @@ select:disabled {
   font-size: 11px;
 }
 
-/* Segmented retrieval modes */
-
-.segmented {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
-  margin-bottom: 10px;
-}
-
-.segmented button {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 7px 6px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-}
-
-.segmented button strong {
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.segmented button span {
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.segmented button.is-active {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
 .range-field input[type='range'] {
   accent-color: var(--accent);
 }
@@ -989,10 +953,6 @@ button:disabled {
 
 .status-dot.is-connected::before {
   background: var(--ok);
-}
-
-.status-dot.is-demo::before {
-  background: var(--warning);
 }
 
 .status-dot.is-unconfigured::before {

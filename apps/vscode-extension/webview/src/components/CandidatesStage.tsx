@@ -5,7 +5,7 @@ import { selectedCandidate } from '@forexplore/workflow-core';
 interface CandidatesStageProps {
   state: WorkflowState;
   dispatch: React.Dispatch<WorkflowEvent>;
-  adaptationProvider: 'DeepSeek' | 'Guided demo';
+  adaptationProvider: 'DeepSeek';
   onSelectCandidate: (candidateId: string) => void;
   onAdapt: () => void;
 }
@@ -100,7 +100,7 @@ export function CandidatesStage({
           <div className="decision-static">
             <span>适配方式</span>
             <strong>translate · Java → C#</strong>
-            <small>{adaptationProvider === 'Guided demo' ? '引导演示：仅预览，不可写回。' : '真实服务：仅支持此语言对和策略。'}</small>
+            <small>真实服务：仅支持 Java → C# 和 translate 策略。</small>
           </div>
           <label>
             <span>人工备注 / 额外约束</span>

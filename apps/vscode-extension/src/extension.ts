@@ -76,17 +76,11 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     }),
     vscode.commands.registerCommand('forexplore.reindex', async () => {
-      const status = await services.refresh();
+      await services.refresh();
       const repositories = await refreshRepositoryStatus(services, health);
-      if (status.executionMode === 'guided-demo') {
-        void vscode.window.showInformationMessage(
-          '当前为引导演示模式：没有本地索引操作，使用内置样例。',
-        );
-      } else {
-        void vscode.window.showInformationMessage(
-          '扩展不会把本地目录误标为已索引。请在检索服务部署环境运行索引器，然后重新检查服务状态。',
-        );
-      }
+      void vscode.window.showInformationMessage(
+        '扩展不会把本地目录误标为已索引。请在检索服务部署环境运行索引器，然后重新检查服务状态。',
+      );
       void repositories;
     }),
     vscode.commands.registerCommand('forexplore.restoreLastCheckpoint', () =>
@@ -147,7 +141,7 @@ async function startTranslation(
   });
   if (!target) {
     void vscode.window.showErrorMessage(
-      `当前演示 MVP 仅支持 Java → C#：请在工作区内选择 C# 目标方法（当前为 ${document.languageId}）。`,
+      `当前翻译流程仅支持 Java → C#：请在工作区内选择 C# 目标方法（当前为 ${document.languageId}）。`,
     );
     return;
   }
@@ -246,7 +240,6 @@ async function startSearch(
       target: run.target,
       requirement: message.requirement.trim(),
       topK: message.topK,
-      retrievalMode: message.retrievalMode,
       // Local paths are presentation-only checks; only the server can state
       // which repositories were indexed. An empty scope means its configured
       // authorized index, not a fake "configured-repositories" filter.
@@ -268,7 +261,7 @@ function selectCandidate(candidateId: string): void {
     const run = requireActiveRun();
     const candidate = run.candidates.find((item) => item.id === candidateId);
     if (!candidate || candidate.language !== 'Java') {
-      throw new Error('该候选不属于当前检索结果，或不满足 Java → C# 的迁移边界。');
+      throw new Error('该候选不属于当前检索结果，或不满足 Java -> C# 的迁移边界。');
     }
     // This is deliberately the only operation that changes this field. A
     // retrieval ranking never becomes consent by itself.
@@ -294,7 +287,7 @@ async function startAdaptation(host: ExtensionHost, decisionNotes: string): Prom
       strategy: 'translate',
       decisionNotes,
     });
-    const result = validateHostOwnedResult(run, rawResult, runtime.executionMode);
+    const result = validateHostOwnedResult(run, rawResult);
     run.adaptation = result;
     publish({ type: 'ADAPT_RESULT', result });
   } catch (error) {
@@ -403,7 +396,6 @@ async function openTarget(): Promise<void> {
 function validateHostOwnedResult(
   run: ActiveMigrationRun,
   result: AdaptationResult,
-  executionMode: 'real' | 'guided-demo',
 ): AdaptationResult {
   const validation = [...result.validation];
   const failures: string[] = [];
@@ -413,7 +405,7 @@ function validateHostOwnedResult(
     failures.push('服务返回的策略或目标语言超出 Java → C# translate MVP。');
   }
   if (files.length !== 1) {
-    failures.push('演示写回只接受当前目标文件的一个修改补丁。');
+    failures.push('写回只接受当前目标文件的一个修改补丁。');
   }
 
   const patch = files[0];
@@ -429,7 +421,7 @@ function validateHostOwnedResult(
       failures.push('服务返回的补丁不严格对应当前选中的目标文件。');
     }
     if (patch.status === 'modified') {
-      if (executionMode === 'real' && patch.expectedOriginalSha256 !== run.originalSha256) {
+      if (patch.expectedOriginalSha256 !== run.originalSha256) {
         failures.push('服务补丁的原始文件哈希与扩展宿主快照不一致。');
       }
       try {
@@ -442,37 +434,18 @@ function validateHostOwnedResult(
     }
   }
 
-  if (executionMode === 'guided-demo') {
-    // The sample adapter does not read the editor. Preserve the visual diff,
-    // but stamp it with the host snapshot only for display; a required
-    // unverified record below keeps this result non-writable.
-    files = files.map((file) =>
-      file.status === 'modified'
-        ? { ...file, expectedOriginalSha256: run.originalSha256 }
-        : file,
-    );
-    validation.push({
-      id: 'extension-guided-demo',
-      label: '引导演示写回门禁',
-      status: 'unverified',
-      required: true,
-      summary: '当前结果来自引导演示；可以预览，不能写入工作区。',
-      failureReason: 'guided-demo-mode',
-    });
-  } else {
-    validation.push({
-      id: 'extension-target-snapshot',
-      label: '扩展目标快照',
-      status: failures.length === 0 ? 'pass' : 'fail',
-      required: true,
-      command: 'VS Code workspace.fs.readFile + SHA-256',
-      summary:
-        failures.length === 0
-          ? '补丁路径、原始哈希和 hunk 均与本次编辑器目标快照一致。'
-          : failures.join(' '),
-      failureReason: failures.length === 0 ? undefined : 'host-owned-patch-validation-failed',
-    });
-  }
+  validation.push({
+    id: 'extension-target-snapshot',
+    label: '扩展目标快照',
+    status: failures.length === 0 ? 'pass' : 'fail',
+    required: true,
+    command: 'VS Code workspace.fs.readFile + SHA-256',
+    summary:
+      failures.length === 0
+        ? '补丁路径、原始哈希和 hunk 均与本次编辑器目标快照一致。'
+        : failures.join(' '),
+    failureReason: failures.length === 0 ? undefined : 'host-owned-patch-validation-failed',
+  });
 
   if (failures.length > 0) {
     validation.push({

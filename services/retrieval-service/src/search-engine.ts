@@ -1,6 +1,5 @@
 import type {
   Language,
-  RetrievalMode,
   SearchCandidate,
   SearchRequest,
 } from '@forexplore/contracts';
@@ -90,14 +89,11 @@ function mergeResults(
 }
 
 function overallScore(
-  mode: RetrievalMode,
   semantic: number,
   symbol: number,
   contract: number,
   text: number,
 ): number {
-  if (mode === 'semantic') return clamp(0.8 * semantic + 0.1 * symbol + 0.1 * contract);
-  if (mode === 'structure') return clamp(0.55 * text + 0.3 * symbol + 0.15 * contract);
   return clamp(0.5 * semantic + 0.2 * text + 0.15 * symbol + 0.15 * contract);
 }
 
@@ -139,7 +135,7 @@ function candidate(
     signature: document.signature,
     summary: document.summary,
     score: {
-      overall: overallScore(request.retrievalMode, semantic, symbol, contract, text),
+      overall: overallScore(semantic, symbol, contract, text),
       semantic,
       symbol,
       contract,
@@ -163,26 +159,15 @@ export class SeekDbSearchEngine implements SearchEngine {
     const filters: SearchFilters = {
       repositories: repositoryScopes(request.repositoryScopes),
       languages,
-      kind: request.retrievalMode === 'structure' ? request.target.kind : undefined,
     };
     const candidateLimit = expandedLimit(request.topK);
-    let documents: RetrievedCodeDocument[];
-
-    if (request.retrievalMode === 'structure') {
-      documents = await this.store.textSearch(text, filters, candidateLimit);
-    } else {
-      const [embedding] = await this.embeddings.embed([text]);
-      if (!embedding) throw new Error('Embedding provider returned no query vector.');
-      if (request.retrievalMode === 'semantic') {
-        documents = await this.store.semanticSearch(embedding, filters, candidateLimit);
-      } else {
-        const [semantic, fullText] = await Promise.all([
-          this.store.semanticSearch(embedding, filters, candidateLimit),
-          this.store.textSearch(text, filters, candidateLimit),
-        ]);
-        documents = mergeResults(semantic, fullText);
-      }
-    }
+    const [embedding] = await this.embeddings.embed([text]);
+    if (!embedding) throw new Error('Embedding provider returned no query vector.');
+    const [semantic, fullText] = await Promise.all([
+      this.store.semanticSearch(embedding, filters, candidateLimit),
+      this.store.textSearch(text, filters, candidateLimit),
+    ]);
+    const documents = mergeResults(semantic, fullText);
 
     const allowedLanguages = new Set(languages);
     return documents

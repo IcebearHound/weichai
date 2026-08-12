@@ -13,7 +13,6 @@ const request: SearchRequest = {
   },
   requirement: 'use a stale cache when the quote provider is unavailable',
   topK: 2,
-  retrievalMode: 'hybrid',
   repositoryScopes: [],
 };
 

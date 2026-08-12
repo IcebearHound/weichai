@@ -10,14 +10,6 @@ export function decorateRepositoryStatuses(
 ): RepositoryStatus[] {
   return statuses.map((status) => {
     if (!status.exists || !status.readable) return status;
-    if (serviceStatus.executionMode === 'guided-demo') {
-      return {
-        ...status,
-        indexed: false,
-        stale: false,
-        message: '引导演示不读取此本地路径',
-      };
-    }
     return {
       ...status,
       indexed: false,

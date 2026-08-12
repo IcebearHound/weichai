@@ -99,6 +99,26 @@ describe("Translator Agent", () => {
     ).rejects.toThrow("gateway has no target dependency");
   });
 
+  it("continues when the Analyzer reports a non-blocking open question", async () => {
+    const request = fixture("translator-direct");
+    request.analysisReport.unresolved = [
+      "The target port's internal persistence strategy is not visible.",
+    ];
+    const calls: Array<Record<string, unknown>> = [];
+    const expected = resultFor(request);
+
+    await expect(
+      translateWithAnalysis(request, {
+        apiKey: "test-key",
+        request: modelRequest(expected, calls),
+      }),
+    ).resolves.toEqual(expected);
+
+    const messages = calls[0]?.messages as Array<{ content: string }>;
+    expect(messages[1]?.content).toContain("OPEN_QUESTION_POLICY");
+    expect(messages[1]?.content).toContain("non-blocking questions");
+  });
+
   it("rejects a changed target signature", async () => {
     const request = fixture("translator-direct");
     const changed = resultFor(
@@ -144,6 +164,37 @@ describe("Translator Agent", () => {
         request: modelRequest(expanded),
       }),
     ).rejects.toThrow("must not generate an enclosing type");
+  });
+
+  it("feeds validation violations back to the model before failing", async () => {
+    const request = fixture("translator-direct");
+    const invalid = resultFor(
+      request,
+      `public class Calculator { ${request.targetContext.targetSignature} { return 1m; } }`,
+    );
+    const corrected = resultFor(request);
+    const calls: Array<Record<string, unknown>> = [];
+    const fetch = vi.fn(async (_input: URL | RequestInfo, init?: RequestInit) => {
+      calls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      const result = calls.length === 1 ? invalid : corrected;
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(result) } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof globalThis.fetch;
+
+    await expect(
+      translateWithAnalysis(request, { apiKey: "test-key", request: fetch }),
+    ).resolves.toEqual(corrected);
+    expect(calls).toHaveLength(2);
+    expect((calls[1]?.messages as Array<{ content: string }>)[1]?.content).toContain(
+      "VALIDATION_FEEDBACK_JSON",
+    );
+    expect((calls[1]?.messages as Array<{ content: string }>)[1]?.content).toContain(
+      "enclosing type",
+    );
   });
 
   it("stops when the Translator reports unresolved blockers", async () => {

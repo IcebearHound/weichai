@@ -168,14 +168,14 @@ SeekDB 容器启动后，还需要配置 retrieval service 和 Web。以下不�
 
 ```bash
 cp services/retrieval-service/.env.example services/retrieval-service/.env
-cp apps/workflow-web/.env.example apps/workflow-web/.env
+cp web/.env.example web/.env
 ```
 
 两个文件的职责：
 
 - `services/retrieval-service/.env`：配置 SeekDB 地址、数据库、表、向量维度和
   embedding provider。
-- `apps/workflow-web/.env`：设置 `VITE_RETRIEVAL_API_URL`，让 Web 从 Mock
+- `web/.env`：设置 `VITE_RETRIEVAL_API_URL`，让 Web 从 Mock
   检索切换到真实 retrieval service。
 
 `.env` 可能包含数据库密码或 API Key，不应提交到 Git。
@@ -232,7 +232,7 @@ curl http://127.0.0.1:8787/health
 npm run dev:web
 ```
 
-Web 启动时会读取 `apps/workflow-web/.env`。当
+Web 启动时会读取 `web/.env`。当
 `VITE_RETRIEVAL_API_URL=http://127.0.0.1:8787` 存在时，检索端口使用 SeekDB；
 缺少该变量时自动回退到 Mock。成功接入后，界面状态栏会显示 `SeekDB`。
 

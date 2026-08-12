@@ -11,11 +11,10 @@ describe('SeekDB SQL helpers', () => {
       seekDbInternals.filterSql({
         repositories: ['demo/cache', 'demo/runtime'],
         languages: ['TypeScript', 'Java'],
-        kind: 'function',
       }),
     ).toEqual({
-      sql: 'WHERE repository IN (?, ?) AND language IN (?, ?) AND kind = ?',
-      parameters: ['demo/cache', 'demo/runtime', 'TypeScript', 'Java', 'function'],
+      sql: 'WHERE repository IN (?, ?) AND language IN (?, ?)',
+      parameters: ['demo/cache', 'demo/runtime', 'TypeScript', 'Java'],
     });
   });
 });

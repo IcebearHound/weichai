@@ -34,7 +34,6 @@ def search_candidates(query: str, top_k: int = 5) -> list[dict]:
         },
         "requirement": query,
         "topK": top_k,
-        "retrievalMode": "hybrid",
         "repositoryScopes": [],
         "candidateLanguages": ["Java"],
     }

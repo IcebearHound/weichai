@@ -167,7 +167,6 @@ async function searchSeekDB(task: TaskRecord, rerank: boolean): Promise<SearchCa
     },
     requirement: task.requirement,
     topK: 20,
-    retrievalMode: 'hybrid',
     repositoryScopes: [],
   };
   if (!rerank) body.rerank = false;

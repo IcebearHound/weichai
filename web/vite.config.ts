@@ -7,7 +7,7 @@ import { scanTargetModuleTree } from './build/target-module-tree';
 const virtualModuleId = 'virtual:target-module-tree';
 const resolvedVirtualModuleId = `\0${virtualModuleId}`;
 const targetWorkspace = fileURLToPath(
-  new URL('../../fixtures/target-system/currency-platform', import.meta.url),
+  new URL('../fixtures/target-system/currency-platform', import.meta.url),
 );
 const normalizedTargetWorkspace = targetWorkspace.replaceAll('\\', '/');
 

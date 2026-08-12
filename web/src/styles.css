@@ -674,48 +674,6 @@ kbd {
   text-transform: uppercase;
 }
 
-.segmented-options {
-  border: 1px solid var(--line);
-}
-
-.segmented-options button {
-  display: block;
-  width: 100%;
-  padding: 10px 11px;
-  color: var(--muted);
-  background: var(--surface);
-  border: 0;
-  text-align: left;
-}
-
-.segmented-options button + button {
-  border-top: 1px solid var(--line);
-}
-
-.segmented-options button:hover {
-  background: var(--paper);
-}
-
-.segmented-options button.is-active {
-  color: var(--ink);
-  background: var(--accent-soft);
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-
-.segmented-options strong,
-.segmented-options span {
-  display: block;
-}
-
-.segmented-options strong {
-  font-size: 11px;
-}
-
-.segmented-options span {
-  margin-top: 3px;
-  font-size: 9.5px;
-}
-
 .range-heading {
   display: flex;
   align-items: baseline;

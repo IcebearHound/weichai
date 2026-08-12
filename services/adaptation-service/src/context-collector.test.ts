@@ -76,6 +76,24 @@ describe("collectTargetContext", () => {
     ).toThrow("Target MissingMethod was not found");
   });
 
+  it("resolves a workspace-relative target path prefixed by the project folder", () => {
+    const context = collectTargetContext({
+      projectRoot,
+      target: {
+        id: "append-async-function",
+        name: "AppendAsync",
+        kind: "function",
+        path: "weichai/fixtures/target-system/forexplore-csharp-workspace/src/Application/AuditPipeline.cs",
+        language: "C#",
+        signature: "ValueTask<long> AppendAsync(string action, string subject, string payload, CancellationToken cancellationToken)",
+        line: 16,
+      },
+    });
+
+    expect(context.source.method).toContain("AppendAsync");
+    expect(context.collection.targetFile).toBe("src/Application/AuditPipeline.cs");
+  });
+
   it("records truncation when the configured context budget is small", () => {
     const context = collectTargetContext({ projectRoot, target, maxChars: 3_000 });
 

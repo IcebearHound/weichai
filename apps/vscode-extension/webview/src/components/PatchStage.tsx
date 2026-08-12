@@ -16,6 +16,7 @@ export function PatchStage({ state, onApply, onBack, onOpenTarget }: PatchStageP
   const deletions = result.files.reduce((sum, file) => sum + file.deletions, 0);
   const gate = evaluateValidationGate(result.validation);
   const canApply = canApplyAdaptation(result);
+  const visibleValidation = result.validation.filter((item) => item.id !== 'standalone-compile');
 
   return (
     <div className="stage-stack">
@@ -47,7 +48,7 @@ export function PatchStage({ state, onApply, onBack, onOpenTarget }: PatchStageP
           <ShieldCheck size={14} /> 验证证据
         </h3>
         <ul className="validation-list">
-          {result.validation.map((item) => (
+          {visibleValidation.map((item) => (
             <li key={item.id} className={`validation is-${item.status}`}>
               {item.status === 'pass' ? <Check size={13} /> : <TriangleAlert size={13} />}
               <span>

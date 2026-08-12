@@ -24,7 +24,7 @@ ForeXplore 关注的不是孤立地生成一段代码，而是构建一条可解
 选择 class / function + 描述需求与约束
     |
     v
-多路召回：语义检索 / 符号检索 / 结构检索
+混合召回：向量检索 + 全文检索
     |
     v
 过滤与重排：相关性 / 接口契合度 / 依赖与风险
@@ -63,7 +63,7 @@ Top-K 候选展示 + 人工选择与备注
 | 目标语言 | 判断直接复用或跨语言迁移成本 |
 | 自然语言需求 | 描述业务行为、异常处理、性能和并发要求 |
 | Top-K | 控制最终呈现给用户的方案数量 |
-| 检索模式 | 选择语义、结构或混合检索 |
+| 检索方式 | 固定使用向量与全文混合检索 |
 | 仓库范围 | 限定允许检索的代码库与数据边界 |
 
 当前契约由 `SearchRequest` 表达，检索实现通过 `CodeSearchPort` 注入。这样可以先使用 Mock 或简单检索器验证交互流程，再逐步接入真实代码索引和模型服务。
@@ -179,7 +179,7 @@ ForeXplore 支持四种适配策略：
 ## 8. 架构边界
 
 ```text
-apps/workflow-web
+web
         |
         v
 packages/workflow-core ----> packages/contracts
@@ -196,7 +196,7 @@ packages/mock-adapters        production adapters
 
 | 模块 | 职责 |
 | --- | --- |
-| `apps/workflow-web` | 模块选择、需求输入、候选对比、补丁审阅等 GUI 交互 |
+| `web` | 模块选择、需求输入、候选对比、补丁审阅等 GUI 交互 |
 | `packages/contracts` | 检索、候选、适配、补丁和模块符号的共享类型 |
 | `packages/workflow-core` | 工作流状态、状态转换和能力端口 |
 | `packages/mock-adapters` | 用于演示完整链路的静态数据和 Mock 实现 |

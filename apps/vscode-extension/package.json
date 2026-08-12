@@ -13,6 +13,9 @@
     "Other"
   ],
   "main": "./dist/extension/extension.js",
+  "extensionDependencies": [
+    "ms-dotnettools.csharp"
+  ],
   "files": [
     "dist/extension/**",
     "dist/webview/**",
@@ -62,31 +65,27 @@
       "properties": {
         "forexplore.executionMode": {
           "type": "string",
-          "enum": ["guided-demo", "real"],
-          "enumDescriptions": [
-            "使用内置样例演示完整审阅流程；结果只能预览，不能写回工作区。",
-            "调用已部署的 SeekDB 检索服务和 Java → C# 适配服务；两个服务都必须健康。"
-          ],
-          "default": "guided-demo",
-          "description": "ForeXplore 的明确运行模式。扩展不会在真实模式失败时自动降级为演示数据。"
+          "enum": ["real"],
+          "default": "real",
+          "description": "调用本地 SeekDB 检索服务和 Java → C# 适配服务；两个服务都必须健康。"
         },
         "forexplore.repositoryPaths": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "default": [],
+          "default": ["E:/CS/devsys/weichai/fixtures/code-corpus"],
           "description": "仅检查本地目录是否可读，不能证明该目录已被远端检索服务索引。真实检索范围由服务端部署配置决定。"
         },
         "forexplore.retrievalApiUrl": {
           "type": "string",
-          "default": "",
-          "description": "真实模式下的检索服务地址，如 http://127.0.0.1:8787。真实模式中不能为空。"
+          "default": "http://127.0.0.1:8787",
+          "description": "检索服务地址。"
         },
         "forexplore.adaptationApiUrl": {
           "type": "string",
-          "default": "",
-          "description": "真实模式下的 Java → C# 翻译服务地址，如 http://127.0.0.1:8788。真实模式中不能为空。"
+          "default": "http://127.0.0.1:8788",
+          "description": "Java → C# 翻译服务地址。"
         }
       }
     }
@@ -103,7 +102,6 @@
   "dependencies": {
     "@forexplore/adaptation-http-adapter": "0.1.0",
     "@forexplore/contracts": "0.1.0",
-    "@forexplore/mock-adapters": "0.1.0",
     "@forexplore/seekdb-adapter": "0.1.0",
     "@forexplore/workflow-core": "0.1.0",
     "lucide-react": "^1.24.0",

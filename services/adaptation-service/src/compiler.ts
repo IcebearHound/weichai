@@ -12,13 +12,18 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 
 export interface CompileResult {
   success: boolean;
   errors: string[];
   output: string;
+}
+
+export interface ResolvedProjectTarget {
+  sourcePath: string;
+  relativePath: string;
 }
 
 /**
@@ -69,27 +74,23 @@ export function compileIntegrated(
   targetFilePath: string,
 ): CompileResult {
   const projectRoot = resolve(skeletonProjectPath);
-  const sourcePath = resolve(projectRoot, targetFilePath);
-  const relativeTarget = relative(projectRoot, sourcePath);
-  if (
-    !relativeTarget ||
-    relativeTarget === ".." ||
-    relativeTarget.startsWith(`..${sep}`) ||
-    isAbsolute(relativeTarget)
-  ) {
+  const directSourcePath = resolve(projectRoot, targetFilePath);
+  const resolvedTarget = resolveProjectTargetFile(projectRoot, targetFilePath);
+  if (!resolvedTarget && isOutsideProject(projectRoot, directSourcePath)) {
     return {
       success: false,
       errors: [`Target file must stay inside the skeleton project: ${targetFilePath}`],
       output: "",
     };
   }
-  if (!existsSync(sourcePath)) {
+  if (!resolvedTarget) {
     return {
       success: false,
       errors: [`Target file does not exist in the skeleton project: ${targetFilePath}`],
       output: "",
     };
   }
+  const { sourcePath, relativePath: relativeTarget } = resolvedTarget;
   const dotnet = findDotnet();
   if (!dotnet) {
     return {
@@ -232,10 +233,53 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Globalization;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 public class ${className} {
 ${code}
 }`;
+}
+
+/**
+ * Resolve a target path supplied by a client whose workspace root may be an
+ * ancestor of the configured skeleton project. The returned path remains
+ * internal to the skeleton; callers can keep the original client path in the
+ * generated patch for host-side validation.
+ */
+export function resolveProjectTargetFile(
+  projectRoot: string,
+  targetFilePath: string,
+): ResolvedProjectTarget | null {
+  const root = resolve(projectRoot);
+  const normalizedTarget = targetFilePath.replace(/\\/g, "/");
+  const segments = normalizedTarget.split("/");
+  if (isAbsolute(targetFilePath) || segments.includes("..")) return null;
+
+  const candidates = [resolve(root, targetFilePath)];
+  const rootName = basename(root);
+  const rootMarker = `${rootName}/`;
+  const rootIndex = normalizedTarget.indexOf(rootMarker);
+  if (rootIndex >= 0) {
+    candidates.push(resolve(root, normalizedTarget.slice(rootIndex + rootMarker.length)));
+  }
+
+  for (const sourcePath of candidates) {
+    const relativePath = relative(root, sourcePath);
+    if (isOutsideProject(root, sourcePath) || !relativePath || !existsSync(sourcePath)) continue;
+    return { sourcePath, relativePath };
+  }
+  return null;
+}
+
+function isOutsideProject(projectRoot: string, sourcePath: string): boolean {
+  const relativePath = relative(projectRoot, sourcePath);
+  return (
+    !relativePath ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${sep}`) ||
+    isAbsolute(relativePath)
+  );
 }
 
 function replaceTargetMethod(source: string, generatedCode: string): string {
@@ -320,4 +364,4 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export const compilerInternals = { replaceTargetMethod };
+export const compilerInternals = { buildWrapperSource, replaceTargetMethod, resolveProjectTargetFile };

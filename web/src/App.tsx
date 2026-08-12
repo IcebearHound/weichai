@@ -17,7 +17,6 @@ import {
 import type {
   AdaptationStrategy,
   ModuleNode,
-  RetrievalMode,
 } from '@forexplore/contracts';
 import {
   initialWorkflowState,
@@ -29,16 +28,6 @@ import { CandidateBrowser } from './features/candidate-selection/CandidateBrowse
 import { PatchReview } from './features/patch-review/PatchReview';
 import { ModuleTree } from './features/target-selection/ModuleTree';
 import { WorkflowRail } from './features/workflow-progress/WorkflowRail';
-
-const retrievalOptions: Array<{
-  id: RetrievalMode;
-  label: string;
-  detail: string;
-}> = [
-  { id: 'hybrid', label: '混合', detail: '语义向量 + 符号结构' },
-  { id: 'semantic', label: '语义', detail: '自然语言与实现意图' },
-  { id: 'structure', label: '树级', detail: '按 class / function 读取' },
-];
 
 const strategyOptions: Array<{
   id: AdaptationStrategy;
@@ -112,20 +101,7 @@ function RequirementPanel({
 
       <aside className="search-config">
         <section>
-          <h3>检索策略</h3>
-          <div className="segmented-options">
-            {retrievalOptions.map((option) => (
-              <button
-                type="button"
-                className={state.retrievalMode === option.id ? 'is-active' : ''}
-                key={option.id}
-                onClick={() => dispatch({ type: 'SET_RETRIEVAL_MODE', value: option.id })}
-              >
-                <strong>{option.label}</strong>
-                <span>{option.detail}</span>
-              </button>
-            ))}
-          </div>
+          <h3>混合检索</h3>
         </section>
 
         <section>
@@ -367,7 +343,6 @@ export default function App({
         target: state.target,
         requirement: state.requirement.trim(),
         topK: state.topK,
-        retrievalMode: state.retrievalMode,
         repositoryScopes: ['configured-repositories', 'mock-catalog'],
         candidateLanguages: adaptationProvider === 'Mock' ? undefined : ['Java'],
       });
@@ -557,7 +532,7 @@ export default function App({
 
       <footer className="statusbar">
         <span>{moduleTree.name} · main</span>
-        <span>检索器：{searchProvider} · {state.retrievalMode}</span>
+        <span>检索器：{searchProvider} · 混合</span>
         <span>适配器：{adaptationProvider}</span>
         <span>目标：{state.target?.language ?? '未选择'}</span>
         <span className="statusbar-spacer" />

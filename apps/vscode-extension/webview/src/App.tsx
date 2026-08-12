@@ -70,7 +70,6 @@ export default function App() {
       type: 'START_SEARCH',
       requirement: state.requirement.trim(),
       topK: state.topK,
-      retrievalMode: state.retrievalMode,
     });
   }
 

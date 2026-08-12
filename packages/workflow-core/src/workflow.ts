@@ -3,7 +3,6 @@ import type {
   AdaptationStrategy,
   ApplyResult,
   ModuleTarget,
-  RetrievalMode,
   SearchCandidate,
 } from '@forexplore/contracts';
 
@@ -20,7 +19,6 @@ export interface WorkflowState {
   target: ModuleTarget | null;
   requirement: string;
   topK: number;
-  retrievalMode: RetrievalMode;
   candidates: SearchCandidate[];
   selectedCandidateId: string | null;
   decisionNotes: string;
@@ -35,7 +33,6 @@ export type WorkflowEvent =
   | { type: 'SELECT_TARGET'; target: ModuleTarget }
   | { type: 'SET_REQUIREMENT'; value: string }
   | { type: 'SET_TOP_K'; value: number }
-  | { type: 'SET_RETRIEVAL_MODE'; value: RetrievalMode }
   | { type: 'SEARCH_START' }
   | { type: 'SEARCH_SUCCESS'; candidates: SearchCandidate[] }
   | { type: 'SEARCH_FAILURE'; message: string }
@@ -56,7 +53,6 @@ export const initialWorkflowState: WorkflowState = {
   target: null,
   requirement: '',
   topK: 4,
-  retrievalMode: 'hybrid',
   candidates: [],
   selectedCandidateId: null,
   decisionNotes: '',
@@ -83,8 +79,6 @@ export function workflowReducer(
       return { ...state, requirement: event.value, error: null };
     case 'SET_TOP_K':
       return { ...state, topK: event.value };
-    case 'SET_RETRIEVAL_MODE':
-      return { ...state, retrievalMode: event.value };
     case 'SEARCH_START':
       return { ...state, pending: 'search', error: null };
     case 'SEARCH_SUCCESS':

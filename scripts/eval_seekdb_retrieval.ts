@@ -153,7 +153,6 @@ async function searchSeekDB(task: TaskRecord): Promise<SearchCandidate[]> {
     },
     requirement: task.requirement,
     topK: 20,
-    retrievalMode: 'hybrid',
     repositoryScopes: [],
   };
 

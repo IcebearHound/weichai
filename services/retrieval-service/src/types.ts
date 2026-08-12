@@ -15,7 +15,6 @@ export interface RetrievedCodeDocument extends IndexedCodeDocument {
 export interface SearchFilters {
   repositories: string[];
   languages: Language[];
-  kind?: 'class' | 'function';
 }
 
 export interface SearchStore {

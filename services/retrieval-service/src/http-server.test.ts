@@ -56,7 +56,6 @@ const request: SearchRequest = {
   },
   requirement: 'add a resilient cache',
   topK: 3,
-  retrievalMode: 'hybrid',
   repositoryScopes: [],
   candidateLanguages: ['Java'],
 };

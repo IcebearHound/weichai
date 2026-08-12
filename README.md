@@ -1,13 +1,13 @@
 # ForeXplore
 
-ForeXplore is a modular code-reuse workflow prototype. The repository separates
-the user interface, workflow contracts, replaceable adapters, future backend
-services, and synthetic evaluation fixtures so contributors can work within
-explicit ownership boundaries.
+ForeXplore is a VS Code code-translation extension with local retrieval and
+adaptation services. The standalone `web/` application remains as a workflow
+prototype; it is not the primary product entry point.
 
 ## Repository layout
 
-- `apps/workflow-web`: runnable React workflow UI.
+- `apps/vscode-extension`: primary VS Code extension application.
+- `web`: standalone React workflow prototype.
 - `packages/contracts`: shared request, result, symbol, and patch types.
 - `packages/workflow-core`: workflow state machine and implementation ports.
 - `packages/workspace-adapters`: workspace discovery and module-symbol providers.
@@ -32,20 +32,20 @@ Install the workspace dependencies and create local environment files:
 npm install
 cp services/retrieval-service/.env.example services/retrieval-service/.env
 cp services/adaptation-service/.env.example services/adaptation-service/.env
-cp apps/workflow-web/.env.example apps/workflow-web/.env
+cp web/.env.example web/.env
 ```
 
 The checked-in examples use these local endpoints:
 
 | Component | Address | Environment file |
 | --- | --- | --- |
-| Web UI | Vite prints the selected port at startup | `apps/workflow-web/.env` |
+| Web prototype | Vite prints the selected port at startup | `web/.env` |
 | Retrieval API | `http://127.0.0.1:8787` | `services/retrieval-service/.env` |
 | Adaptation API | `http://127.0.0.1:8788` | `services/adaptation-service/.env` |
 | SeekDB | `127.0.0.1:2881` | `services/retrieval-service/.env` |
 
 Only public API URLs belong in the Web environment. Never put an embedding or
-DeepSeek API key in `apps/workflow-web/.env`, because Vite variables are exposed
+DeepSeek API key in `web/.env`, because Vite variables are exposed
 to the browser.
 
 ### Configure retrieval
@@ -129,10 +129,11 @@ the adaptation environment if the SDK is installed elsewhere.
 
 ### Start the application
 
-Start retrieval and Web together:
+Start the standalone Web prototype with retrieval:
 
 ```bash
-npm run dev
+npm run dev:retrieval
+npm run dev:web
 ```
 
 Start adaptation in a second terminal:
@@ -141,8 +142,19 @@ Start adaptation in a second terminal:
 npm run dev:adaptation
 ```
 
-Do not append `adaptation` to `npm run dev`: `npm run dev adaptation` passes it
-to `concurrently` as a third shell command. Use the named script above.
+On Windows, start SeekDB, both backend dev processes, build the extension, and
+open the Extension Development Host with one command:
+
+```powershell
+npm run dev:extension
+```
+
+The wrapper is [`scripts/run-vscode-extension.ps1`](scripts/run-vscode-extension.ps1).
+It assumes dependencies are already installed and does not run `npm install`.
+Use `npm run dev:extension -- -SkipSeekDb` when SeekDB is already running.
+
+`npm run dev` is an alias for `npm run dev:extension`. Do not append
+`adaptation` to it; start `npm run dev:adaptation` separately when needed.
 
 To run each layer independently, use `npm run dev:retrieval`,
 `npm run dev:adaptation`, and `npm run dev:web`. Verify the backend services:
@@ -163,7 +175,9 @@ npm run dev
 npm run dev:web
 npm run dev:retrieval
 npm run dev:adaptation
+npm run dev:extension
 npm run build
+npm run build:web
 npm run build:retrieval
 npm run build:adaptation
 npm test

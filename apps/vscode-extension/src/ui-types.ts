@@ -1,7 +1,7 @@
 /** Types that exist only at the extension presentation boundary. */
-export type ExecutionMode = 'real' | 'guided-demo';
+export type ExecutionMode = 'real';
 
-export type ServiceConnection = 'connected' | 'demo' | 'unconfigured' | 'error';
+export type ServiceConnection = 'connected' | 'unconfigured' | 'error';
 
 export interface ServiceStatus {
   retrieval: ServiceConnection;

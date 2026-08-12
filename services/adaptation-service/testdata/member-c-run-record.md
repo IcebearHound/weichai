@@ -65,3 +65,22 @@ Covered cases:
    decision; do not silently discard it.
 4. Pass Validator `ValidationFeedback` to `repairTranslation()` for the first
    repair round. The legacy compiler-only repair entry point remains available.
+
+## Integration follow-up (2026-08-10)
+
+The A/B branch `darkstars/analyzer-translator@7dd0aa2` was merged onto the
+latest upstream baseline and the handoff items above were completed:
+
+- `AnalysisReport` now comes from `@forexplore/contracts` rather than a
+  Translator-owned duplicate interface;
+- `collectTargetContext()` supplies real target workspace facts;
+- `AnalyzerAgent.analyze()` runs before `translateWithAnalysis()`;
+- compiler diagnostics are passed to `repairTranslation()` as structured
+  syntax feedback for at most three repair rounds;
+- the Adapter returns the Translator's verified interface mappings instead of
+  re-inferring mappings from source text.
+
+The integrated Adapter test uses the real C# fixture and context collector,
+with deterministic Analyzer, Translator transport, and compiler seams. Live
+DeepSeek and .NET validation still require local credentials and an installed
+SDK respectively.

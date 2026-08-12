@@ -29,7 +29,17 @@ Runtime guards reject Analyzer `reject` decisions, unresolved dependencies,
 changed target signatures, omitted plan steps/mappings, and output that expands
 into using/namespace/enclosing-type changes. The existing
 `translateJavaToCSharp()` and `fixCompileErrors()` exports remain compatible for
-the current HTTP adapter while the Analyzer and orchestration work lands.
+legacy callers. The HTTP adapter now runs the integrated sequence:
+
+```text
+collectTargetContext -> AnalyzerAgent.analyze -> translateWithAnalysis
+  -> compile validation -> repairTranslation (at most three rounds)
+```
+
+`AnalysisReport` comes from `@forexplore/contracts`; the Translator no longer
+owns a duplicate report schema. The collected `TargetModuleContext` is reduced
+to a prompt-oriented view by `projectTargetContext()` without discarding the
+immutable target signature, dependencies, callers, or constraints.
 
 Validator integration uses the reserved repair entry point:
 
@@ -129,9 +139,26 @@ code-indexer (module 1) → retrieval-service (module 2) → adaptation-service 
 | `src/translator.ts` | AnalysisReport-driven Translator, contract guards, structured output and repair |
 | `src/translator.test.ts` | Translator parsing, rejection, contract, planning and repair tests |
 | `testdata/translator-*.json` | direct/adapt/reject member-C fixtures |
+| `src/context-collector.ts` | Collects bounded target-module facts and direct dependencies |
+| `src/analyzer.ts` | Independent Analyzer Agent that returns validated `AnalysisReport` JSON |
 | `src/compiler.ts` | C# compile check (dotnet build) |
 | `src/model-config.ts` | Isolated temporary model provider configuration |
-| `src/adaptation-adapter.ts` | Main adapter, orchestrates translate→compile→fix |
+| `src/adaptation-adapter.ts` | Main adapter, orchestrates context → analyze → translate → compile → repair |
 | `src/backfill-adapter.ts` | Backfill results into corpus |
 | `poc/translate_poc.py` | Standalone POC with 5 test cases |
 | `poc/e2e_pipeline.py` | End-to-end: calls retrieval-service /v1/search |
+
+## Analyzer boundary
+
+`collectTargetContext({ projectRoot, target })` reads the selected target file,
+its containing type, direct dependency definitions, relevant callers, and
+explicit `REQ:` constraints. It returns a bounded `TargetModuleContext`; paths
+inside the context are project-relative and the collector rejects traversal
+outside `projectRoot`.
+
+`new AnalyzerAgent({ apiKey }).analyze(request)` makes a separate model call
+with target facts, the user requirement, and one retrieval candidate. The
+response must be `AnalysisReport` schema version `1.0`; markdown fences are
+accepted for compatibility, but every field and enum is validated before the
+report is returned. Analyzer does not generate code, compile it, or run
+behavior tests. Those remain Translator and Validator responsibilities.

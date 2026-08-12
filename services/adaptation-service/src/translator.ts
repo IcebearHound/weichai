@@ -1,44 +1,18 @@
 /**
  * Translator Agent for Java -> C# module adaptation.
  *
- * The analysis types intentionally live at the Translator boundary for now so
- * this module can be developed independently. They are structurally compatible
- * with AnalysisReport v1 from the execution plan and can later be replaced by
- * the shared contracts without changing runtime behavior.
+ * AnalysisReport is owned by the shared contracts. TargetModuleContext is
+ * projected into the smaller prompt-oriented view used by this agent.
  */
+import type {
+  AnalysisReport,
+  ApplicabilityLevel as SharedApplicabilityLevel,
+  TargetModuleContext,
+} from "@forexplore/contracts";
 import { adaptationModelConfig } from "./model-config";
 
-export type ApplicabilityLevel = "direct" | "adapt" | "reference" | "reject";
-
-export interface TranslatorAnalysisReport {
-  schemaVersion: "1.0";
-  applicability: {
-    level: ApplicabilityLevel;
-    confidence: number;
-    reasons: string[];
-  };
-  behaviorMapping: Array<{
-    requirement: string;
-    status: "covered" | "partial" | "missing" | "conflict";
-    candidateEvidence: string[];
-    targetAction: string;
-  }>;
-  contractMapping: Array<{
-    source: string;
-    target: string;
-    action: "preserve" | "rename" | "convert" | "inject" | "replace";
-    note: string;
-  }>;
-  dependencyPlan: Array<{
-    sourceDependency: string;
-    targetDependency?: string;
-    action: "reuse-existing" | "adapt" | "inline" | "unresolved";
-  }>;
-  implementationPlan: string[];
-  risks: string[];
-  assumptions: string[];
-  unresolved: string[];
-}
+export type ApplicabilityLevel = SharedApplicabilityLevel;
+export type TranslatorAnalysisReport = AnalysisReport;
 
 export interface TranslatorTargetContext {
   targetSignature: string;
@@ -52,6 +26,34 @@ export interface TranslatorTargetContext {
   dependencySummaries: string[];
   callerSummaries: string[];
   immutableConstraints: string[];
+}
+
+/** Convert member A's collected workspace facts into the Translator prompt view. */
+export function projectTargetContext(
+  context: TargetModuleContext,
+): TranslatorTargetContext {
+  return {
+    targetSignature: context.target.signature,
+    targetFilePath: context.target.path,
+    enclosingType: context.source.containingType,
+    documentation: context.target.documentation,
+    targetCode: context.source.method,
+    importsOrUsings: [...context.source.usings],
+    members: [...context.source.fields, ...context.source.relatedMembers],
+    constructorParameters: context.source.constructor
+      ? [context.source.constructor]
+      : [],
+    dependencySummaries: context.dependencies.map((dependency) => {
+      const members = dependency.memberSignatures?.length
+        ? `; members: ${dependency.memberSignatures.join(", ")}`
+        : "";
+      return `${dependency.name} (${dependency.kind}): ${dependency.declaration}${members}`;
+    }),
+    callerSummaries: context.callers.map(
+      (caller) => `${caller.path}:${caller.line} ${caller.excerpt}`,
+    ),
+    immutableConstraints: [...context.constraints],
+  };
 }
 
 export interface AnalyzeTranslationRequest {

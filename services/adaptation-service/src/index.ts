@@ -6,13 +6,19 @@
  */
 
 export { AdaptationAdapter } from "./adaptation-adapter";
-export type { AdaptationAdapterOptions } from "./adaptation-adapter";
+export type {
+  AdaptationAdapterOptions,
+  AdaptationAnalyzer,
+  AdaptationContextCollector,
+  AdaptationValidator,
+} from "./adaptation-adapter";
 
 export { BackfillAdapter } from "./backfill-adapter";
 export type { BackfillAdapterOptions } from "./backfill-adapter";
 
 export {
   fixCompileErrors,
+  projectTargetContext,
   repairTranslation,
   translateJavaToCSharp,
   translateWithAnalysis,
@@ -29,6 +35,21 @@ export type {
   TranslatorTargetContext,
   ValidationFeedback,
 } from "./translator";
+
+export {
+  AnalyzerAgent,
+  buildAnalyzerMessages,
+  parseAnalysisReport,
+  validateAnalysisReport,
+} from "./analyzer";
+export type {
+  AnalyzerAgentOptions,
+  AnalyzerMessage,
+  AnalyzerModelClient,
+} from "./analyzer";
+
+export { collectTargetContext, serializeTargetContext } from "./context-collector";
+export type { ContextCollectorOptions } from "./context-collector";
 
 export { compileStandalone, compileIntegrated } from "./compiler";
 export type { CompileResult } from "./compiler";

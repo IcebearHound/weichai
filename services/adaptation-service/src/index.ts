@@ -20,12 +20,14 @@ export {
   fixCompileErrors,
   projectTargetContext,
   repairTranslation,
+  translateCSharpToJava,
   translateJavaToCSharp,
   translateWithAnalysis,
 } from "./translator";
 export type {
   AnalyzeTranslationRequest,
   ApplicabilityLevel,
+  CSharpToJavaRequest,
   RepairTranslationRequest,
   TranslateRequest,
   TranslationMapping,
@@ -51,7 +53,12 @@ export type {
 export { collectTargetContext, serializeTargetContext } from "./context-collector";
 export type { ContextCollectorOptions } from "./context-collector";
 
-export { compileStandalone, compileIntegrated } from "./compiler";
+export {
+  compileStandalone,
+  compileIntegrated,
+  compileJavaStandalone,
+  compileJavaIntegrated,
+} from "./compiler";
 export type { CompileResult } from "./compiler";
 
 export { adaptationModelConfig, loadAdaptationModelConfig } from "./model-config";

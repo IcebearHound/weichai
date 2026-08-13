@@ -853,6 +853,115 @@ function legacyAnalysisRequest(request: TranslateRequest): AnalyzeTranslationReq
   };
 }
 
+// ---- C# → Java 双向翻译（独立路径，不经过分析器/校验器）----
+
+export interface CSharpToJavaRequest {
+  csharpSource: string;
+  javaSignature: string;
+  requirement: string;
+  matchType: "exact" | "partial" | "different";
+}
+
+const MATCH_NOTES: Record<string, string> = {
+  exact: "功能完全对应，请保持逻辑1:1翻译。",
+  partial: "功能部分重叠，只翻译与需求描述相关的部分，不需要的功能可以省略。",
+  different: "功能差异较大，以需求描述为准，源码仅作参考。",
+};
+
+const CSHARP_TO_JAVA_RULES = [
+  "1. C# decimal → Java double",
+  "2. C# List<T> → Java List<T>",
+  "3. C# Dictionary<K,V> → Java Map<K,V>",
+  "4. C# bool → Java boolean",
+  "5. C# string → Java String",
+  "6. C# 属性 (get; set;) → Java getter/setter 方法",
+  "7. C# 无 throws 声明 → Java 方法签名添加 throws 声明（如需要）",
+  "8. ArgumentException → IllegalArgumentException",
+  "9. InvalidOperationException → IllegalStateException",
+  "10. ArgumentNullException → NullPointerException",
+  "11. C# static method → Java 保留 static",
+  "12. LINQ → Stream API (Where→filter, Select→map, ToDictionary→collect(Collectors.toMap), OrderByDescending→sorted(Comparator.reverseOrder()), Take→limit)",
+  "13. string.Format() / $\"\" 字符串插值 → String.format()",
+  "14. Dictionary.TryGetValue + 赋值 → Map.merge()",
+].join("\n");
+
+export async function translateCSharpToJava(
+  request: CSharpToJavaRequest,
+  apiKey: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const prompt = buildCSharpToJavaPrompt(request);
+  return callLLM(prompt, apiKey, signal);
+}
+
+function buildCSharpToJavaPrompt(req: CSharpToJavaRequest): string {
+  return `你是 C#→Java 代码翻译专家。请把以下 C# 方法翻译成 Java。
+
+【匹配类型】${MATCH_NOTES[req.matchType] ?? ""}
+
+【C# 源码】
+\`\`\`csharp
+${req.csharpSource}
+\`\`\`
+
+【目标 Java 方法签名】
+\`\`\`java
+${req.javaSignature}
+\`\`\`
+
+【需求描述】
+${req.requirement}
+
+【翻译规则】
+${CSHARP_TO_JAVA_RULES}
+
+15. 不要写 import 语句 (放到编译 wrapper 里统一处理)
+16. 只输出方法代码（包含签名），不要 class 包裹，不要文件头，不要解释
+17. 不要 markdown 代码块标记 (\`\`\`)`;
+}
+
+async function callLLM(
+  prompt: string,
+  apiKey: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const response = await fetch(`${adaptationModelConfig.apiBase}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: adaptationModelConfig.model,
+      messages: [{ role: "user", content: prompt }],
+      thinking: { type: "disabled" },
+      temperature: 0.1,
+    }),
+    signal,
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`DeepSeek API error ${response.status}: ${err}`);
+  }
+
+  const data = (await response.json()) as {
+    choices: Array<{ message: { content: string } }>;
+  };
+  const content = data.choices[0]?.message.content;
+  if (typeof content !== "string" || !content.trim()) {
+    throw new Error("DeepSeek API returned an empty completion.");
+  }
+  return stripCodeFence(content.trim());
+}
+
+function stripCodeFence(code: string): string {
+  return code
+    .replace(/^```(?:csharp|cs|java)?\s*/i, "")
+    .replace(/\s*```\s*$/, "")
+    .trim();
+}
+
 export const translatorInternals = {
   buildRepairPrompt,
   buildTranslationPrompt,

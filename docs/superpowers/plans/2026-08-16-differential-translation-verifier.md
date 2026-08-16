@@ -1797,12 +1797,17 @@ git commit -m "feat(translation-verifier): 双轨道验证编排器与量化报�
 
 **两阶段架构(检索与迁移分离,需求第一):**
 
-1. **检索阶段(agent 驱动,不在本模块)**:由调用方(CLI/E2E)基于用户需求,用代码检索工具
-   (rg/find/read)在代码库中检索相关方法、测试、文档,产出**候选集合**(方法源码 + 相关测试 +
-   相关文档)。agent 判断相关性;脚本不按方法名硬抠(历史代码库中方法可能重载、测试分散多文件、
-   常带 mock/fixture)。
-2. **迁移阶段(本模块 TestMigratorAgent)**:输入 = 需求(第一优先级)+ 候选集合(参考实现),
-   输出 = TestDescription JSON。
+上游数据流(code-indexer → retrieval-service → adaptation-service,只读使用,不在本模块重复造轮子):
+
+1. **检索阶段(agent 驱动,不在本模块)**:基于用户需求执行上游检索
+   (SearchRequest 带 `repositoryScopes: ["<仓库>"]` 索引级硬过滤,防跨库同名干扰)→ 拿到
+   `SearchCandidate[]`(字段:id/path/signature/summary/preview≤160行,无 content)→ 按
+   `path` 从 `fixtures/code-corpus/<repository>/<path>` 读**完整方法体**。**测试自寻**(上游
+   code-indexer 明确排除测试文件):同仓库锚定(repositoryScopes)+ 镜像路径(`tests/...` 对应
+   `src/...`)+ "类名+Tests" 后缀 grep → agent 读内容确认相关性,不跨库漫游。脚本不按方法名
+   硬抠(历史代码库中方法可能重载、测试分散多文件)。
+2. **迁移阶段(本模块 TestMigratorAgent)**:输入 = 需求(第一优先级)+ 完整方法体 + 相关测试
+   (参考)+ repository/path 元数据,输出 = TestDescription JSON。
 
 - [ ] **Step 1: 写失败测试**(fake fetch)
 
@@ -1826,10 +1831,16 @@ import { validateDescription, type TestDescription } from "./description";
 
 export interface MigrationInput {
   sourceLanguage: string;
+  /** 完整方法体(按 SearchCandidate.path 从语料读取,而非 preview 片段)。 */
   sourceCode: string;
+  /** 同仓库锚定的相关测试(参考;上游 code-indexer 不索引测试,须自寻)。 */
   existingTests?: string;
   /** 用户需求,最高优先级(必填)。 */
   requirement: string;
+  /** 来源仓库(SearchCandidate.repository),用于 prompt 引用与报告追踪。 */
+  repository?: string;
+  /** 来源文件路径(SearchCandidate.path,仓库相对路径)。 */
+  sourcePath?: string;
   target: {
     language: "Java" | "C#";
     className: string;
@@ -1919,7 +1930,7 @@ export function buildMigrationPrompt(input: MigrationInput): string {
 ${input.requirement}
 
 REFERENCE_IMPLEMENTATION
-Source language: ${input.sourceLanguage}
+Source language: ${input.sourceLanguage}${input.repository ? `\nRepository: ${input.repository}` : ""}${input.sourcePath ? `\nPath: ${input.sourcePath}` : ""}
 Target contract:
 - language: ${input.target.language}
 - className: ${input.target.className}
@@ -2199,10 +2210,13 @@ git commit -m "feat(translation-verifier): CLI 编排入口"
 
 `run-e2e.ts` 流程(检索与迁移分离,需求第一):
 
-0. **检索阶段(agent 驱动)**:定义一条**用户需求**(如"解码 MIME 编码文本(如 =?UTF-8?B?...?=),非编码文本原样返回")。
-   基于需求,用代码检索工具(rg)在语料库中检索相关方法/测试/文档 —— 由 agent 判断相关性,
-   脚本**不按方法名硬抠**。脚本暴露检索入口(接收候选文件路径清单),把候选集合
-   (方法源码 + 相关测试)喂给 TestMigratorAgent。
+0. **检索阶段(agent 驱动,数据流对齐上游)**:定义一条**用户需求**(如"解码 MIME 编码文本
+   (如 =?UTF-8?B?...?=),非编码文本原样返回")。基于需求:①限定仓库
+   (`repositoryScopes: ["commons-fileupload-csharp"]`);②拿到候选(按需求检索/定位方法);
+   ③按 path 从语料读**完整方法体**;④**测试自寻**:同仓库镜像路径/类名+Tests 后缀 grep
+   (commons-fileupload-csharp 的测试实际只有 `tests/Program.cs`,参考价值有限,主要靠
+   方法体+需求,如实说明);⑤候选集合(完整方法体 + 相关测试 + repository/path 元数据)喂给
+   TestMigratorAgent。脚本不按方法名硬抠。
 1. **迁移阶段**:调用 `TestMigratorAgent.extractDescription({ requirement, sourceLanguage: "C#",
    sourceCode: <候选方法源码>, existingTests: <候选测试>, target: {...} })` 生成语言无关描述;
    无 DEEPSEEK_API_KEY 时改用 fixture(`e2e/fixtures/mime-util-description.json` 等)保证可离线跑通。

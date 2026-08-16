@@ -1788,7 +1788,7 @@ git commit -m "feat(translation-verifier): 双轨道验证编排器与量化报�
 > 本项目为 "Claude Code + DeepSeek 模型" agent 架构(`scripts/run-claude-deepseek.sh`),测试模块遵循同一架构。
 > - **禁止 DeepSeek HTTP 直调**:不使用 `completeWithDeepSeek`/`translateToJava`/`repairTranslation`,不依赖 `@forexplore/adaptation-service`。
 > - 所有 LLM 环节(TestMigratorAgent/RepairAgent)经 `src/claude-client.ts` 的 `runClaude(prompt, options)` 封装:`spawn("claude", ["-p", prompt, "--output-format", "text"], { env: { ANTHROPIC_BASE_URL: "https://api.deepseek.com/anthropic", ANTHROPIC_AUTH_TOKEN: apiKey, ANTHROPIC_MODEL: model, ANTHROPIC_DEFAULT_OPUS/SONNET/HAIKU_MODEL: model, CLAUDE_CODE_SUBAGENT_MODEL: model } })`;可注入 `spawnClaude`(测试=预设 stdout);无 apiKey 抛错;非零退出码抛错(含 stderr);超时默认 120s。
-> - 检索/定位由 agent 自带工具(rg/find/read)完成,代码侧只接收整理好的纯输入(完整方法体/测试/需求/目标签名)。
+> - 候选检索由上游**混合检索服务** POST /v1/search 完成(retrieval-service:向量+全文+RRF+rerank,返回 SearchCandidate 含 repository/path/signature/preview);agent 按 path 从语料读完整方法体;**测试自寻**(测试不在索引)由 agent 在同仓库内文件搜索(rg/find);代码侧只接收整理好的纯输入(完整方法体/测试/需求/目标签名)。
 > - 单元测试用 fake `spawnClaude` 注入,不依赖本机 claude / DeepSeek API。
 > - translation-verifier 的 package.json **移除** `@forexplore/adaptation-service` 依赖(仅保留 `@forexplore/contracts`)。
 > - 原设计中调用 completeWithDeepSeek / fake fetch 的部分以此说明为准;`claude-client.ts` 需新增于 Task 10。
@@ -1809,7 +1809,7 @@ git commit -m "feat(translation-verifier): 双轨道验证编排器与量化报�
 
 上游数据流(code-indexer → retrieval-service → adaptation-service,只读使用,不在本模块重复造轮子):
 
-1. **检索阶段(agent 驱动,不在本模块)**:基于用户需求执行上游检索
+1. **检索阶段(调用上游混合检索服务,不在本模块)**:基于用户需求调用上游混合检索服务 POST /v1/search
    (SearchRequest 带 `repositoryScopes: ["<仓库>"]` 索引级硬过滤,防跨库同名干扰)→ 拿到
    `SearchCandidate[]`(字段:id/path/signature/summary/preview≤160行,无 content)→ 按
    `path` 从 `fixtures/code-corpus/<repository>/<path>` 读**完整方法体**。**测试自寻**(上游
@@ -1975,7 +1975,7 @@ git commit -m "feat(translation-verifier): 测试迁移 Agent(需求第一, 源�
 > 本项目为 "Claude Code + DeepSeek 模型" agent 架构(`scripts/run-claude-deepseek.sh`),测试模块遵循同一架构。
 > - **禁止 DeepSeek HTTP 直调**:不使用 `completeWithDeepSeek`/`translateToJava`/`repairTranslation`,不依赖 `@forexplore/adaptation-service`。
 > - 所有 LLM 环节(TestMigratorAgent/RepairAgent)经 `src/claude-client.ts` 的 `runClaude(prompt, options)` 封装:`spawn("claude", ["-p", prompt, "--output-format", "text"], { env: { ANTHROPIC_BASE_URL: "https://api.deepseek.com/anthropic", ANTHROPIC_AUTH_TOKEN: apiKey, ANTHROPIC_MODEL: model, ANTHROPIC_DEFAULT_OPUS/SONNET/HAIKU_MODEL: model, CLAUDE_CODE_SUBAGENT_MODEL: model } })`;可注入 `spawnClaude`(测试=预设 stdout);无 apiKey 抛错;非零退出码抛错(含 stderr);超时默认 120s。
-> - 检索/定位由 agent 自带工具(rg/find/read)完成,代码侧只接收整理好的纯输入(完整方法体/测试/需求/目标签名)。
+> - 候选检索由上游**混合检索服务** POST /v1/search 完成(retrieval-service:向量+全文+RRF+rerank,返回 SearchCandidate 含 repository/path/signature/preview);agent 按 path 从语料读完整方法体;**测试自寻**(测试不在索引)由 agent 在同仓库内文件搜索(rg/find);代码侧只接收整理好的纯输入(完整方法体/测试/需求/目标签名)。
 > - 单元测试用 fake `spawnClaude` 注入,不依赖本机 claude / DeepSeek API。
 > - translation-verifier 的 package.json **移除** `@forexplore/adaptation-service` 依赖(仅保留 `@forexplore/contracts`)。
 > - 原设计中调用 completeWithDeepSeek / fake fetch 的部分以此说明为准;`claude-client.ts` 需新增于 Task 10。
@@ -2183,7 +2183,7 @@ git commit -m "feat(translation-verifier): 反馈修复闭环(诊断→重译→
 > 本项目为 "Claude Code + DeepSeek 模型" agent 架构(`scripts/run-claude-deepseek.sh`),测试模块遵循同一架构。
 > - **禁止 DeepSeek HTTP 直调**:不使用 `completeWithDeepSeek`/`translateToJava`/`repairTranslation`,不依赖 `@forexplore/adaptation-service`。
 > - 所有 LLM 环节(TestMigratorAgent/RepairAgent)经 `src/claude-client.ts` 的 `runClaude(prompt, options)` 封装:`spawn("claude", ["-p", prompt, "--output-format", "text"], { env: { ANTHROPIC_BASE_URL: "https://api.deepseek.com/anthropic", ANTHROPIC_AUTH_TOKEN: apiKey, ANTHROPIC_MODEL: model, ANTHROPIC_DEFAULT_OPUS/SONNET/HAIKU_MODEL: model, CLAUDE_CODE_SUBAGENT_MODEL: model } })`;可注入 `spawnClaude`(测试=预设 stdout);无 apiKey 抛错;非零退出码抛错(含 stderr);超时默认 120s。
-> - 检索/定位由 agent 自带工具(rg/find/read)完成,代码侧只接收整理好的纯输入(完整方法体/测试/需求/目标签名)。
+> - 候选检索由上游**混合检索服务** POST /v1/search 完成(retrieval-service:向量+全文+RRF+rerank,返回 SearchCandidate 含 repository/path/signature/preview);agent 按 path 从语料读完整方法体;**测试自寻**(测试不在索引)由 agent 在同仓库内文件搜索(rg/find);代码侧只接收整理好的纯输入(完整方法体/测试/需求/目标签名)。
 > - 单元测试用 fake `spawnClaude` 注入,不依赖本机 claude / DeepSeek API。
 > - translation-verifier 的 package.json **移除** `@forexplore/adaptation-service` 依赖(仅保留 `@forexplore/contracts`)。
 > - 原设计中调用 completeWithDeepSeek / fake fetch 的部分以此说明为准;`claude-client.ts` 需新增于 Task 10。
@@ -2232,7 +2232,7 @@ git commit -m "feat(translation-verifier): CLI 编排入口"
 > 本项目为 "Claude Code + DeepSeek 模型" agent 架构(`scripts/run-claude-deepseek.sh`),测试模块遵循同一架构。
 > - **禁止 DeepSeek HTTP 直调**:不使用 `completeWithDeepSeek`/`translateToJava`/`repairTranslation`,不依赖 `@forexplore/adaptation-service`。
 > - 所有 LLM 环节(TestMigratorAgent/RepairAgent)经 `src/claude-client.ts` 的 `runClaude(prompt, options)` 封装:`spawn("claude", ["-p", prompt, "--output-format", "text"], { env: { ANTHROPIC_BASE_URL: "https://api.deepseek.com/anthropic", ANTHROPIC_AUTH_TOKEN: apiKey, ANTHROPIC_MODEL: model, ANTHROPIC_DEFAULT_OPUS/SONNET/HAIKU_MODEL: model, CLAUDE_CODE_SUBAGENT_MODEL: model } })`;可注入 `spawnClaude`(测试=预设 stdout);无 apiKey 抛错;非零退出码抛错(含 stderr);超时默认 120s。
-> - 检索/定位由 agent 自带工具(rg/find/read)完成,代码侧只接收整理好的纯输入(完整方法体/测试/需求/目标签名)。
+> - 候选检索由上游**混合检索服务** POST /v1/search 完成(retrieval-service:向量+全文+RRF+rerank,返回 SearchCandidate 含 repository/path/signature/preview);agent 按 path 从语料读完整方法体;**测试自寻**(测试不在索引)由 agent 在同仓库内文件搜索(rg/find);代码侧只接收整理好的纯输入(完整方法体/测试/需求/目标签名)。
 > - 单元测试用 fake `spawnClaude` 注入,不依赖本机 claude / DeepSeek API。
 > - translation-verifier 的 package.json **移除** `@forexplore/adaptation-service` 依赖(仅保留 `@forexplore/contracts`)。
 > - 原设计中调用 completeWithDeepSeek / fake fetch 的部分以此说明为准;`claude-client.ts` 需新增于 Task 10。
@@ -2250,13 +2250,13 @@ git commit -m "feat(translation-verifier): CLI 编排入口"
 
 `run-e2e.ts` 流程(检索与迁移分离,需求第一):
 
-0. **检索阶段(agent 驱动,数据流对齐上游)**:定义一条**用户需求**(如"解码 MIME 编码文本
+0. **检索阶段(调用混合检索服务)**:定义一条**用户需求**(如"解码 MIME 编码文本
    (如 =?UTF-8?B?...?=),非编码文本原样返回")。基于需求:①限定仓库
    (`repositoryScopes: ["commons-fileupload-csharp"]`);②拿到候选(按需求检索/定位方法);
    ③按 path 从语料读**完整方法体**;④**测试自寻**:同仓库镜像路径/类名+Tests 后缀 grep
    (commons-fileupload-csharp 的测试实际只有 `tests/Program.cs`,参考价值有限,主要靠
    方法体+需求,如实说明);⑤候选集合(完整方法体 + 相关测试 + repository/path 元数据)喂给
-   TestMigratorAgent。脚本不按方法名硬抠。
+   TestMigratorAgent。脚本不按方法名硬抠;候选检索来自混合检索服务结果。
 1. **迁移阶段**:调用 `TestMigratorAgent.extractDescription({ requirement, sourceLanguage: "C#",
    sourceCode: <候选方法源码>, existingTests: <候选测试>, target: {...} })` 生成语言无关描述;
    无 DEEPSEEK_API_KEY 时改用 fixture(`e2e/fixtures/mime-util-description.json` 等)保证可离线跑通。

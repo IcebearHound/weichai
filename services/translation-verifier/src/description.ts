@@ -1,0 +1,148 @@
+export type VerifierLanguage = "Java" | "C#";
+export const verifierSchemaVersion = "1.0" as const;
+const VALID_LANGUAGES: ReadonlySet<string> = new Set(["Java", "C#"]);
+
+export type TypedValue =
+  | { type: "string"; value: string }
+  | { type: "number"; value: number }
+  | { type: "boolean"; value: boolean }
+  | { type: "null"; value: null }
+  | { type: "list"; value: TypedValue[] }
+  | { type: "map"; value: Record<string, TypedValue> };
+
+export interface TestCase {
+  id: string;
+  description?: string;
+  inputs: TypedValue[];
+  expected:
+    | { kind: "return"; value: TypedValue }
+    | { kind: "exception"; type: string; messageContains?: string };
+}
+
+export interface TestDescription {
+  schemaVersion: "1.0";
+  target: {
+    language: VerifierLanguage;
+    className: string;
+    method: string;
+    isStatic: boolean;
+    constructorArgs: TypedValue[];
+  };
+  cases: TestCase[];
+}
+
+export function validateDescription(value: unknown): TestDescription {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("TestDescription must be a JSON object.");
+  }
+  const d = value as Record<string, unknown>;
+  if (d.schemaVersion !== verifierSchemaVersion) {
+    throw new Error(`TestDescription schemaVersion must be "${verifierSchemaVersion}".`);
+  }
+  const target = d.target as Record<string, unknown> | undefined;
+  if (typeof target !== "object" || target === null) throw new Error("TestDescription.target is required.");
+  if (typeof target.language !== "string" || !VALID_LANGUAGES.has(target.language)) {
+    throw new Error(`TestDescription.target.language must be one of Java, C#; received ${String(target.language)}.`);
+  }
+  for (const key of ["className", "method"] as const) {
+    if (typeof target[key] !== "string" || !(target[key] as string).trim()) {
+      throw new Error(`TestDescription.target.${key} must be a non-empty string.`);
+    }
+  }
+  if (typeof target.isStatic !== "boolean") {
+    throw new Error("TestDescription.target.isStatic must be a boolean.");
+  }
+  const ctorArgs = target.constructorArgs;
+  if (!Array.isArray(ctorArgs)) throw new Error("TestDescription.target.constructorArgs must be an array.");
+  ctorArgs.forEach((arg, i) => validateTypedValue(arg, `target.constructorArgs[${i}]`));
+  if (!Array.isArray(d.cases) || d.cases.length === 0) {
+    throw new Error("TestDescription.cases must be a non-empty array.");
+  }
+  d.cases.forEach((c, i) => validateCase(c, `cases[${i}]`));
+  return structuredClone(value) as TestDescription;
+}
+
+function validateCase(value: unknown, path: string): void {
+  if (typeof value !== "object" || value === null) throw new Error(`${path} must be an object.`);
+  const c = value as Record<string, unknown>;
+  if (typeof c.id !== "string" || !c.id.trim()) throw new Error(`${path}.id must be a non-empty string.`);
+  if (c.description !== undefined && typeof c.description !== "string") {
+    throw new Error(`${path}.description must be a string when present.`);
+  }
+  if (!Array.isArray(c.inputs)) throw new Error(`${path}.inputs must be an array.`);
+  c.inputs.forEach((v, i) => validateTypedValue(v, `${path}.inputs[${i}]`));
+  validateExpected(c.expected, `${path}.expected`);
+}
+
+function validateExpected(value: unknown, path: string): void {
+  if (typeof value !== "object" || value === null) throw new Error(`${path} is required.`);
+  const e = value as Record<string, unknown>;
+  if (e.kind === "return") {
+    validateTypedValue(e.value, `${path}.value`);
+    return;
+  }
+  if (e.kind === "exception") {
+    if (typeof e.type !== "string" || !e.type.trim()) throw new Error(`${path}.type must be a non-empty string.`);
+    if (e.messageContains !== undefined && typeof e.messageContains !== "string") {
+      throw new Error(`${path}.messageContains must be a string when present.`);
+    }
+    return;
+  }
+  throw new Error(`${path}.kind must be "return" or "exception".`);
+}
+
+export function validateTypedValue(value: unknown, path: string): void {
+  if (typeof value !== "object" || value === null) throw new Error(`${path} must be a TypedValue.`);
+  const t = value as Record<string, unknown>;
+  switch (t.type) {
+    case "string":
+      if (typeof t.value !== "string") throw new Error(`${path}.value must be a string.`);
+      return;
+    case "number":
+      if (typeof t.value !== "number") throw new Error(`${path}.value must be a number.`);
+      return;
+    case "boolean":
+      if (typeof t.value !== "boolean") throw new Error(`${path}.value must be a boolean.`);
+      return;
+    case "null":
+      if (t.value !== null) throw new Error(`${path}.value must be null.`);
+      return;
+    case "list": {
+      if (!Array.isArray(t.value)) throw new Error(`${path}.value must be an array.`);
+      t.value.forEach((v, i) => validateTypedValue(v, `${path}.value[${i}]`));
+      return;
+    }
+    case "map": {
+      if (typeof t.value !== "object" || t.value === null || Array.isArray(t.value)) {
+        throw new Error(`${path}.value must be an object.`);
+      }
+      for (const [k, v] of Object.entries(t.value as Record<string, unknown>)) {
+        if (!k) throw new Error(`${path}.value keys must be non-empty strings.`);
+        validateTypedValue(v, `${path}.value.${k}`);
+      }
+      return;
+    }
+    default:
+      throw new Error(`${path}.type must be one of string, number, boolean, null, list, map.`);
+  }
+}
+
+export function canonicalDescriptionJson(description: TestDescription): string {
+  const canonical = {
+    schemaVersion: description.schemaVersion,
+    target: {
+      language: description.target.language,
+      className: description.target.className,
+      method: description.target.method,
+      isStatic: description.target.isStatic,
+      constructorArgs: description.target.constructorArgs,
+    },
+    cases: description.cases.map((c) => ({
+      id: c.id,
+      ...(c.description === undefined ? {} : { description: c.description }),
+      inputs: c.inputs,
+      expected: c.expected,
+    })),
+  };
+  return JSON.stringify(canonical);
+}

@@ -99,7 +99,10 @@ export function validateTypedValue(value: unknown, path: string): void {
       if (typeof t.value !== "string") throw new Error(`${path}.value must be a string.`);
       return;
     case "number":
-      if (typeof t.value !== "number") throw new Error(`${path}.value must be a number.`);
+      // NaN / Infinity 无法被 JSON 表达(序列化会变成 null),拒绝以保持校验-序列化闭环。
+      if (typeof t.value !== "number" || !Number.isFinite(t.value)) {
+        throw new Error(`${path}.value must be a number.`);
+      }
       return;
     case "boolean":
       if (typeof t.value !== "boolean") throw new Error(`${path}.value must be a boolean.`);
@@ -116,6 +119,7 @@ export function validateTypedValue(value: unknown, path: string): void {
       if (typeof t.value !== "object" || t.value === null || Array.isArray(t.value)) {
         throw new Error(`${path}.value must be an object.`);
       }
+      // JS object keys are always strings; empty keys are rejected; Symbol keys are intentionally not supported
       for (const [k, v] of Object.entries(t.value as Record<string, unknown>)) {
         if (!k) throw new Error(`${path}.value keys must be non-empty strings.`);
         validateTypedValue(v, `${path}.value.${k}`);
@@ -127,6 +131,31 @@ export function validateTypedValue(value: unknown, path: string): void {
   }
 }
 
+/**
+ * 递归规范化 TypedValue:统一重建为 { type, value } 属性顺序。
+ * list 保持数组顺序;map 的键按字典序排序后重建(JSON.stringify 按插入序输出,排序保证确定)。
+ */
+function canonicalTypedValue(t: TypedValue): TypedValue {
+  switch (t.type) {
+    case "string":
+      return { type: "string", value: t.value };
+    case "number":
+      return { type: "number", value: t.value };
+    case "boolean":
+      return { type: "boolean", value: t.value };
+    case "null":
+      return { type: "null", value: t.value };
+    case "list":
+      return { type: "list", value: t.value.map(canonicalTypedValue) };
+    case "map": {
+      const entries = Object.entries(t.value)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([k, v]) => [k, canonicalTypedValue(v)] as const);
+      return { type: "map", value: Object.fromEntries(entries) };
+    }
+  }
+}
+
 export function canonicalDescriptionJson(description: TestDescription): string {
   const canonical = {
     schemaVersion: description.schemaVersion,
@@ -135,13 +164,16 @@ export function canonicalDescriptionJson(description: TestDescription): string {
       className: description.target.className,
       method: description.target.method,
       isStatic: description.target.isStatic,
-      constructorArgs: description.target.constructorArgs,
+      constructorArgs: description.target.constructorArgs.map(canonicalTypedValue),
     },
     cases: description.cases.map((c) => ({
       id: c.id,
       ...(c.description === undefined ? {} : { description: c.description }),
-      inputs: c.inputs,
-      expected: c.expected,
+      inputs: c.inputs.map(canonicalTypedValue),
+      expected:
+        c.expected.kind === "return"
+          ? { kind: "return", value: canonicalTypedValue(c.expected.value) }
+          : { kind: c.expected.kind, type: c.expected.type, ...(c.expected.messageContains === undefined ? {} : { messageContains: c.expected.messageContains }) },
     })),
   };
   return JSON.stringify(canonical);

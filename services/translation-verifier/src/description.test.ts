@@ -191,6 +191,23 @@ describe("validateDescription", () => {
     ).toThrow("cases[0].inputs[0].value keys must be non-empty strings.");
   });
 
+  it("throws when a number TypedValue is not finite (NaN / Infinity)", () => {
+    expect(() =>
+      validateDescription(
+        validDescription({
+          cases: [{ ...validDescription().cases[0], inputs: [{ type: "number", value: NaN }] }],
+        }),
+      ),
+    ).toThrow("cases[0].inputs[0].value must be a number.");
+    expect(() =>
+      validateDescription(
+        validDescription({
+          cases: [{ ...validDescription().cases[0], inputs: [{ type: "number", value: Infinity }] }],
+        }),
+      ),
+    ).toThrow("cases[0].inputs[0].value must be a number.");
+  });
+
   it("throws when expected.kind is invalid and when exception lacks type", () => {
     expect(() =>
       validateDescription(
@@ -232,8 +249,7 @@ describe("canonicalDescriptionJson", () => {
         },
       ],
     };
-    // 仅顶层 / target / case 层级的属性顺序不同;
-    // 嵌套 TypedValue 内部顺序保持不变(实现只规范化外层结构)。
+    // 仅顶层 / target / case 层级的属性顺序不同。
     const b: TestDescription = {
       cases: [
         {
@@ -251,6 +267,62 @@ describe("canonicalDescriptionJson", () => {
       },
       schemaVersion: "1.0",
     };
+    expect(canonicalDescriptionJson(a)).toBe(canonicalDescriptionJson(b));
+  });
+
+  it("canonicalizes nested TypedValue property order", () => {
+    // 同一 TypedValue 语义,但 type / value 书写顺序相反。
+    const a = validDescription({
+      cases: [
+        {
+          id: "c1",
+          inputs: [{ value: "x", type: "string" }],
+          expected: { kind: "return", value: { value: 1, type: "number" } },
+        },
+      ],
+    });
+    const b = validDescription({
+      cases: [
+        {
+          id: "c1",
+          inputs: [{ type: "string", value: "x" }],
+          expected: { kind: "return", value: { type: "number", value: 1 } },
+        },
+      ],
+    });
+    expect(canonicalDescriptionJson(a)).toBe(canonicalDescriptionJson(b));
+  });
+
+  it("canonicalizes map key order inside nested TypedValue", () => {
+    // 同一 map 语义,但键的插入顺序不同。
+    const a = validDescription({
+      cases: [
+        {
+          id: "c1",
+          inputs: [
+            {
+              type: "map",
+              value: { a: { type: "number", value: 1 }, b: { type: "string", value: "x" } },
+            },
+          ],
+          expected: { kind: "return", value: { type: "null", value: null } },
+        },
+      ],
+    });
+    const b = validDescription({
+      cases: [
+        {
+          id: "c1",
+          inputs: [
+            {
+              type: "map",
+              value: { b: { type: "string", value: "x" }, a: { type: "number", value: 1 } },
+            },
+          ],
+          expected: { kind: "return", value: { type: "null", value: null } },
+        },
+      ],
+    });
     expect(canonicalDescriptionJson(a)).toBe(canonicalDescriptionJson(b));
   });
 });

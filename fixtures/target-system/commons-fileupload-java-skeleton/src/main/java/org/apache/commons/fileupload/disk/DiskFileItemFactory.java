@@ -67,6 +67,8 @@ import org.apache.commons.io.FileCleaningTracker;
  *
  * @since FileUpload 1.1
  */
+
+/** 该上传类型使用共享阈值、目录和字符集配置创建磁盘型上传条目。 */
 public class DiskFileItemFactory implements FileItemFactory {
 
     // ----------------------------------------------------- Manifest constants

@@ -20,6 +20,8 @@ package org.apache.commons.fileupload;
  * This exception is thrown if a request contains more files than the specified
  * limit.
  */
+
+/** 该上传类型当请求中的文件数量超过配置上限时抛出。 */
 public class FileCountLimitExceededException extends FileUploadException {
 
     private static final long serialVersionUID = 6904179610227521789L;

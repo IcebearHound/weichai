@@ -68,6 +68,8 @@ import org.apache.commons.io.output.DeferredFileOutputStream;
  *
  * @since FileUpload 1.1
  */
+
+/** 该上传类型小内容保存在内存，超过阈值时溢写到临时磁盘文件的上传条目。 */
 public class DiskFileItem
     implements FileItem {
 

@@ -1,0 +1,58 @@
+{
+  "repository": "commons-fileupload-python",
+  "language": "Python",
+  "languageVersion": "3.11",
+  "sourceRoot": "src",
+  "retrievalClassAliases": {
+    "FileUploadException": "upload_processing_error",
+    "InvalidContentTypeException": "missing_boundary_error",
+    "InvalidFileNameException": "unsafe_upload_name_error",
+    "SizeException": "upload_size_error",
+    "SizeLimitExceededException": "request_size_limit_error",
+    "FileSizeLimitExceededException": "item_size_limit_error",
+    "FileCountLimitExceededException": "attachment_limit_error",
+    "MalformedStreamException": "invalid_multipart_stream_error",
+    "IllegalBoundaryException": "invalid_boundary_error",
+    "RequestContext": "request_source",
+    "InMemoryRequestContext": "memory_request_source",
+    "FileItemHeaders": "multipart_header_bag",
+    "ParameterParser": "header_parameter_reader",
+    "MultipartPart": "multipart_segment",
+    "MultipartStream": "boundary_stream_reader",
+    "FileItem": "upload_item_contract",
+    "_ItemOutput": "item_output_buffer",
+    "DiskFileItem": "disk_backed_item",
+    "DiskFileItemFactory": "disk_item_factory",
+    "FileUploadBase": "multipart_upload_core",
+    "FileUpload": "multipart_upload"
+    ,"FileItemFactory": "upload_item_factory_contract"
+    ,"FileItemHeadersSupport": "header_aware_item"
+    ,"UploadContext": "sized_request_source"
+    ,"ProgressListener": "transfer_progress_hook"
+    ,"FileItemStream": "streamed_upload_part"
+    ,"FileItemIterator": "upload_part_iterator"
+    ,"DefaultFileItem": "legacy_upload_item"
+    ,"DefaultFileItemFactory": "legacy_item_factory"
+    ,"DiskFileUpload": "legacy_disk_upload"
+    ,"FileItemHeadersImpl": "multipart_header_store"
+    ,"ServletRequestContext": "servlet_request_bridge"
+    ,"ServletFileUpload": "servlet_upload_parser"
+    ,"PortletRequestContext": "portal_request_bridge"
+    ,"PortletFileUpload": "portal_upload_parser"
+    ,"FileCleanerCleanup": "temporary_item_cleaner"
+    ,"Closeable": "close_state_aware"
+    ,"LimitedInputStream": "bounded_read_stream"
+    ,"Streams": "upload_stream_tools"
+    ,"Base64Decoder": "base64_header_decoder"
+    ,"QuotedPrintableDecoder": "quoted_printable_decoder"
+    ,"MimeUtility": "mime_text_toolkit"
+    ,"ParseException": "mime_parse_fault"
+  },
+  "testRoot": "tests",
+  "build": "python3 -m compileall -q src",
+  "test": "PYTHONPATH=src python3 -m unittest discover -s tests -v",
+  "license": "Apache-2.0",
+  "dependencies": [],
+  "benchmarkIncluded": false,
+  "upstream": "Apache Commons FileUpload 1.5"
+}

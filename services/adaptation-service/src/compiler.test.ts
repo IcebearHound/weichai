@@ -1,6 +1,10 @@
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { compileIntegrated, compilerInternals } from "./compiler";
+import {
+  compileIntegrated,
+  compileTargetStandalone,
+  compilerInternals,
+} from "./compiler";
 
 const skeletonProjectPath = fileURLToPath(
   new URL("../../../fixtures/target-system/forexplore-csharp-workspace", import.meta.url),
@@ -51,6 +55,60 @@ describe("integrated compiler source replacement", () => {
     expect(result).toContain('public string Keep() => "keep";');
     expect(result).toContain('return "loaded";');
     expect(result).not.toContain("NotImplementedException");
+  });
+
+  it("replaces a complete class while preserving the rest of the source file", () => {
+    const source = `package demo;
+
+public class Factory {
+    private int threshold = 1;
+
+    public Factory() {
+        threshold = 2;
+    }
+}
+
+class Unchanged { }
+`;
+    const generated = `public class Factory {
+    private final int threshold = 3;
+
+    public Factory() {
+        threshold = 4;
+    }
+}`;
+
+    const result = compilerInternals.replaceTargetClass(source, generated);
+
+    expect(result).toContain("package demo;");
+    expect(result).toContain("private final int threshold = 3;");
+    expect(result).toContain("class Unchanged { }");
+    expect(result).not.toContain("private int threshold = 1;");
+  });
+
+  it("replaces a complete Python class without touching a neighboring class", () => {
+    const source = `class Factory:
+    threshold = 1
+
+    def create(self):
+        return None
+
+class Unchanged:
+    pass
+`;
+    const generated = `class Factory:
+    threshold = 3
+
+    def create(self):
+        return object()
+`;
+
+    const result = compilerInternals.replacePythonTargetClass(source, generated);
+
+    expect(result).toContain("threshold = 3");
+    expect(result).toContain("return object()");
+    expect(result).toContain("class Unchanged:");
+    expect(result).not.toContain("threshold = 1");
   });
 
   it("selects the matching overload when a target class has repeated method names", () => {
@@ -110,4 +168,17 @@ describe("integrated compiler source replacement", () => {
     },
     30_000,
   );
+});
+
+describe("language-neutral compiler registry", () => {
+  it("validates a Python target through the same registry entry used by the adapter", () => {
+    const result = compileTargetStandalone(
+      "Python",
+      "def parse_attributes(value: str | None) -> dict[str, str]:\n    return {}",
+      "ForeXploreStandalone",
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
 });

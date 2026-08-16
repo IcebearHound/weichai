@@ -9,6 +9,8 @@ export interface CorpusManifest {
   dependencies?: string[];
   synthetic?: boolean;
   sourceRoot?: string;
+  /** Optional benchmark-only aliases keyed by original class name. */
+  retrievalClassAliases?: Record<string, string>;
 }
 
 const supportedLanguages = new Set<Language>([
@@ -26,6 +28,14 @@ function parseManifest(value: unknown, manifestPath: string): CorpusManifest {
     !supportedLanguages.has(manifest.language as Language) ||
     (manifest.license !== undefined && typeof manifest.license !== 'string') ||
     (manifest.sourceRoot !== undefined && typeof manifest.sourceRoot !== 'string') ||
+    (manifest.retrievalClassAliases !== undefined &&
+      (typeof manifest.retrievalClassAliases !== 'object' ||
+        manifest.retrievalClassAliases === null ||
+        !Object.entries(manifest.retrievalClassAliases).every(
+          ([name, alias]) =>
+            /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) &&
+            typeof alias === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(alias),
+        ))) ||
     (manifest.synthetic !== undefined && typeof manifest.synthetic !== 'boolean') ||
     (manifest.dependencies !== undefined &&
       (!Array.isArray(manifest.dependencies) ||

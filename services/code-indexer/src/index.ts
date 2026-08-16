@@ -54,7 +54,9 @@ export async function extractCorpus(
       for (const symbol of extractSymbols(source, manifest.language)) {
         documents.push({
           id: `${manifest.repository}:${relativePath}:${symbol.line}:${symbol.name}`,
-          title: symbol.name,
+          title: symbol.kind === 'class'
+            ? manifest.retrievalClassAliases?.[symbol.name] || symbol.name
+            : symbol.name,
           repository: `fixture/${manifest.repository}`,
           license: manifest.license || 'Unknown',
           language: manifest.language,

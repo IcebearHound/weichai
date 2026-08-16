@@ -21,6 +21,8 @@ import java.io.IOException;
 /**
  * Interface of an object, which may be closed.
  */
+
+/** 该上传类型标识能够报告关闭状态的输入输出资源。 */
 public interface Closeable {
 
     /**

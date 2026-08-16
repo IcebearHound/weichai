@@ -13,9 +13,6 @@
     "Other"
   ],
   "main": "./dist/extension/extension.js",
-  "extensionDependencies": [
-    "redhat.java"
-  ],
   "files": [
     "dist/extension/**",
     "dist/webview/**",
@@ -55,7 +52,7 @@
       "editor/context": [
         {
           "command": "forexplore.startTranslation",
-          "when": "editorHasSelection && resourceScheme == file && resourceLangId == java",
+          "when": "editorHasSelection && resourceScheme == file",
           "group": "forexplore@1"
         }
       ]
@@ -67,7 +64,7 @@
           "type": "string",
           "enum": ["real"],
           "default": "real",
-          "description": "调用本地 SeekDB 检索服务和候选语言 → Java 适配服务；两个服务都必须健康。"
+          "description": "调用本地 SeekDB 检索服务和语言无关的适配服务；两个服务都必须健康。"
         },
         "forexplore.repositoryPaths": {
           "type": "array",
@@ -85,7 +82,7 @@
         "forexplore.adaptationApiUrl": {
           "type": "string",
           "default": "http://127.0.0.1:8788",
-          "description": "候选语言 → Java 翻译服务地址。"
+          "description": "语言无关翻译服务地址。"
         }
       }
     }

@@ -11,12 +11,11 @@ DeepSeek. The server never writes workspace files.
 | --- | --- |
 | `forexplore_collect_target_context` | Read the selected target and bounded local context. |
 | `forexplore_analyze_translation` | Produce `AnalysisReport v1` for one candidate. |
-| `forexplore_generate_translation` | Generate one C# method from analysis. |
-| `forexplore_repair_translation` | Repair one method from structured validation feedback. |
-| `forexplore_validate_csharp_translation` | Run standalone or temporary integrated compilation. |
+| `forexplore_validate_rerank` | Verify a reranking result includes every candidate ID exactly once. |
+| `forexplore_generate_translation` | Generate one target-language method or complete class from analysis. |
+| `forexplore_repair_translation` | Repair one method or complete class from structured validation feedback. |
+| `forexplore_validate_translation` | Run language-selected standalone or temporary integrated compilation. |
 | `forexplore_adapt_translation` | Run context collection through patch preview in one call. |
-| `forexplore_translate_java_to_csharp` | Compatibility method translator. |
-| `forexplore_translate_csharp_to_java` | Reverse-direction method translator. |
 
 `apply` and checkpoint restore are deliberately absent. The VS Code extension
 remains the only component that can obtain user confirmation and perform a
@@ -40,10 +39,19 @@ Windows. The launcher sends Claude Code model requests directly to
 `https://api.deepseek.com/anthropic` and sets every primary and subagent model
 to `deepseek-v4-flash` by default.
 
-Its outer agent should call
-`forexplore_analyze_translation`, then pass only the returned `AnalysisReport`
-to `forexplore_generate_translation`; no Analyzer conversation is available to
-the Translator.
+Use the checked-in `forexplore-analyzer`, `forexplore-translator`, and
+`forexplore-reranker` Claude Code agents with `npm run claude:analyzer`,
+`npm run claude:translator`, and `npm run claude:reranker`.
+They are separate Claude Code sessions: the Analyzer calls
+`forexplore_analyze_translation`, then the Translator receives only the
+returned `AnalysisReport` artifact and calls
+`forexplore_generate_translation`. No Analyzer conversation is available to
+the Translator. The complete `forexplore_adapt_translation` tool applies the
+same two-agent artifact boundary for automation.
+
+`forexplore-reranker` is the corresponding retrieval Agent. It calls
+`forexplore_validate_rerank` after each DeepSeek ranking response and uses any
+reported contract issues to repair the next ranking before returning it.
 
 The project MCP configuration is:
 

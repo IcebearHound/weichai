@@ -25,6 +25,8 @@ package org.apache.commons.fileupload;
  * @see FileItem
  * @see FileItemStream
  */
+
+/** 该上传类型声明上传条目可读取和设置 multipart 头信息。 */
 public interface FileItemHeadersSupport {
 
     /**

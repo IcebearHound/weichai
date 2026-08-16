@@ -32,6 +32,8 @@ import org.apache.commons.fileupload.UploadContext;
  *
  * @since FileUpload 1.1
  */
+
+/** 该上传类型把 Servlet 请求转换为统一的上传请求上下文。 */
 public class ServletRequestContext implements UploadContext {
 
     // ----------------------------------------------------- Instance Variables

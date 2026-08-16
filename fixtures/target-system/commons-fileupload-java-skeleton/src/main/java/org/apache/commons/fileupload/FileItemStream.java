@@ -31,6 +31,8 @@ import java.io.InputStream;
  * {@link java.util.Iterator#hasNext()} on the iterator, you discard all data,
  * which hasn't been read so far from the previous data.</p>
  */
+
+/** 该上传类型按流暴露 multipart 条目，避免先物化全部文件内容。 */
 public interface FileItemStream extends FileItemHeadersSupport {
 
     /**
@@ -40,6 +42,8 @@ public interface FileItemStream extends FileItemHeadersSupport {
      * {@link java.util.Iterator#hasNext()} has been invoked on the
      * iterator, which created the {@link FileItemStream}.
      */
+
+    /** 该上传类型在迭代到下一条目后读取已跳过条目时抛出。 */
     class ItemSkippedException extends IOException {
 
         /**

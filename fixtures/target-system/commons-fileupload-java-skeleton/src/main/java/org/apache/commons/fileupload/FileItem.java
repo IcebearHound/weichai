@@ -44,6 +44,8 @@ import java.io.UnsupportedEncodingException;
  *
  * @since 1.3 additionally implements FileItemHeadersSupport
  */
+
+/** 该上传类型表示一个表单字段或上传文件的内容、元数据与持久化操作。 */
 public interface FileItem extends FileItemHeadersSupport {
 
     // ------------------------------- Methods from javax.activation.DataSource

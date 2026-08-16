@@ -1,6 +1,8 @@
 {
   "candidateSource": "public void deleteEverything() { database.truncate(); }",
   "targetContext": {
+    "targetKind": "function",
+    "targetLanguage": "C#",
     "targetSignature": "public Task<Quote> GetQuoteAsync(QuoteRequest request, CancellationToken cancellationToken)",
     "importsOrUsings": [],
     "members": [],

@@ -4,6 +4,7 @@ using System.Text;
 
 namespace Apache.Commons.FileUpload;
 
+/// 它从请求字节中定位分隔符，并逐段产出头部和内容。
 public sealed class MultipartStream
 {
     private readonly byte[] data;
@@ -155,8 +156,10 @@ public sealed class MultipartStream
         return -1;
     }
 
+    /// .NET 侧该类型保存一个 multipart 分段的原始头文本和二进制正文。
     internal sealed record MultipartPart(string RawHeaders, byte[] Body);
 
+    /// .NET 侧该类型累计已读字节与条目数量并通知上传进度监听器。
     public sealed class ProgressNotifier
     {
         private readonly ProgressListener? listener;
@@ -183,6 +186,7 @@ public sealed class MultipartStream
         }
     }
 
+    /// .NET 侧该类型为单个 multipart 条目提供可关闭的只读输入流。
     public sealed class ItemInputStream : MemoryStream, Util.Closeable
     {
         private bool closed;
@@ -198,11 +202,13 @@ public sealed class MultipartStream
         }
     }
 
+    /// 分段格式、头区或结束边界损坏时用它报告。
     public sealed class MalformedStreamException : IOException
     {
         public MalformedStreamException(string message) : base(message) { }
     }
 
+    /// 边界长度在读取过程中改变会被视为非法配置。
     public sealed class IllegalBoundaryException : ArgumentException
     {
         public IllegalBoundaryException(string message) : base(message) { }

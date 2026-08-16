@@ -11,11 +11,15 @@ weighted reciprocal-rank fusion, and applies the deterministic contract-aware
 score. It retrieves a broader, bounded candidate pool before returning the
 requested result count. Optional LLM reranking can run after this hybrid recall.
 
-When LLM reranking is enabled, the workflow follows the integration design:
-hybrid RRF produces exactly 20 candidates, the reranker scores those candidates,
-and the service returns the requested final count (the UI default is 4). For a
-class target, a class candidate receives a small 1.02 RRF multiplier; function
-targets are unchanged.
+Each query has one retrieval granularity. A class target retrieves only indexed
+class documents; a function target retrieves only indexed function documents.
+The kind restriction is pushed into both SeekDB queries and checked again after
+hybrid fusion. Consequently, the broad-recall pool, reranker input, and final
+Top-K list cannot mix classes and functions.
+
+When LLM reranking is enabled, hybrid RRF produces exactly 20 same-granularity
+candidates, the reranker scores those candidates, and the service returns the
+requested final count (the UI default is 4).
 
 The schema uses SeekDB's `VECTOR`, `VECTOR INDEX ... TYPE=hnsw`,
 `FULLTEXT INDEX`, and `ORDER BY cosine_distance(...) APPROXIMATE` features.
@@ -73,7 +77,7 @@ always outputs its native dimension (BGE series, etc.).
 
 ## Reranking
 
-When `RERANK_PROVIDER` is set to `openai` or `local`, the search pipeline
+When `RERANK_PROVIDER` is set to `deepseek`, the search pipeline
 wraps the base search engine with an LLM-based reranking pass:
 
 1. **Recall expansion** — the base search retrieves up to `min(250, max(50, topK × 5))`
@@ -83,20 +87,21 @@ wraps the base search engine with an LLM-based reranking pass:
 3. **Merge and truncate** — LLM scores are merged back into candidates (in
    `score.rerank` and `rerankReason` fields), then the result set is sorted
    and truncated to the original `topK`.
-4. **Silent degradation** — if the LLM call fails for any reason the engine
-   logs a warning and falls back to the original ranking.
+4. **Contract repair** — unknown, missing, or duplicate candidate IDs are
+   returned to DeepSeek as structured feedback and reranked again. Exhausting
+   those repairs fails the request; the service never presents an unverified
+   hybrid ranking as a reranked result.
 
 ### Reranking providers
 
 | Provider | Env vars | Notes |
 |---|---|---|
 | `none` (default) | — | No LLM reranking. |
-| `openai` | `RERANK_OPENAI_URL`, `RERANK_OPENAI_API_KEY`, `RERANK_OPENAI_MODEL` | Any OpenAI-compatible chat/completions endpoint. |
-| `local` | `RERANK_LOCAL_URL`, `RERANK_LOCAL_MODEL` | Local model server (Ollama, vLLM, etc.); no API key needed. |
+| `deepseek` | `DEEPSEEK_API_BASE`, `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL` | Same DeepSeek model configuration used by the Claude Code and translation workflows. |
 
-Both `openai` and `local` honour `RERANK_TIMEOUT_MS` (default 30 s for
-`openai`, 60 s for `local`) and `RERANK_MAX_RETRIES` (default 2 for
-`openai`, 1 for `local`).
+DeepSeek honours `RERANK_TIMEOUT_MS` (default 90 s), `RERANK_MAX_RETRIES`
+(default 2 for transport failures), and `RERANK_VALIDATION_RETRIES` (default
+2 for candidate-ID contract repairs).
 
 Candidates are split into batches of 20 and sent concurrently to the LLM
 when the expanded pool exceeds the batch size.
@@ -152,7 +157,7 @@ searchable on supported SeekDB versions.
 
 | Field | Type | Notes |
 |---|---|---|
-| `target` | `ModuleTarget` | The module to find candidates for. |
+| `target` | `ModuleTarget` | The module to find candidates for; its `kind` is a mandatory candidate-kind filter. |
 | `requirement` | `string` | Natural-language context; `""` searches by target metadata. |
 | `topK` | `number` | Desired result count (1–50). Internally expanded for recall. |
 | `repositoryScopes` | `string[]` | `"owner/repo"` filters; empty = all indexed repos. |
@@ -168,11 +173,11 @@ When reranking is active, each candidate gains two extra fields:
 | `score.rerank` | `number?` | LLM-assigned behavioural-semantic score (0–1). |
 | `rerankReason` | `string?` | LLM-generated rationale for the rank position. |
 
-Set `candidateLanguages` on `SearchRequest` when the downstream adapter only
-supports specific source languages. The constraint is applied in SeekDB and
-checked again before candidates are returned. For example, the Java-to-C#
-pipeline sends `candidateLanguages: ["Java"]` while keeping the target
-language as `C#`.
+Set `candidateLanguages` on `SearchRequest` only when a caller deliberately
+wants to narrow retrieval. The constraint is applied in SeekDB and checked
+again before candidates are returned. The language-neutral adaptation workflow
+normally omits it so Analyzer can evaluate candidates across all indexed
+languages.
 
 Set `VITE_RETRIEVAL_API_URL` in the web app to activate the real adapter. If the
 variable is absent, the original mock search adapter remains active.

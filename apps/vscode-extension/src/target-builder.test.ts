@@ -64,17 +64,22 @@ describe('buildModuleTarget', () => {
     expect(target?.id).toBe('workspace://src/FileUploadBase.java#L13');
   });
 
-  it('rejects non-Java editor targets', () => {
-    expect(
-      buildModuleTarget({
-        languageId: 'python',
-        selectedText: 'def quote(): pass',
-        filePath: '/workspace/services/quote.py',
-        fileBaseName: 'quote.py',
-        workspaceRoot,
-        startLine: 4,
-      }),
-    ).toBeNull();
+  it('builds a target for every mapped editor language', () => {
+    const target = buildModuleTarget({
+      languageId: 'python',
+      selectedText: 'def quote():\n    return None',
+      filePath: '/workspace/services/quote.py',
+      fileBaseName: 'quote.py',
+      workspaceRoot,
+      startLine: 4,
+    });
+
+    expect(target).toMatchObject({
+      name: 'quote',
+      language: 'Python',
+      path: 'services/quote.py',
+      line: 5,
+    });
   });
 
   it('rejects an editor file outside the workspace root', () => {

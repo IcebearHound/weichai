@@ -19,6 +19,8 @@ package org.apache.commons.fileupload.util.mime;
 /**
  * @since 1.3
  */
+
+/** 该上传类型表示 MIME 编码文本解析失败。 */
 final class ParseException extends Exception {
 
     /**

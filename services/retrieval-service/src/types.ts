@@ -17,6 +17,8 @@ export interface RetrievedCodeDocument extends IndexedCodeDocument {
 export interface SearchFilters {
   repositories: string[];
   languages: Language[];
+  /** Retrieval granularity is always identical to the selected target kind. */
+  kinds: IndexedCodeDocument['kind'][];
 }
 
 export interface SearchStore {
@@ -54,8 +56,18 @@ export interface RerankResult {
   reason: string;
 }
 
+/** Validator feedback passed to DeepSeek when a prior rerank response broke the contract. */
+export interface RerankValidationFeedback {
+  message: string;
+  attempt: number;
+}
+
 /** LLM-based reranker — scores and reorders search candidates by behavioural semantics. */
 export interface LlmReranker {
   readonly model: string;
-  rerank(request: SearchRequest, candidates: SearchCandidate[]): Promise<RerankResult[]>;
+  rerank(
+    request: SearchRequest,
+    candidates: SearchCandidate[],
+    feedback?: RerankValidationFeedback,
+  ): Promise<RerankResult[]>;
 }

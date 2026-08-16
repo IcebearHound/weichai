@@ -67,21 +67,39 @@ describe('RerankingSearchEngine', () => {
     expect(base.search).toHaveBeenCalledWith(expect.objectContaining({ topK: 20 }));
   });
 
-  it.each([
-    ['partial', [{ id: 'second', score: 0.9, reason: 'only result' }]],
-    ['duplicate', [
-      { id: 'second', score: 0.9, reason: 'first copy' },
-      { id: 'second', score: 0.8, reason: 'second copy' },
-      { id: 'third', score: 0.7, reason: 'third' },
-    ]],
-    ['unknown', [
+  it('retries a contract failure with structured feedback and accepts the repair', async () => {
+    const rerank = vi.fn()
+      .mockResolvedValueOnce([{ id: 'second', score: 0.9, reason: 'only result' }])
+      .mockResolvedValueOnce([
+        { id: 'first', score: 0.2, reason: 'weak' },
+        { id: 'second', score: 0.9, reason: 'strong' },
+        { id: 'third', score: 0.5, reason: 'medium' },
+      ]);
+    const engine = new RerankingSearchEngine(baseEngine(), { model: 'test', rerank }, 20, 2);
+
+    await expect(engine.search(request)).resolves.toMatchObject([
+      { id: 'second', score: { rerank: 0.9 } },
+      { id: 'third', score: { rerank: 0.5 } },
+    ]);
+    expect(rerank).toHaveBeenCalledTimes(2);
+    expect(rerank.mock.calls[1]?.[2]).toMatchObject({
+      attempt: 1,
+      message: expect.stringContaining('Missing candidate IDs'),
+    });
+  });
+
+  it('fails after exhausted contract repairs instead of falling back', async () => {
+    const invalid = [
       { id: 'first', score: 0.2, reason: 'first' },
       { id: 'second', score: 0.9, reason: 'second' },
       { id: 'invented', score: 1, reason: 'not a candidate' },
-    ]],
-  ] as const)('falls back to the original order on a %s rerank response', async (_kind, results) => {
-    const engine = new RerankingSearchEngine(baseEngine(), reranker(results));
+    ];
+    const rerank = vi.fn(async () => invalid);
+    const engine = new RerankingSearchEngine(baseEngine(), { model: 'test', rerank }, 20, 1);
 
-    await expect(engine.search(request)).resolves.toEqual(candidates.slice(0, request.topK));
+    await expect(engine.search(request)).rejects.toThrow(
+      'DeepSeek reranking violated the candidate contract after 2 attempts',
+    );
+    expect(rerank).toHaveBeenCalledTimes(2);
   });
 });

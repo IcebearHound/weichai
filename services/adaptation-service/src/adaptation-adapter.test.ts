@@ -4,6 +4,7 @@ import type {
   AnalysisRequest,
   AdaptationRequest,
   SearchCandidate,
+  TargetModuleContext,
 } from "@forexplore/contracts";
 import { describe, expect, it } from "vitest";
 import { AdaptationAdapter, _buildFilePatch } from "./adaptation-adapter";
@@ -29,11 +30,12 @@ const javaCandidate: SearchCandidate = {
 const request: AdaptationRequest = {
   target: {
     id: "target",
-    name: "Calculate",
+    name: "isMultipartContent",
     kind: "function",
-    path: "src/Calculator.cs",
-    language: "C#",
-    signature: "public decimal Calculate()",
+    path: "src/main/java/org/apache/commons/fileupload/FileUploadBase.java",
+    language: "Java",
+    signature: "public static final boolean isMultipartContent(RequestContext ctx)",
+    line: 75,
   },
   candidate: javaCandidate,
   requirement: "Translate the calculation.",
@@ -41,55 +43,166 @@ const request: AdaptationRequest = {
   decisionNotes: "",
 };
 
-describe("AdaptationAdapter language gate", () => {
-  const adapter = new AdaptationAdapter({ apiKey: "not-used-by-gate-tests" });
+const javaProjectRoot = fileURLToPath(
+  new URL("../../../fixtures/target-system/commons-fileupload-java-skeleton", import.meta.url),
+);
 
-  it("rejects targets outside the Java and legacy C# service paths", async () => {
-    await expect(
-      adapter.adapt({
+const targetContext: TargetModuleContext = {
+  schemaVersion: "1.0",
+  target: request.target,
+  source: {
+    namespace: "org.apache.commons.fileupload",
+    usings: ["import java.util.Locale;"],
+    method: "public static final boolean isMultipartContent(RequestContext ctx) { return false; }",
+    containingType: "public abstract class FileUploadBase { }",
+    fields: [],
+    constructor: undefined,
+    relatedMembers: [],
+  },
+  dependencies: [],
+  relatedTypes: [],
+  callers: [],
+  constraints: ["Preserve the static Java method contract."],
+  collection: {
+    projectRoot: ".",
+    targetFile: request.target.path,
+    maxChars: 24_000,
+    actualChars: 256,
+    truncated: false,
+    truncatedSections: [],
+  },
+};
+
+const analysisReport: AnalysisReport = {
+  schemaVersion: "1.0",
+  applicability: {
+    level: "adapt",
+    confidence: 0.86,
+    reasons: ["The candidate behavior maps to the existing Java method contract."],
+  },
+  behaviorMapping: [{
+    requirement: "Translate the calculation.",
+    status: "partial",
+    candidateEvidence: ["return None"],
+    targetAction: "Implement the behavior using the Java target contract.",
+  }],
+  contractMapping: [{
+    source: "calculate",
+    target: "isMultipartContent",
+    action: "convert",
+    note: "Preserve the existing Java signature.",
+  }],
+  dependencyPlan: [],
+  implementationPlan: [
+    "Preserve the exact Java target signature.",
+    "Implement the required behavior inside the existing target method.",
+  ],
+  risks: [],
+  assumptions: [],
+  unresolved: [],
+};
+
+describe("AdaptationAdapter implementation boundary", () => {
+  it("does not restrict either candidate or target language", async () => {
+    const cases = [
+      ["TypeScript", "isMultipartContent", "public isMultipartContent(ctx: RequestContext): boolean", "public isMultipartContent(ctx: RequestContext): boolean { return ctx != null; }"],
+      ["Python", "is_multipart_content", "def is_multipart_content(ctx: RequestContext)", "def is_multipart_content(ctx: RequestContext):\n    return ctx is not None"],
+      ["Java", "isMultipartContent", "public static boolean isMultipartContent(RequestContext ctx)", "public static boolean isMultipartContent(RequestContext ctx) { return ctx != null; }"],
+      ["C#", "IsMultipartContent", "public static bool IsMultipartContent(RequestContext ctx)", "public static bool IsMultipartContent(RequestContext ctx) { return ctx is not null; }"],
+      ["Rust", "is_multipart_content", "pub fn is_multipart_content(ctx: &RequestContext) -> bool", "pub fn is_multipart_content(ctx: &RequestContext) -> bool { !std::ptr::eq(ctx, ctx) }"],
+      ["Go", "IsMultipartContent", "func IsMultipartContent(ctx *RequestContext) bool", "func IsMultipartContent(ctx *RequestContext) bool { return ctx != nil }"],
+    ] as const;
+
+    for (const [language, name, signature, generatedCode] of cases) {
+      const target = { ...request.target, id: `${language}-target`, name, path: `src/adapter.${language}`, line: undefined, language, signature };
+      const context: TargetModuleContext = {
+        ...targetContext,
+        target,
+        source: {
+          ...targetContext.source,
+          constructor: undefined,
+          method: generatedCode,
+          containingType: language === "Python" ? "class UploadAdapter:\n    pass" : "class UploadAdapter { }",
+        },
+      };
+      const compiledLanguages: string[] = [];
+      const adapter = new AdaptationAdapter({
+        apiKey: "test-key",
+        projectRoot: javaProjectRoot,
+        contextCollector: () => context,
+        analyzer: { async analyze() { return analysisReport; } },
+        translatorRequest: (async () => new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify({
+            schemaVersion: "1.0",
+            generatedCode,
+            interfaceMappings: analysisReport.contractMapping,
+            completedSteps: analysisReport.implementationPlan,
+            unresolved: [],
+          }) } }],
+        }))) as typeof globalThis.fetch,
+        validator: {
+          compileStandalone: (targetLanguage) => {
+            compiledLanguages.push(targetLanguage);
+            return { success: true, errors: [], output: "" };
+          },
+          compileIntegrated: () => ({ success: true, errors: [], output: "" }),
+          isUnavailable: () => false,
+        },
+      });
+
+      const result = await adapter.adapt({
         ...request,
-        target: { ...request.target, language: "TypeScript" },
-      }),
-    ).rejects.toThrow(
-      "AdaptationAdapter supports Java benchmark targets and legacy C# targets; received target language TypeScript.",
-    );
+        target,
+        candidate: { ...javaCandidate, language: language === "Rust" ? "Go" : "Rust" },
+      });
+
+      expect(result.targetLanguage).toBe(language);
+      expect(compiledLanguages).toEqual([language]);
+    }
   });
 
   it("rejects strategies unsupported by the adapter", async () => {
+    const adapter = new AdaptationAdapter({ apiKey: "not-used-by-gate-tests" });
     await expect(adapter.adapt({ ...request, strategy: "wrap" })).rejects.toThrow(
       'AdaptationAdapter only supports the "translate" strategy; received "wrap".',
     );
   });
 
-  it("routes a Python candidate into the Java translation and validation path", async () => {
+  it("hands a Python candidate to independent Analyzer and Translator agents for a Java target", async () => {
     const compilerSuccess: CompileResult = { success: true, errors: [], output: "" };
-    const prompts: string[] = [];
+    let analyzerRequest: AnalysisRequest | undefined;
+    const modelBodies: Array<{ messages: Array<{ content: string }> }> = [];
     const adapter = new AdaptationAdapter({
       apiKey: "test-key",
-      projectRoot: process.cwd(),
+      projectRoot: javaProjectRoot,
+      contextCollector: () => targetContext,
+      analyzer: {
+        async analyze(value: AnalysisRequest): Promise<AnalysisReport> {
+          analyzerRequest = value;
+          return analysisReport;
+        },
+      },
       translatorRequest: (async (_input: URL | RequestInfo, init?: RequestInit) => {
-        const request = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
-        prompts.push(request.messages[0]?.content ?? "");
+        const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+        modelBodies.push(body);
         return new Response(JSON.stringify({
-          choices: [{ message: { content: "public void calculate() { }" } }],
+          choices: [{ message: { content: JSON.stringify({
+            schemaVersion: "1.0",
+            generatedCode: "public static final boolean isMultipartContent(RequestContext ctx) { return ctx != null; }",
+            interfaceMappings: analysisReport.contractMapping,
+            completedSteps: analysisReport.implementationPlan,
+            unresolved: [],
+          }) } }],
         }), { status: 200 });
       }) as typeof globalThis.fetch,
       validator: {
         compileStandalone: () => compilerSuccess,
         compileIntegrated: () => compilerSuccess,
-        compileJavaStandalone: () => compilerSuccess,
-        compileJavaIntegrated: () => compilerSuccess,
         isUnavailable: () => false,
       },
     });
     const result = await adapter.adapt({
       ...request,
-      target: {
-        ...request.target,
-        path: "src/Calculator.java",
-        language: "Java",
-        signature: "public void calculate()",
-      },
       candidate: {
         ...javaCandidate,
         language: "Python",
@@ -98,175 +211,21 @@ describe("AdaptationAdapter language gate", () => {
     });
 
     expect(result.targetLanguage).toBe("Java");
-    expect(result.generatedCode).toBe("public void calculate() { }");
-    expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("【源语言】\nPython");
+    expect(result.generatedCode).toContain("isMultipartContent(RequestContext ctx)");
+    expect(analyzerRequest?.candidate.language).toBe("Python");
+    expect(analyzerRequest?.targetContext).toBe(targetContext);
+    expect(modelBodies).toHaveLength(1);
+    const messages = modelBodies[0]?.messages ?? [];
+    expect(messages[1]?.content).toContain("ANALYSIS_REPORT_JSON");
+    expect(messages[1]?.content).toContain("Preserve the exact Java target signature.");
+    expect(messages.map((message) => message.content).join("\n")).not.toContain(
+      "You are the Analyzer Agent",
+    );
+    expect(messages.map((message) => message.content).join("\n")).not.toContain(
+      "[RETRIEVED CANDIDATE]",
+    );
     expect(result.validation.find((record) => record.id === "standalone-compile"))
       .toMatchObject({ status: "pass", command: "javac" });
-  });
-});
-
-describe("AdaptationAdapter analyzer-translator integration", () => {
-  const projectRoot = fileURLToPath(
-    new URL("../../../fixtures/target-system/forexplore-csharp-workspace", import.meta.url),
-  );
-  const integrationRequest: AdaptationRequest = {
-    ...request,
-    target: {
-      id: "get-quote-async-function",
-      name: "GetQuoteAsync",
-      kind: "function",
-      path: "src/Application/QuoteOrchestrationService.cs",
-      language: "C#",
-      signature: "Task<Quote> GetQuoteAsync(QuoteRequest request, CancellationToken cancellationToken)",
-      documentation: "Gets a quote through cache and provider fallback.",
-      line: 24,
-    },
-    candidate: {
-      ...javaCandidate,
-      title: "route",
-      signature: "public Quote route(QuoteRequest request)",
-      preview: "public Quote route(QuoteRequest request) { return provider.fetch(request); }",
-      dependencies: ["ProviderClient"],
-    },
-    requirement: "Preserve the asynchronous quote fallback contract.",
-  };
-  const analysisReport: AnalysisReport = {
-    schemaVersion: "1.0",
-    applicability: {
-      level: "adapt",
-      confidence: 0.86,
-      reasons: ["The candidate behavior maps to the target contract with async adaptation."],
-    },
-    behaviorMapping: [{
-      requirement: integrationRequest.requirement,
-      status: "partial",
-      candidateEvidence: ["provider.fetch(request)"],
-      targetAction: "Keep the target asynchronous boundary and existing provider dependency.",
-    }],
-    contractMapping: [{
-      source: "route",
-      target: "GetQuoteAsync",
-      action: "rename",
-      note: "Preserve the target method name and signature.",
-    }],
-    dependencyPlan: [{
-      sourceDependency: "ProviderClient",
-      targetDependency: "IQuoteProvider",
-      action: "adapt",
-    }],
-    implementationPlan: [
-      "Preserve the exact target signature.",
-      "Use the existing target provider dependency asynchronously.",
-    ],
-    risks: [],
-    assumptions: [],
-    unresolved: [],
-  };
-
-  it("collects real target context and passes the Analyzer report into Translator", async () => {
-    let analyzerRequest: AnalysisRequest | undefined;
-    const analyzer = {
-      async analyze(value: AnalysisRequest): Promise<AnalysisReport> {
-        analyzerRequest = value;
-        return analysisReport;
-      },
-    };
-    const generatedCode = `public async ${integrationRequest.target.signature}\n{\n    throw new NotImplementedException();\n}`;
-    const modelBodies: Array<Record<string, unknown>> = [];
-    const translatorRequest = (async (_input: URL | RequestInfo, init?: RequestInit) => {
-      modelBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-      return new Response(JSON.stringify({
-        choices: [{ message: { content: JSON.stringify({
-          schemaVersion: "1.0",
-          generatedCode,
-          interfaceMappings: analysisReport.contractMapping,
-          completedSteps: analysisReport.implementationPlan,
-          unresolved: [],
-        }) } }],
-      }), { status: 200 });
-    }) as typeof globalThis.fetch;
-    const unavailable = {
-      success: false,
-      errors: [".NET SDK not installed; test validator skipped compilation."],
-      output: "",
-    };
-    const adapter = new AdaptationAdapter({
-      apiKey: "test-key",
-      projectRoot,
-      analyzer,
-      translatorRequest,
-      validator: {
-        compileStandalone: () => unavailable,
-        compileIntegrated: () => unavailable,
-        isUnavailable: () => true,
-      },
-    });
-
-    const result = await adapter.adapt(integrationRequest);
-
-    expect(analyzerRequest?.targetContext.source.method).toContain("GetQuoteAsync");
-    expect(analyzerRequest?.targetContext.source.containingType).toContain(
-      "QuoteOrchestrationService",
-    );
-    expect(analyzerRequest?.candidate).toEqual(integrationRequest.candidate);
-    expect(modelBodies).toHaveLength(1);
-    const messages = modelBodies[0]?.messages as Array<{ content: string }>;
-    expect(messages[1]?.content).toContain("ANALYSIS_REPORT_JSON");
-    expect(messages[1]?.content).toContain("IQuoteProvider");
-    expect(result.generatedCode).toBe(generatedCode);
-    expect(result.interfaceMappings).toEqual(analysisReport.contractMapping);
-    expect(result.validation[0]).toEqual({
-      id: "analyzer",
-      label: "Analyzer",
-      status: "pass",
-      required: true,
-      summary: "adapt (86%)",
-    });
-  });
-
-  it("uses integrated compilation as the required gate when the standalone wrapper lacks target fields", async () => {
-    const analyzer = {
-      async analyze(): Promise<AnalysisReport> {
-        return analysisReport;
-      },
-    };
-    const generatedCode = `public async ${integrationRequest.target.signature}\n{\n    return await cache.GetOrLoadAsync(request, token => FetchWithFallbackAsync(request, token), cancellationToken);\n}`;
-    const translatorRequest = (async () => new Response(JSON.stringify({
-      choices: [{ message: { content: JSON.stringify({
-        schemaVersion: "1.0",
-        generatedCode,
-        interfaceMappings: analysisReport.contractMapping,
-        completedSteps: analysisReport.implementationPlan,
-        unresolved: [],
-      }) } }],
-    }), { status: 200 })) as typeof globalThis.fetch;
-    const standaloneFailure: CompileResult = {
-      success: false,
-      errors: ['The name "cache" does not exist in the current context.'],
-      output: "",
-    };
-    const integratedSuccess: CompileResult = { success: true, errors: [], output: "" };
-    const adapter = new AdaptationAdapter({
-      apiKey: "test-key",
-      projectRoot,
-      skeletonProjectPath: projectRoot,
-      analyzer,
-      translatorRequest,
-      validator: {
-        compileStandalone: () => standaloneFailure,
-        compileIntegrated: () => integratedSuccess,
-        isUnavailable: () => false,
-      },
-    });
-
-    const result = await adapter.adapt(integrationRequest);
-    const standalone = result.validation.find((item) => item.id === "standalone-compile");
-    const integrated = result.validation.find((item) => item.id === "integrated-compile");
-
-    expect(standalone).toMatchObject({ status: "warn", required: false });
-    expect(standalone?.summary).toContain("集成结果为权威编译证据");
-    expect(integrated).toMatchObject({ status: "pass", required: true });
     expect(result.files).toHaveLength(1);
   });
 });
@@ -347,5 +306,70 @@ describe("buildFilePatch", () => {
     expect(() => _buildFilePatch("src/Service.cs", newMethod, originalClass, 10)).toThrow(
       "method declaration",
     );
+  });
+
+  it("reapplies target indentation for nested Python methods", () => {
+    const originalPython = [
+      "class Receiver:",
+      "    def receive(self, value):",
+      "        return None",
+      "",
+      "    def keep(self):",
+      "        return True",
+    ].join("\n");
+    const patch = _buildFilePatch(
+      "src/receiver.py",
+      "def receive(self, value):\n    return value",
+      originalPython,
+      2,
+      "Python",
+    );
+    const added = patch.hunks[0].lines
+      .filter((line) => line.type === "add")
+      .map((line) => line.content);
+
+    expect(added).toEqual(["    def receive(self, value):", "        return value"]);
+  });
+
+  it("builds a protected patch for a complete class target", () => {
+    const original = [
+      "package demo;",
+      "",
+      "@Deprecated",
+      "public class Factory {",
+      "    private int threshold = 1;",
+      "",
+      "    public Factory() {",
+      "        threshold = 2;",
+      "    }",
+      "}",
+      "",
+      "class Unchanged {}",
+    ].join("\n");
+    const generated = [
+      "public class Factory {",
+      "    private final int threshold = 3;",
+      "",
+      "    public Factory() {",
+      "        threshold = 4;",
+      "    }",
+      "}",
+    ].join("\n");
+
+    const patch = _buildFilePatch(
+      "src/Factory.java",
+      generated,
+      original,
+      3,
+      "Java",
+      "class",
+    );
+    const added = patch.hunks[0].lines
+      .filter((line) => line.type === "add")
+      .map((line) => line.content);
+
+    expect(added).toContain("public class Factory {");
+    expect(added).toContain("    private final int threshold = 3;");
+    expect(patch.hunks[0].lines.some((line) => line.type === "remove" && line.content.includes("threshold = 1"))).toBe(true);
   });
 });

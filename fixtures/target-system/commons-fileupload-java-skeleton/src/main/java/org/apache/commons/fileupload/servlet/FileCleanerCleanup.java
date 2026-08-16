@@ -27,6 +27,8 @@ import org.apache.commons.io.FileCleaningTracker;
  * {@link FileCleaningTracker}'s reaper thread is terminated,
  * when the web application is destroyed.
  */
+
+/** 该上传类型在 Servlet 上下文销毁时释放上传临时文件的清理监听器。 */
 public class FileCleanerCleanup implements ServletContextListener {
 
     /**

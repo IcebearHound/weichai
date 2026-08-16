@@ -1,19 +1,13 @@
 export type RerankingConfig =
   | { provider: 'none' }
   | {
-      provider: 'openai';
+      provider: 'deepseek';
       url: string;
       apiKey: string;
       model: string;
       timeoutMs: number;
       maxRetries: number;
-    }
-  | {
-      provider: 'local';
-      url: string;
-      model: string;
-      timeoutMs: number;
-      maxRetries: number;
+      validationRetries: number;
     };
 
 export interface RetrievalConfig {
@@ -72,6 +66,14 @@ function boolean(value: string | undefined, fallback: boolean): boolean {
   return !['0', 'false', 'no', 'off'].includes(value.toLowerCase());
 }
 
+function deepSeekChatCompletionsUrl(env: NodeJS.ProcessEnv): string {
+  const legacyUrl = env.RERANK_OPENAI_URL?.trim();
+  const apiBase = (env.DEEPSEEK_API_BASE?.trim() || legacyUrl || 'https://api.deepseek.com/v1')
+    .replace(/\/chat\/completions\/?$/, '')
+    .replace(/\/+$/, '');
+  return `${apiBase}/chat/completions`;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): RetrievalConfig {
   const dimension = positiveInteger(
     env.SEEKDB_VECTOR_DIMENSION,
@@ -103,32 +105,31 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RetrievalConfi
   }
 
   const rerankProvider = env.RERANK_PROVIDER?.trim().toLowerCase() || 'none';
-  if (!['none', 'openai', 'local'].includes(rerankProvider)) {
-    throw new Error('RERANK_PROVIDER must be "none", "openai", or "local".');
+  if (!['none', 'deepseek'].includes(rerankProvider)) {
+    throw new Error('RERANK_PROVIDER must be "none" or "deepseek".');
   }
 
   const reranking: RerankingConfig =
-    rerankProvider === 'openai'
+    rerankProvider === 'deepseek'
       ? {
-          provider: 'openai',
-          url: env.RERANK_OPENAI_URL?.trim() || 'https://api.deepseek.com/v1/chat/completions',
-          apiKey: env.RERANK_OPENAI_API_KEY?.trim() || '',
-          model: env.RERANK_OPENAI_MODEL?.trim() || 'deepseek-chat',
-          timeoutMs: positiveInteger(env.RERANK_TIMEOUT_MS, 30_000, 'RERANK_TIMEOUT_MS'),
+          provider: 'deepseek',
+          url: deepSeekChatCompletionsUrl(env),
+          // RERANK_OPENAI_API_KEY is a temporary migration fallback for the
+          // existing local .env; new deployments use DEEPSEEK_API_KEY.
+          apiKey: env.DEEPSEEK_API_KEY?.trim() || env.RERANK_OPENAI_API_KEY?.trim() || '',
+          model: env.DEEPSEEK_MODEL?.trim() || env.RERANK_OPENAI_MODEL?.trim() || 'deepseek-v4-flash',
+          timeoutMs: positiveInteger(env.RERANK_TIMEOUT_MS, 90_000, 'RERANK_TIMEOUT_MS'),
           maxRetries: nonNegativeInteger(env.RERANK_MAX_RETRIES, 2, 'RERANK_MAX_RETRIES'),
+          validationRetries: nonNegativeInteger(
+            env.RERANK_VALIDATION_RETRIES,
+            2,
+            'RERANK_VALIDATION_RETRIES',
+          ),
         }
-      : rerankProvider === 'local'
-        ? {
-            provider: 'local',
-            url: env.RERANK_LOCAL_URL?.trim() || 'http://127.0.0.1:11434/v1/chat/completions',
-            model: env.RERANK_LOCAL_MODEL?.trim() || 'qwen2.5:7b',
-            timeoutMs: positiveInteger(env.RERANK_TIMEOUT_MS, 60_000, 'RERANK_TIMEOUT_MS'),
-            maxRetries: nonNegativeInteger(env.RERANK_MAX_RETRIES, 1, 'RERANK_MAX_RETRIES'),
-          }
-        : { provider: 'none' };
+      : { provider: 'none' };
 
-  if (reranking.provider === 'openai' && !reranking.apiKey) {
-    throw new Error('RERANK_OPENAI_API_KEY is required for the openai rerank provider.');
+  if (reranking.provider === 'deepseek' && !reranking.apiKey) {
+    throw new Error('DEEPSEEK_API_KEY is required for the DeepSeek rerank provider.');
   }
 
   return {

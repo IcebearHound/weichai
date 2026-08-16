@@ -88,4 +88,28 @@ describe('corpus manifest validation', () => {
     expect(documents.map((document) => document.title)).toContain('Read');
     expect(documents.every((document) => document.language === 'C#')).toBe(true);
   });
+
+  it('applies a benchmark class alias without changing function titles', async () => {
+    const { root } = await createCorpus(
+      JSON.stringify({
+        repository: 'aliased-fixture',
+        language: 'TypeScript',
+        retrievalClassAliases: { UploadPart: 'upload_part_ref' },
+      }),
+    );
+    await writeFile(
+      path.join(root, 'upload.ts'),
+      [
+        'export class UploadPart {',
+        '  read() { return "ok"; }',
+        '}',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const documents = await extractCorpus(root);
+
+    expect(documents.map((document) => document.title)).toContain('upload_part_ref');
+    expect(documents.map((document) => document.title)).toContain('read');
+  });
 });

@@ -28,12 +28,22 @@ describe('loadConfig', () => {
     });
   });
 
-  it('allows reranking retries to be disabled explicitly', () => {
+  it('uses the shared DeepSeek model settings for reranking', () => {
     const config = loadConfig({
-      RERANK_PROVIDER: 'local',
+      RERANK_PROVIDER: 'deepseek',
+      DEEPSEEK_API_KEY: 'test-key',
+      DEEPSEEK_API_BASE: 'https://deepseek.example.test/v1/',
+      DEEPSEEK_MODEL: 'deepseek-v4-pro',
       RERANK_MAX_RETRIES: '0',
+      RERANK_VALIDATION_RETRIES: '0',
     });
 
-    expect(config.reranking).toMatchObject({ provider: 'local', maxRetries: 0 });
+    expect(config.reranking).toMatchObject({
+      provider: 'deepseek',
+      url: 'https://deepseek.example.test/v1/chat/completions',
+      model: 'deepseek-v4-pro',
+      maxRetries: 0,
+      validationRetries: 0,
+    });
   });
 });

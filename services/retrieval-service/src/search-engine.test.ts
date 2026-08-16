@@ -48,6 +48,13 @@ function fakeStore(): SearchStore {
       { ...baseDocument, semanticScore: 0.92 },
       {
         ...baseDocument,
+        id: 'container',
+        title: 'UploadContainer',
+        kind: 'class',
+        semanticScore: 0.99,
+      },
+      {
+        ...baseDocument,
         id: 'queue',
         title: 'Queue.push',
         semanticScore: 0.3,
@@ -74,7 +81,7 @@ describe('SeekDbSearchEngine', () => {
     expect(candidates).toHaveLength(2);
     expect(store.semanticSearch).toHaveBeenCalledWith(
       [1, 0, 0],
-      expect.objectContaining({ repositories: ['demo/cache'] }),
+      expect.objectContaining({ repositories: ['demo/cache'], kinds: ['function'] }),
       50,
     );
     expect(store.textSearch).toHaveBeenCalledOnce();
@@ -102,21 +109,35 @@ describe('SeekDbSearchEngine', () => {
     );
   });
 
-  it('applies a small multiplicative class prior to the PDF RRF score', () => {
+  it('hard-isolates class targets from function candidates', async () => {
+    const store = fakeStore();
+    const engine = new SeekDbSearchEngine(store, embeddings);
     const classDocument: RetrievedCodeDocument = {
       ...baseDocument,
       id: 'class-candidate',
       title: 'UploadParser',
       kind: 'class',
     };
-    const results = searchInternals.mergeResults(
-      [baseDocument, classDocument],
-      [],
-      'class',
-    );
+    (store.semanticSearch as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { ...baseDocument, semanticScore: 0.99 },
+      { ...classDocument, semanticScore: 0.92 },
+    ]);
+    (store.textSearch as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { ...baseDocument, textScore: 0.99 },
+      { ...classDocument, textScore: 0.92 },
+    ]);
+    const results = await engine.search({
+      ...request,
+      target: { ...request.target, kind: 'class', name: 'UploadParser' },
+    });
 
-    expect(results[0]?.id).toBe('class-candidate');
-    expect(results[0]?.hybridScore).toBeCloseTo((0.65 / 62) * 1.02, 10);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ id: 'class-candidate', kind: 'class' });
+    expect(store.semanticSearch).toHaveBeenCalledWith(
+      [1, 0, 0],
+      expect.objectContaining({ kinds: ['class'] }),
+      50,
+    );
   });
 
   it('uses an exact recall limit when configured for PDF reranking', async () => {
@@ -197,5 +218,10 @@ describe('search internals', () => {
       'Java',
       'Python',
     ]);
+  });
+
+  it('uses the target kind as the sole candidate kind filter', () => {
+    expect(searchInternals.candidateKinds('class')).toEqual(['class']);
+    expect(searchInternals.candidateKinds('function')).toEqual(['function']);
   });
 });

@@ -28,15 +28,21 @@ function num(value: number): TypedValue {
 }
 
 describe("DEFAULT_EXCEPTION_ALIASES", () => {
-  it("内置跨语言异常映射(Java 简单类名 → C# 简单类名)", () => {
+  it("内置跨语言异常等价类映射(Java 与 C# 两侧成员均归一化到同一代表值)", () => {
     expect(DEFAULT_EXCEPTION_ALIASES).toEqual({
+      NullPointerException: "NullReferenceException",
+      NullReferenceException: "NullReferenceException",
       IllegalArgumentException: "ArgumentException",
-      NullPointerException: "ArgumentNullException",
+      ArgumentException: "ArgumentException",
       IllegalStateException: "InvalidOperationException",
-      IndexOutOfBoundsException: "ArgumentOutOfRangeException",
-      UnsupportedOperationException: "NotSupportedException",
+      InvalidOperationException: "InvalidOperationException",
       NoSuchElementException: "InvalidOperationException",
+      IndexOutOfBoundsException: "ArgumentOutOfRangeException",
+      ArgumentOutOfRangeException: "ArgumentOutOfRangeException",
+      UnsupportedOperationException: "NotSupportedException",
+      NotSupportedException: "NotSupportedException",
       ClassCastException: "InvalidCastException",
+      InvalidCastException: "InvalidCastException",
       ParseException: "ParseException",
       IOException: "IOException",
     });
@@ -119,6 +125,40 @@ describe("compareCases", () => {
     const target = targetSide([exceptionResult("c1", "IOException", "socket reset")]);
     const [cmp] = compareCases(source, target, { ignoreMessageSubstrings: ["timeout"] });
     expect(cmp.verdict).toBe("pass");
+  });
+
+  describe("异常等价类归一化(双向/方向无关)", () => {
+    it("C# 源 NullReferenceException vs Java 目标 NullPointerException → pass", () => {
+      const source = sourceSide([exceptionResult("c1", "NullReferenceException")]);
+      const target = targetSide([exceptionResult("c1", "NullPointerException")]);
+      expect(compareCases(source, target)[0].verdict).toBe("pass");
+    });
+
+    it("反向:Java 源 NullPointerException vs C# 目标 NullReferenceException → pass", () => {
+      const source = sourceSide([exceptionResult("c1", "NullPointerException")]);
+      const target = targetSide([exceptionResult("c1", "NullReferenceException")]);
+      expect(compareCases(source, target)[0].verdict).toBe("pass");
+    });
+
+    it("现有正向不回归:IllegalArgumentException vs ArgumentException → pass", () => {
+      const source = sourceSide([exceptionResult("c1", "IllegalArgumentException")]);
+      const target = targetSide([exceptionResult("c1", "ArgumentException")]);
+      expect(compareCases(source, target)[0].verdict).toBe("pass");
+    });
+
+    it("现有正向不回归:NoSuchElementException vs InvalidOperationException → pass", () => {
+      const source = sourceSide([exceptionResult("c1", "NoSuchElementException")]);
+      const target = targetSide([exceptionResult("c1", "InvalidOperationException")]);
+      expect(compareCases(source, target)[0].verdict).toBe("pass");
+    });
+
+    it("真不等仍 fail:IllegalArgumentException vs NullReferenceException → fail", () => {
+      const source = sourceSide([exceptionResult("c1", "IllegalArgumentException")]);
+      const target = targetSide([exceptionResult("c1", "NullReferenceException")]);
+      const [cmp] = compareCases(source, target);
+      expect(cmp.verdict).toBe("fail");
+      expect(cmp.details[0]).toContain("exception type mismatch");
+    });
   });
 
   it("单侧缺 case → divergent", () => {
@@ -279,6 +319,15 @@ describe("validateAgainstExpected", () => {
     const reasons = validateAgainstExpected(
       result,
       expectedOf({ kind: "exception", type: "ArgumentException", messageContains: "bad" }),
+    );
+    expect(reasons).toEqual([]);
+  });
+
+  it("期望 NullPointerException、实际 NullReferenceException(等价类)→ []", () => {
+    const result = exceptionResult("c1", "NullReferenceException", "boom");
+    const reasons = validateAgainstExpected(
+      result,
+      expectedOf({ kind: "exception", type: "NullPointerException", messageContains: "boom" }),
     );
     expect(reasons).toEqual([]);
   });

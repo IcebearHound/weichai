@@ -19,15 +19,28 @@ export interface ComparisonOptions {
   caseSensitiveStrings?: boolean;
 }
 
-/** 跨语言异常类型归一化映射:Java 简单类名 → C# 简单类名(比较时双向查找)。 */
+/**
+ * 跨语言异常类型等价类映射(方向无关)。
+ *
+ * 每个等价类的所有成员(Java 与 C# 两侧异常名)都作为 key,映射到同一个代表值
+ * (取 C# 侧名称作代表值)。比较/校验前两侧各自经 normalizeExceptionType 归一化,
+ * 归一化后相等即视为同一等价类,与哪一侧是 source/expected 无关。
+ */
 export const DEFAULT_EXCEPTION_ALIASES: Record<string, string> = {
+  NullPointerException: "NullReferenceException",
+  NullReferenceException: "NullReferenceException",
   IllegalArgumentException: "ArgumentException",
-  NullPointerException: "ArgumentNullException",
+  ArgumentException: "ArgumentException",
   IllegalStateException: "InvalidOperationException",
-  IndexOutOfBoundsException: "ArgumentOutOfRangeException",
-  UnsupportedOperationException: "NotSupportedException",
+  InvalidOperationException: "InvalidOperationException",
+  // Java NoSuchElementException 的 C# 镜像
   NoSuchElementException: "InvalidOperationException",
+  IndexOutOfBoundsException: "ArgumentOutOfRangeException",
+  ArgumentOutOfRangeException: "ArgumentOutOfRangeException",
+  UnsupportedOperationException: "NotSupportedException",
+  NotSupportedException: "NotSupportedException",
   ClassCastException: "InvalidCastException",
+  InvalidCastException: "InvalidCastException",
   ParseException: "ParseException",
   IOException: "IOException",
 };

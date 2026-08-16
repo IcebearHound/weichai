@@ -1,5 +1,6 @@
 import { runClaude, type ClaudeClientOptions } from "./claude-client.js";
 import { validateDescription, type TestDescription } from "./description.js";
+import { createLogger, type Logger } from "./logger.js";
 
 export interface MigrationInput {
   sourceLanguage: string;
@@ -60,22 +61,34 @@ Priority rules:
 
 export class TestMigratorAgent {
   readonly #options: TestMigratorOptions;
+  readonly #logger: Logger;
 
   constructor(options: TestMigratorOptions) {
     this.#options = options;
+    this.#logger = options.logger ?? createLogger("test-migrator");
   }
 
   async extractDescription(input: MigrationInput, signal?: AbortSignal): Promise<TestDescription> {
     const prompt = buildMigrationPrompt(input);
+    this.#logger.debug(`buildMigrationPrompt 输出:\n${prompt}`);
     let lastError: unknown;
     for (let attempt = 0; attempt <= MAX_MIGRATION_RETRIES; attempt += 1) {
+      if (attempt === 0) {
+        this.#logger.info("extractDescription 开始");
+      } else {
+        this.#logger.info(`extractDescription 重试第 ${attempt} 次`);
+      }
       try {
         // 架构修正:LLM 调度统一走 claude 子进程("Claude Code + DeepSeek" agent 架构),
         // 不再 DeepSeek HTTP 直调;system 提示与 user prompt 合并为单一 prompt。
         const raw = await runClaude(`${MIGRATOR_SYSTEM_PROMPT}\n\n${prompt}`, this.#options);
-        return validateDescription(JSON.parse(stripFences(raw)));
+        this.#logger.debug(`LLM 原始返回:\n${raw}`);
+        const description = validateDescription(JSON.parse(stripFences(raw)));
+        this.#logger.info("extractDescription 完成");
+        return description;
       } catch (error) {
         lastError = error;
+        this.#logger.error(`校验失败(第 ${attempt + 1} 次):${error instanceof Error ? error.message : String(error)}`);
       }
     }
     throw new Error(`TestMigratorAgent failed to produce a valid test description: ${lastError instanceof Error ? lastError.message : String(lastError)}`);

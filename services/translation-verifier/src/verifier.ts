@@ -2,6 +2,7 @@ import type { TestDescription, VerifierLanguage } from "./description.js";
 import { compareCases, validateAgainstExpected, type CaseComparison, type ComparisonOptions } from "./comparator.js";
 import { parseSideResults, type SideResults } from "./result-capture.js";
 import type { CompileOutcome, DriverExecutor, RunOutcome, SideSpec } from "./executor.js";
+import { createLogger, type Logger } from "./logger.js";
 
 export interface VerificationJob {
   description: TestDescription;
@@ -36,7 +37,11 @@ export interface VerificationReport {
  * 3. 黄金校验(需求第一):用描述声明的 expected(需求黄金值)校验目标侧,产出 requirementVerdict,
  *    并把「两侧一致但都偏离 expected」改判为 fail —— 差分验证只探测差异,不充当裁判。
  */
-export async function verify(job: VerificationJob, executor: DriverExecutor): Promise<VerificationReport> {
+export async function verify(
+  job: VerificationJob,
+  executor: DriverExecutor,
+  logger: Logger = createLogger("verify"),
+): Promise<VerificationReport> {
   const sourceCompile = await executor.compile(job.source);
   const targetCompile = await executor.compile(job.target);
 
@@ -98,13 +103,21 @@ export async function verify(job: VerificationJob, executor: DriverExecutor): Pr
   const failedCases = comparisons.filter((c) => c.verdict === "fail").length;
   const divergentCases = comparisons.filter((c) => c.verdict === "divergent").length;
   const totalCases = comparisons.length;
+  const passRate = totalCases === 0 ? 0 : passedCases / totalCases;
+
+  logger.info(`验证完成:passRate=${passRate.toFixed(2)} (pass=${passedCases} fail=${failedCases} divergent=${divergentCases})`);
+  for (const comparison of comparisons) {
+    logger.debug(
+      `case ${comparison.caseId}: ${comparison.verdict}${comparison.requirementVerdict ? ` [${comparison.requirementVerdict}]` : ""}`,
+    );
+  }
 
   return {
     schemaVersion: "1.0",
     source: { language: job.source.language, compile: sourceCompile, run: sourceRun, results: sourceResults },
     target: { language: job.target.language, compile: targetCompile, run: targetRun, results: targetResults },
     comparisons,
-    passRate: totalCases === 0 ? 0 : passedCases / totalCases,
+    passRate,
     totalCases,
     passedCases,
     failedCases,

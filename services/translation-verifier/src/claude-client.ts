@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createLogger, type Logger } from "./logger.js";
 
 /**
  * claude 子进程调度客户端("Claude Code + DeepSeek" agent 架构,与
@@ -23,6 +24,8 @@ export interface ClaudeClientOptions {
   spawnClaude?: SpawnClaude;
   /** 超时(ms);默认 120_000。 */
   timeoutMs?: number;
+  /** 注入的 logger;默认 createLogger("claude-client")。 */
+  logger?: Logger;
 }
 
 const DEEPSEEK_ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic";
@@ -42,6 +45,7 @@ export async function runClaude(prompt: string, options: ClaudeClientOptions = {
   const model = options.model ?? process.env.DEEPSEEK_MODEL ?? DEFAULT_MODEL;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const spawnClaude = options.spawnClaude ?? spawnClaudeProcess;
+  const logger = options.logger ?? createLogger("claude-client");
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ANTHROPIC_BASE_URL: DEEPSEEK_ANTHROPIC_BASE_URL,
@@ -52,14 +56,24 @@ export async function runClaude(prompt: string, options: ClaudeClientOptions = {
     ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
     CLAUDE_CODE_SUBAGENT_MODEL: model,
   };
+  logger.debug(`prompt:\n${prompt}`);
   const result = await spawnClaude(["-p", prompt, "--output-format", "text"], env, timeoutMs);
+  // 返回 stdout 前 500 字符(避免刷屏,截断标记),完整内容以 DEBUG 级可回放。
+  logger.debug(`stdout (first 500 chars):\n${truncate(result.stdout, 500)}`);
   if (result.exitCode !== 0) {
     // SpawnClaude 契约仅要求 { stdout, exitCode };注入的 fake 可额外携带
     // stderr 字段,使错误信息包含子进程诊断输出(生产实现同样在内部抛错含 stderr)。
     const stderr = (result as { stderr?: string }).stderr ?? "";
+    logger.error(`claude subprocess exited with code ${result.exitCode}: ${stderr}`);
     throw new Error(`claude subprocess exited with code ${result.exitCode}: ${stderr}`);
   }
   return result.stdout;
+}
+
+/** 截断长文本(如 LLM stdout),附带截断标记。 */
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}...[truncated ${text.length - max} chars]`;
 }
 
 /**

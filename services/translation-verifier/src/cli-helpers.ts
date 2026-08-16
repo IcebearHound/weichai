@@ -5,6 +5,7 @@ import { generateDriverSource } from "./driver/driver-codegen.js";
 import { RealDriverExecutor, type SideFile, type SideSpec } from "./executor.js";
 import { verify, type VerificationJob, type VerificationReport } from "./verifier.js";
 import { RepairAgent, RepairLoop } from "./repair-loop.js";
+import { createLogger, type Logger } from "./logger.js";
 
 export interface CliOptions {
   descriptionPath: string;
@@ -123,7 +124,7 @@ export function formatReport(report: VerificationReport, description: TestDescri
  * 4. --max-rounds > 0 且 --method-file 提供:RepairLoop + RepairAgent(claude 子进程,
  *    apiKey = --api-key ?? process.env.DEEPSEEK_API_KEY),rebuildTargetSide 用修复产物替换方法文件。
  */
-export async function runCli(argv: string[]): Promise<number> {
+export async function runCli(argv: string[], logger: Logger = createLogger("cli")): Promise<number> {
   const parsed = parseCliArgs(argv);
   if ("error" in parsed) {
     console.error(`error: ${parsed.error}`);
@@ -139,6 +140,7 @@ export async function runCli(argv: string[]): Promise<number> {
     console.error(`error: failed to read/validate description ${parsed.descriptionPath}: ${errorMessage(error)}`);
     return 2;
   }
+  logger.info(`流水线:读取描述 ${parsed.descriptionPath} 并校验通过`);
   if (description.requirement === undefined && parsed.requirement !== undefined) {
     description = { ...description, requirement: parsed.requirement };
   }
@@ -174,15 +176,19 @@ export async function runCli(argv: string[]): Promise<number> {
     console.error(`error: --method-file ${parsed.methodFile} not found under target directory ${parsed.targetDir}.`);
     return 2;
   }
+  logger.info(
+    `流水线:读取源目录 ${parsed.sourceDir}(${sourceFiles.length} 个 ${sourceLang} 文件)、目标目录 ${parsed.targetDir}(${targetFiles.length} 个 ${description.target.language} 文件)`,
+  );
 
   // 3. 双侧驱动 + verify。
-  const executor = new RealDriverExecutor();
+  const executor = new RealDriverExecutor({ logger });
   const targetDriver = generateDriverSource(description);
   // 源侧驱动 ← 描述(源语言):源侧语言由 --source 目录文件推断,驱动调用目标签名保持一致。
   const sourceDriver = generateDriverSource({
     ...description,
     target: { ...description.target, language: sourceLang },
   });
+  logger.info("流水线:生成双侧驱动完成");
   const job: VerificationJob = {
     description,
     source: { language: sourceLang, driverSource: sourceDriver, sourceFiles, projectRoot: parsed.sourceDir },
@@ -198,7 +204,12 @@ export async function runCli(argv: string[]): Promise<number> {
   try {
     if ((parsed.maxRounds ?? 0) > 0 && parsed.methodFile !== undefined) {
       // 4. 修复闭环:repairAgent 走 claude 子进程,apiKey = --api-key ?? DEEPSEEK_API_KEY。
-      const repairAgent = new RepairAgent({ apiKey: parsed.apiKey ?? process.env.DEEPSEEK_API_KEY });
+      logger.info("流水线:进入修复闭环");
+      const apiKey = parsed.apiKey ?? process.env.DEEPSEEK_API_KEY;
+      if (!apiKey || apiKey.trim() === "") {
+        logger.warn("未提供 apiKey:请传 --api-key 或设置 DEEPSEEK_API_KEY,否则修复闭环无法调用 LLM");
+      }
+      const repairAgent = new RepairAgent({ apiKey, logger });
       const loop = new RepairLoop({
         maxRounds: parsed.maxRounds,
         repairAgent,
@@ -208,11 +219,19 @@ export async function runCli(argv: string[]): Promise<number> {
           sourceFiles: replaceFileContent(targetFiles, parsed.methodFile as string, methodCode),
           projectRoot: parsed.targetDir,
         }),
+        logger,
       });
       report = (await loop.run(job, executor)).finalReport;
+      for (const error of loop.repairErrors) {
+        logger.warn(`修复闭环 repairErrors:${errorMessage(error)}`);
+      }
     } else {
+      logger.info("流水线:验证(单轮,无修复闭环)");
       report = await verify(job, executor);
     }
+    logger.info(
+      `验证完成:passRate=${report.passRate.toFixed(2)} (pass=${report.passedCases} fail=${report.failedCases} divergent=${report.divergentCases})`,
+    );
   } catch (error) {
     console.error(`error: verification failed: ${errorMessage(error)}`);
     return 2;

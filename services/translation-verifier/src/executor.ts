@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { VerifierLanguage } from "./description.js";
+import { createLogger, type Logger } from "./logger.js";
 
 export interface CompileOutcome {
   success: boolean;
@@ -38,6 +39,8 @@ export interface RealExecutorOptions {
   javaPath?: string;
   dotnetPath?: string;
   timeoutMs?: number;
+  /** 注入的 logger;默认 createLogger("executor")。 */
+  logger?: Logger;
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -64,7 +67,8 @@ function findOnPath(name: string): boolean {
  * 超时默认 60s;javacPath/javaPath/dotnetPath 可注入。
  */
 export class RealDriverExecutor implements DriverExecutor {
-  readonly #options: Required<RealExecutorOptions>;
+  readonly #options: Required<Omit<RealExecutorOptions, "logger">>;
+  readonly #logger: Logger;
 
   constructor(options: RealExecutorOptions = {}) {
     this.#options = {
@@ -73,6 +77,7 @@ export class RealDriverExecutor implements DriverExecutor {
       dotnetPath: options.dotnetPath ?? "dotnet",
       timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     };
+    this.#logger = options.logger ?? createLogger("executor");
   }
 
   async compile(side: SideSpec): Promise<CompileOutcome> {
@@ -80,12 +85,29 @@ export class RealDriverExecutor implements DriverExecutor {
     try {
       writeSideFiles(dir, side);
       if (side.language === "Java") {
-        return this.#compileJava(dir);
+        const javaFiles = collectRelativeFiles(dir).filter((f) => f.endsWith(".java"));
+        this.#logger.debug(`编译命令(Java): javac -d out (${javaFiles.length} 个 .java 文件)`);
+        const outcome = this.#compileJava(dir);
+        this.#logCompileOutcome(side, outcome);
+        return outcome;
       }
-      return await this.#compileCSharp(dir, side);
+      this.#logger.debug("编译命令(C#): dotnet build --nologo -v q (Verifier.csproj)");
+      const outcome = await this.#compileCSharp(dir, side);
+      this.#logCompileOutcome(side, outcome);
+      return outcome;
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+
+  /** 编译结果摘要(成功→debug 输出长度;失败→error 含诊断输出)。 */
+  #logCompileOutcome(side: SideSpec, outcome: CompileOutcome): void {
+    if (outcome.success) {
+      this.#logger.debug(`编译成功(${side.language}): ${outcome.output.length} chars`);
+      return;
+    }
+    const errors = outcome.errors.length > 0 ? outcome.errors.join("; ") : "(无解析错误行)";
+    this.#logger.error(`编译失败(${side.language}): ${errors}\n${truncate(outcome.output, 1000)}`);
   }
 
   #compileJava(dir: string): CompileOutcome {
@@ -133,10 +155,12 @@ export class RealDriverExecutor implements DriverExecutor {
           stdio: "pipe",
         });
         const className = driverClassNameFromSource(side.driverSource);
+        this.#logger.debug(`运行命令(Java): java -cp out ${className}`);
         const stdout = await execFileAsync(this.#options.javaPath, ["-cp", join(dir, "out"), className], {
           cwd: dir,
           timeoutMs: this.#options.timeoutMs,
         });
+        this.#logger.debug(`运行 stdout(Java,截断):\n${truncate(stdout, 500)}`);
         return { exitCode: 0, stdout, stderr: "" };
       }
       writeFileSync(join(dir, "Verifier.csproj"), csprojContent(side), "utf-8");
@@ -144,18 +168,28 @@ export class RealDriverExecutor implements DriverExecutor {
         cwd: dir,
         timeoutMs: this.#options.timeoutMs,
       });
+      this.#logger.debug("运行命令(C#): dotnet run --no-build --project Verifier.csproj");
       const stdout = await execFileAsync(
         this.#options.dotnetPath,
         ["run", "--no-build", "--project", "Verifier.csproj"],
         { cwd: dir, timeoutMs: this.#options.timeoutMs },
       );
+      this.#logger.debug(`运行 stdout(C#,截断):\n${truncate(stdout, 500)}`);
       return { exitCode: 0, stdout, stderr: "" };
     } catch (error) {
-      return { exitCode: 1, stdout: "", stderr: errorOutput(error) };
+      const output = errorOutput(error);
+      this.#logger.error(`运行失败(${side.language}):\n${truncate(output, 1000)}`);
+      return { exitCode: 1, stdout: "", stderr: output };
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   }
+}
+
+/** 截断长文本(如编译/运行输出),附带截断标记。 */
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}...[truncated ${text.length - max} chars]`;
 }
 
 /** 把 sourceFiles 与 driver 写入临时目录;sourceFiles 保持相对路径并建父目录。 */

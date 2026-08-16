@@ -3,6 +3,7 @@ import type { TypedValue } from "./description.js";
 import type { CaseResult } from "./result-capture.js";
 import { verify, type VerificationJob, type VerificationReport } from "./verifier.js";
 import type { DriverExecutor, SideSpec } from "./executor.js";
+import { createLogger, type Logger } from "./logger.js";
 
 export interface RepairDiagnosis {
   caseId: string;
@@ -24,6 +25,8 @@ export interface RepairInput {
   /** 用户需求原文(需求第一:修复以需求为准)。 */
   requirement: string;
   diagnosis: RepairDiagnosis[];
+  /** 修复轮次(供日志展示;由 RepairLoop 传入)。 */
+  round?: number;
 }
 
 export interface RepairAgentLike {
@@ -38,16 +41,26 @@ fences, no explanation.`;
 
 export class RepairAgent implements RepairAgentLike {
   readonly #options: RepairAgentOptions;
+  readonly #logger: Logger;
   constructor(options: RepairAgentOptions) {
     this.#options = options;
+    this.#logger = options.logger ?? createLogger("repair");
   }
   async repair(input: RepairInput, signal?: AbortSignal): Promise<string> {
-    // 架构修正:LLM 调度统一走 claude 子进程("Claude Code + DeepSeek" agent 架构),
-    // 不再 DeepSeek HTTP 直调;system 提示与 user prompt 合并为单一 prompt。
-    const content = await runClaude(`${REPAIR_SYSTEM_PROMPT}\n\n${buildRepairPrompt(input)}`, this.#options);
-    const stripped = content.replace(/^```(?:java)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
-    if (!stripped) throw new Error("RepairAgent returned empty code.");
-    return stripped;
+    this.#logger.info(`修复开始(round ${input.round ?? "?"},失败 ${input.diagnosis.length} 个 case)`);
+    this.#logger.debug(`buildRepairPrompt 输出:\n${buildRepairPrompt(input)}`);
+    try {
+      // 架构修正:LLM 调度统一走 claude 子进程("Claude Code + DeepSeek" agent 架构),
+      // 不再 DeepSeek HTTP 直调;system 提示与 user prompt 合并为单一 prompt。
+      const content = await runClaude(`${REPAIR_SYSTEM_PROMPT}\n\n${buildRepairPrompt(input)}`, this.#options);
+      const stripped = content.replace(/^```(?:java)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+      if (!stripped) throw new Error("RepairAgent returned empty code.");
+      this.#logger.debug(`修复产物:\n${stripped}`);
+      return stripped;
+    } catch (error) {
+      this.#logger.error(`修复失败:${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
   }
 }
 
@@ -90,6 +103,8 @@ export interface RepairLoopOptions {
   maxRounds?: number;
   repairAgent?: RepairAgentLike;
   rebuildTargetSide: (methodCode: string) => SideSpec;
+  /** 注入的 logger;默认 createLogger("repair-loop")。 */
+  logger?: Logger;
 }
 
 export interface RepairLoopResult {
@@ -109,6 +124,7 @@ export class RepairLoop {
   readonly #maxRounds: number;
   readonly #repairAgent: RepairAgentLike;
   readonly #rebuildTargetSide: (methodCode: string) => SideSpec;
+  readonly #logger: Logger;
   /** repair 抛错记录(本轮视为未修复,继续下一轮)。 */
   readonly repairErrors: unknown[] = [];
 
@@ -117,6 +133,7 @@ export class RepairLoop {
     if (!options.repairAgent) throw new Error("RepairLoop requires a repairAgent.");
     this.#repairAgent = options.repairAgent;
     this.#rebuildTargetSide = options.rebuildTargetSide;
+    this.#logger = options.logger ?? createLogger("repair-loop");
   }
 
   async run(job: VerificationJob, executor: DriverExecutor): Promise<RepairLoopResult> {
@@ -126,9 +143,17 @@ export class RepairLoop {
     for (; rounds <= this.#maxRounds; rounds += 1) {
       const report = await verify(currentJob, executor);
       reports.push(report);
+      const failedIds = report.comparisons.filter((c) => c.verdict === "fail").map((c) => c.caseId);
+      const divergentIds = report.comparisons.filter((c) => c.verdict === "divergent").map((c) => c.caseId);
+      this.#logger.info(
+        `round ${rounds + 1} 验证:passRate=${report.passRate.toFixed(2)}, failed=[${failedIds.join(",")}], divergent=[${divergentIds.join(",")}]`,
+      );
       if (report.failedCases === 0 && report.divergentCases === 0) break;
       if (rounds === this.#maxRounds) break;
       const diagnosis = buildDiagnosis(report, currentJob.description.cases);
+      this.#logger.debug(
+        `round ${rounds + 1} 诊断详情:\n${diagnosis.map((d) => JSON.stringify(d)).join("\n")}`,
+      );
       try {
         const methodCode = await this.#repairAgent.repair({
           sourceLanguage: currentJob.source.language,
@@ -142,11 +167,13 @@ export class RepairLoop {
           previousMethodCode: firstSourceContent(currentJob.target),
           requirement: currentJob.description.requirement ?? "",
           diagnosis,
+          round: rounds + 1,
         });
         currentJob = { ...currentJob, target: this.#rebuildTargetSide(methodCode) };
       } catch (error) {
         // repair 失败:本轮视为未修复,目标侧保持原样,进入下一轮验证。
         this.repairErrors.push(error);
+        this.#logger.warn(`修复无效(round ${rounds + 1}):${error instanceof Error ? error.message : String(error)}`);
       }
     }
     return { rounds: rounds + 1, reports, finalReport: reports.at(-1) as VerificationReport };

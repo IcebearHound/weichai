@@ -1,4 +1,4 @@
-import { completeWithDeepSeek } from "@forexplore/adaptation-service";
+import { runClaude, type ClaudeClientOptions } from "./claude-client.js";
 import type { TypedValue } from "./description.js";
 import type { CaseResult } from "./result-capture.js";
 import { verify, type VerificationJob, type VerificationReport } from "./verifier.js";
@@ -14,10 +14,7 @@ export interface RepairDiagnosis {
   requirementVerdict?: "target-conforms" | "target-diverges";
 }
 
-export interface RepairAgentOptions {
-  apiKey: string;
-  request?: typeof globalThis.fetch;
-}
+export interface RepairAgentOptions extends ClaudeClientOptions {}
 
 export interface RepairInput {
   sourceLanguage: string;
@@ -45,14 +42,9 @@ export class RepairAgent implements RepairAgentLike {
     this.#options = options;
   }
   async repair(input: RepairInput, signal?: AbortSignal): Promise<string> {
-    const content = await completeWithDeepSeek(
-      [
-        { role: "system", content: REPAIR_SYSTEM_PROMPT },
-        { role: "user", content: buildRepairPrompt(input) },
-      ],
-      { apiKey: this.#options.apiKey, request: this.#options.request, temperature: 0.1 },
-      signal,
-    );
+    // 架构修正:LLM 调度统一走 claude 子进程("Claude Code + DeepSeek" agent 架构),
+    // 不再 DeepSeek HTTP 直调;system 提示与 user prompt 合并为单一 prompt。
+    const content = await runClaude(`${REPAIR_SYSTEM_PROMPT}\n\n${buildRepairPrompt(input)}`, this.#options);
     const stripped = content.replace(/^```(?:java)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
     if (!stripped) throw new Error("RepairAgent returned empty code.");
     return stripped;

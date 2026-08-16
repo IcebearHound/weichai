@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { deepSeekModelConfig } from "@forexplore/adaptation-service";
+import type { SpawnClaude } from "./claude-client.js";
 import type { TestCase, TestDescription, TypedValue, VerifierLanguage } from "./description.js";
 import type { CaseResult } from "./result-capture.js";
 import type { CompileOutcome, RunOutcome, SideSpec } from "./executor.js";
@@ -140,12 +140,12 @@ function sampleRepairInput(): RepairInput {
   };
 }
 
-function okResponse(content: string): Response {
-  return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
-}
+type FakeSpawn = SpawnClaude & ReturnType<typeof vi.fn>;
 
-function mockFetch(content: string): ReturnType<typeof vi.fn> {
-  return vi.fn(async () => okResponse(content));
+/** 预设 stdout/exitCode 的 fake spawnClaude(claude 子进程注入,不触网)。 */
+function fakeSpawn(stdout: string, exitCode = 0, stderr = ""): FakeSpawn {
+  const mock = vi.fn(async () => ({ stdout, exitCode, stderr }));
+  return mock as unknown as FakeSpawn;
 }
 
 // ---- RepairLoop 行为 ----
@@ -327,12 +327,12 @@ describe("RepairLoop.run", () => {
   });
 });
 
-// ---- RepairAgent(DeepSeek) ----
+// ---- RepairAgent(claude 子进程) ----
 
 describe("RepairAgent", () => {
   it("返回剥离代码围栏后的方法代码(stripCodeFence 风格)", async () => {
-    const request = mockFetch("```java\nclass Util {\n  static String DoubleIt() { return \"x\"; }\n}\n```");
-    const agent = new RepairAgent({ apiKey: "test-key", request: request as unknown as typeof globalThis.fetch });
+    const spawnClaude = fakeSpawn("```java\nclass Util {\n  static String DoubleIt() { return \"x\"; }\n}\n```");
+    const agent = new RepairAgent({ apiKey: "test-key", spawnClaude });
 
     const code = await agent.repair(sampleRepairInput());
 
@@ -340,42 +340,40 @@ describe("RepairAgent", () => {
   });
 
   it("模型返回空内容 → 抛错", async () => {
-    const request = mockFetch("```\n```");
-    const agent = new RepairAgent({ apiKey: "test-key", request: request as unknown as typeof globalThis.fetch });
+    const spawnClaude = fakeSpawn("```\n```");
+    const agent = new RepairAgent({ apiKey: "test-key", spawnClaude });
 
     await expect(agent.repair(sampleRepairInput())).rejects.toThrow(/empty code/);
   });
 
-  it("请求体:POST chat/completions,temperature=0.1,user 消息 = buildRepairPrompt 输出", async () => {
+  it("spawns claude -p 且 prompt = REPAIR_SYSTEM_PROMPT + buildRepairPrompt 输出;env 指向 DeepSeek Anthropic 端点", async () => {
     const input = sampleRepairInput();
-    const request = mockFetch("class Util {}");
-    const agent = new RepairAgent({ apiKey: "test-key", request: request as unknown as typeof globalThis.fetch });
+    const spawnClaude = fakeSpawn("class Util {}");
+    const agent = new RepairAgent({ apiKey: "test-key", spawnClaude });
 
     await agent.repair(input);
 
-    expect(request).toHaveBeenCalledWith(
-      `${deepSeekModelConfig.apiBase}/chat/completions`,
-      expect.objectContaining({ method: "POST" }),
-    );
-    const init = request.mock.calls[0]?.[1];
-    const body = JSON.parse(String(init?.body)) as {
-      model: string;
-      messages: Array<{ role: string; content: string }>;
-      temperature: number;
-    };
-    expect(body.model).toBe(deepSeekModelConfig.model);
-    expect(body.temperature).toBe(0.1);
-    expect(body.messages).toHaveLength(2);
-    expect(body.messages[0]?.role).toBe("system");
-    expect(body.messages[1]?.content).toBe(buildRepairPrompt(input));
+    expect(spawnClaude).toHaveBeenCalledTimes(1);
+    const call = spawnClaude.mock.calls[0];
+    const args = call?.[0] as string[];
+    const env = call?.[1] as NodeJS.ProcessEnv;
+    expect(args[0]).toBe("-p");
+    expect(args[2]).toBe("--output-format");
+    expect(args[3]).toBe("text");
+    const prompt = args[1] as string;
+    expect(prompt).toContain("You are a translation repair specialist.");
+    expect(prompt).toContain(buildRepairPrompt(input));
+    expect(env.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe("test-key");
+    expect(env.ANTHROPIC_MODEL).toBe("deepseek-v4-flash");
   });
 
-  it("无 apiKey → 抛错且不调用 fetch", async () => {
-    const request = mockFetch("class Util {}");
-    const agent = new RepairAgent({ apiKey: "   ", request: request as unknown as typeof globalThis.fetch });
+  it("无 apiKey → 抛错且不 spawn claude", async () => {
+    const spawnClaude = fakeSpawn("class Util {}");
+    const agent = new RepairAgent({ apiKey: "   ", spawnClaude });
 
     await expect(agent.repair(sampleRepairInput())).rejects.toThrow(/DEEPSEEK_API_KEY is required/);
-    expect(request).not.toHaveBeenCalled();
+    expect(spawnClaude).not.toHaveBeenCalled();
   });
 });
 

@@ -1,4 +1,4 @@
-import { completeWithDeepSeek } from "@forexplore/adaptation-service";
+import { runClaude, type ClaudeClientOptions } from "./claude-client.js";
 import { validateDescription, type TestDescription } from "./description.js";
 
 export interface MigrationInput {
@@ -21,10 +21,7 @@ export interface MigrationInput {
   };
 }
 
-export interface TestMigratorOptions {
-  apiKey: string;
-  request?: typeof globalThis.fetch;
-}
+export interface TestMigratorOptions extends ClaudeClientOptions {}
 
 const MAX_MIGRATION_RETRIES = 2;
 
@@ -73,14 +70,9 @@ export class TestMigratorAgent {
     let lastError: unknown;
     for (let attempt = 0; attempt <= MAX_MIGRATION_RETRIES; attempt += 1) {
       try {
-        const raw = await completeWithDeepSeek(
-          [
-            { role: "system", content: MIGRATOR_SYSTEM_PROMPT },
-            { role: "user", content: prompt },
-          ],
-          { apiKey: this.#options.apiKey, request: this.#options.request, temperature: 0.1, jsonMode: true },
-          signal,
-        );
+        // 架构修正:LLM 调度统一走 claude 子进程("Claude Code + DeepSeek" agent 架构),
+        // 不再 DeepSeek HTTP 直调;system 提示与 user prompt 合并为单一 prompt。
+        const raw = await runClaude(`${MIGRATOR_SYSTEM_PROMPT}\n\n${prompt}`, this.#options);
         return validateDescription(JSON.parse(stripFences(raw)));
       } catch (error) {
         lastError = error;

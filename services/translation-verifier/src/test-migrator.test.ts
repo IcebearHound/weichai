@@ -1,13 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
-import { deepSeekModelConfig } from "@forexplore/adaptation-service";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMigrationPrompt,
   MIGRATOR_SYSTEM_PROMPT,
   TestMigratorAgent,
   type MigrationInput,
 } from "./test-migrator.js";
+import type { SpawnClaude } from "./claude-client.js";
 
 // ---- 测试辅助 ----
+
+type FakeSpawn = SpawnClaude & ReturnType<typeof vi.fn>;
+
+/** 预设 stdout/exitCode 的 fake spawnClaude(claude 子进程注入,不触网)。 */
+function fakeSpawn(stdout: string, exitCode = 0, stderr = ""): FakeSpawn {
+  const mock = vi.fn(async () => ({ stdout, exitCode, stderr }));
+  return mock as unknown as FakeSpawn;
+}
 
 function validDescriptionJson(): string {
   return JSON.stringify({
@@ -59,20 +67,18 @@ function sampleInput(): MigrationInput {
   };
 }
 
-function okResponse(content: string): Response {
-  return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
-}
-
-function mockFetch(content: string): ReturnType<typeof vi.fn> {
-  return vi.fn(async () => okResponse(content));
-}
+beforeEach(() => {
+  // 默认值确定性:不依赖宿主环境 DEEPSEEK_* 变量。
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.DEEPSEEK_MODEL;
+});
 
 // ---- 测试 ----
 
 describe("TestMigratorAgent.extractDescription", () => {
-  it("returns the parsed description when the fake fetch returns valid TestDescription JSON", async () => {
-    const request = mockFetch(validDescriptionJson());
-    const agent = new TestMigratorAgent({ apiKey: "test-key", request: request as unknown as typeof globalThis.fetch });
+  it("returns the parsed description when the fake claude subprocess returns valid TestDescription JSON", async () => {
+    const spawnClaude = fakeSpawn(validDescriptionJson());
+    const agent = new TestMigratorAgent({ apiKey: "test-key", spawnClaude });
 
     const result = await agent.extractDescription(sampleInput());
 
@@ -86,43 +92,38 @@ describe("TestMigratorAgent.extractDescription", () => {
     });
     expect(result.cases).toHaveLength(3);
     expect(result.cases[1]?.inputs[0]).toEqual({ type: "string", value: "=?UTF-8?B?aGVsbG8=?=" });
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(spawnClaude).toHaveBeenCalledTimes(1);
   });
 
-  it("posts a json_object response_format request whose system message hints the schema", async () => {
-    const request = mockFetch(validDescriptionJson());
-    const agent = new TestMigratorAgent({ apiKey: "test-key", request: request as unknown as typeof globalThis.fetch });
+  it("spawns claude -p with (system prompt + buildMigrationPrompt 输出) 且 env 指向 DeepSeek Anthropic 端点", async () => {
+    const spawnClaude = fakeSpawn(validDescriptionJson());
+    const agent = new TestMigratorAgent({ apiKey: "test-key", spawnClaude });
 
     await agent.extractDescription(sampleInput());
 
-    expect(request).toHaveBeenCalledWith(
-      `${deepSeekModelConfig.apiBase}/chat/completions`,
-      expect.objectContaining({ method: "POST" }),
-    );
-    const init = request.mock.calls[0]?.[1];
-    const body = JSON.parse(String(init?.body)) as {
-      model: string;
-      messages: Array<{ role: string; content: string }>;
-      temperature: number;
-      response_format: { type: string };
-      thinking: { type: string };
-    };
-    expect(body.model).toBe(deepSeekModelConfig.model);
-    expect(body.temperature).toBe(0.1);
-    expect(body.thinking).toEqual({ type: "disabled" });
-    expect(body.response_format).toEqual({ type: "json_object" });
-    expect(body.messages).toHaveLength(2);
-    expect(body.messages[0]?.role).toBe("system");
-    // system 消息提示输出 schema
-    expect(body.messages[0]?.content).toContain('"schemaVersion": "1.0"');
-    expect(body.messages[0]?.content).toContain('"cases"');
-    // user 消息 = buildMigrationPrompt 的输出
-    expect(body.messages[1]?.content).toBe(buildMigrationPrompt(sampleInput()));
+    expect(spawnClaude).toHaveBeenCalledTimes(1);
+    const call = spawnClaude.mock.calls[0];
+    const args = call?.[0] as string[];
+    const env = call?.[1] as NodeJS.ProcessEnv;
+    // args 形态:claude -p <prompt> --output-format text
+    expect(args[0]).toBe("-p");
+    expect(args[2]).toBe("--output-format");
+    expect(args[3]).toBe("text");
+    // prompt = MIGRATOR_SYSTEM_PROMPT + 空行 + buildMigrationPrompt 输出
+    const prompt = args[1] as string;
+    expect(prompt).toBe(`${MIGRATOR_SYSTEM_PROMPT}\n\n${buildMigrationPrompt(sampleInput())}`);
+    // system 段提示输出 schema
+    expect(prompt).toContain('"schemaVersion": "1.0"');
+    expect(prompt).toContain('"cases"');
+    // env:DeepSeek Anthropic 兼容端点 + auth token + 模型
+    expect(env.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe("test-key");
+    expect(env.ANTHROPIC_MODEL).toBe("deepseek-v4-flash");
   });
 
   it("throws when the model returns invalid JSON", async () => {
-    const request = mockFetch("this is definitely not json {");
-    const agent = new TestMigratorAgent({ apiKey: "test-key", request: request as unknown as typeof globalThis.fetch });
+    const spawnClaude = fakeSpawn("this is definitely not json {");
+    const agent = new TestMigratorAgent({ apiKey: "test-key", spawnClaude });
 
     await expect(agent.extractDescription(sampleInput())).rejects.toThrow(
       /TestMigratorAgent failed to produce a valid test description/,
@@ -130,47 +131,46 @@ describe("TestMigratorAgent.extractDescription", () => {
   });
 
   it("throws when the JSON parses but fails schema validation (wrong schemaVersion)", async () => {
-    const request = mockFetch(
+    const spawnClaude = fakeSpawn(
       JSON.stringify({
         schemaVersion: "2.0",
         target: { language: "Java", className: "MimeUtil", method: "decodeText", isStatic: true, constructorArgs: [] },
         cases: [],
       }),
     );
-    const agent = new TestMigratorAgent({ apiKey: "test-key", request: request as unknown as typeof globalThis.fetch });
+    const agent = new TestMigratorAgent({ apiKey: "test-key", spawnClaude });
 
     await expect(agent.extractDescription(sampleInput())).rejects.toThrow(/schemaVersion must be "1.0"/);
   });
 
   it("retries when the first response is invalid and the second is valid", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(okResponse("bad json"))
-      .mockResolvedValueOnce(okResponse(validDescriptionJson()));
-    const agent = new TestMigratorAgent({ apiKey: "test-key", request: request as unknown as typeof globalThis.fetch });
+    const spawnClaude = fakeSpawn("bad json");
+    spawnClaude.mockResolvedValueOnce({ stdout: "bad json", exitCode: 0 });
+    spawnClaude.mockResolvedValueOnce({ stdout: validDescriptionJson(), exitCode: 0 });
+    const agent = new TestMigratorAgent({ apiKey: "test-key", spawnClaude });
 
     const result = await agent.extractDescription(sampleInput());
 
     expect(result.cases).toHaveLength(3);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(spawnClaude).toHaveBeenCalledTimes(2);
   });
 
   it("gives up after 3 consecutive failures (retries <= 2)", async () => {
-    const request = mockFetch("bad json");
-    const agent = new TestMigratorAgent({ apiKey: "test-key", request: request as unknown as typeof globalThis.fetch });
+    const spawnClaude = fakeSpawn("bad json");
+    const agent = new TestMigratorAgent({ apiKey: "test-key", spawnClaude });
 
     await expect(agent.extractDescription(sampleInput())).rejects.toThrow(
       /TestMigratorAgent failed to produce a valid test description/,
     );
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(spawnClaude).toHaveBeenCalledTimes(3);
   });
 
-  it("throws without calling fetch when no apiKey is provided", async () => {
-    const request = mockFetch(validDescriptionJson());
-    const agent = new TestMigratorAgent({ apiKey: "   ", request: request as unknown as typeof globalThis.fetch });
+  it("throws without spawning claude when no apiKey is provided", async () => {
+    const spawnClaude = fakeSpawn(validDescriptionJson());
+    const agent = new TestMigratorAgent({ apiKey: "   ", spawnClaude });
 
     await expect(agent.extractDescription(sampleInput())).rejects.toThrow(/DEEPSEEK_API_KEY is required/);
-    expect(request).not.toHaveBeenCalled();
+    expect(spawnClaude).not.toHaveBeenCalled();
   });
 });
 

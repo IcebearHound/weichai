@@ -54,7 +54,7 @@ export function generateJavaDriver(description: TestDescription): string {
   lines.push(`      out.endObject();`);
   lines.push(`      return;`);
   lines.push(`    }`);
-  lines.push(`    if (value instanceof Boolean) { out.beginObject(); out.name("type").value("boolean").name("value").value(value.toString()); out.endObject(); return; }`);
+  lines.push(`    if (value instanceof Boolean) { out.beginObject(); out.name("type").value("boolean").name("value").value(((Boolean) value).booleanValue()); out.endObject(); return; }`);
   lines.push(`    if (value instanceof java.util.Map) {`);
   lines.push(`      out.beginObject();`);
   lines.push(`      out.name("type").value("map").name("value").beginObject();`);

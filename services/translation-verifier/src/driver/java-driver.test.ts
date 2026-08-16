@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { canonicalDescriptionJson, type TestDescription } from "../description.js";
 import { driverClassName, generateJavaDriver, javaLiteral } from "./java-driver.js";
 
@@ -374,4 +378,66 @@ describe("修复:对象化返回值输出 / null 字面量 / import", () => {
     expect(lines[2]).toBe("import java.util.List;");
     expect(lines[3]).toBe("import java.util.Map;");
   });
+});
+
+describe("fix round 2:boolean 返回值输出 JSON boolean(非字符串)", () => {
+  it("writeValue boolean 分支经 JsonWriter.value(boolean) 输出,而非 value.toString()", () => {
+    const src = generateJavaDriver(validDescription());
+    const boolLine = src.split("\n").find((l) => l.includes("instanceof Boolean"));
+    expect(boolLine).toBeDefined();
+    expect(boolLine).toContain(".value(((Boolean) value).booleanValue())");
+    expect(boolLine).not.toContain("value.toString()");
+  });
+
+  it("内嵌 JsonWriter 提供 value(boolean) 方法,输出 true/false 无引号", () => {
+    const src = generateJavaDriver(validDescription());
+    expect(src).toContain('JsonWriter value(boolean value) throws Exception { out.append(value ? "true" : "false"); return this; }');
+  });
+
+  it("真实 javac 编译运行:boolean 返回值 case 的 returnValue.value 为 JSON boolean(true/false)", () => {
+    const desc = validDescription({
+      target: {
+        language: "Java",
+        className: "Util",
+        method: "echo",
+        isStatic: true,
+        constructorArgs: [],
+      },
+      cases: [
+        {
+          id: "bool-true",
+          inputs: [{ type: "boolean", value: true }],
+          expected: { kind: "return", value: { type: "boolean", value: true } },
+        },
+        {
+          id: "bool-false",
+          inputs: [{ type: "boolean", value: false }],
+          expected: { kind: "return", value: { type: "boolean", value: false } },
+        },
+      ],
+    });
+    const driverClass = driverClassName(desc);
+    const dir = mkdtempSync(join(tmpdir(), "wc-java-driver-"));
+    try {
+      const outDir = join(dir, "out");
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(join(dir, "Util.java"), "public class Util { public static Object echo(Object value) { return value; } }\n");
+      writeFileSync(join(dir, `${driverClass}.java`), generateJavaDriver(desc));
+      execFileSync("javac", ["-d", outDir, join(dir, "Util.java"), join(dir, `${driverClass}.java`)], {
+        stdio: "pipe",
+      });
+      const stdout = execFileSync("java", ["-cp", outDir, driverClass], { encoding: "utf8" });
+      const parsed = JSON.parse(stdout) as {
+        results: Array<{ caseId: string; returnValue: { type: string; value: unknown } }>;
+      };
+      expect(parsed.results).toHaveLength(2);
+      const [t, f] = parsed.results;
+      expect(t.returnValue).toEqual({ type: "boolean", value: true });
+      expect(typeof t.returnValue.value).toBe("boolean");
+      expect(f.returnValue).toEqual({ type: "boolean", value: false });
+      expect(typeof f.returnValue.value).toBe("boolean");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

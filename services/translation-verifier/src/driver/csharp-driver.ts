@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { canonicalDescriptionJson, type TestDescription, type TypedValue } from "../description.js";
 import { driverClassName } from "./java-driver.js";
 
@@ -121,30 +120,29 @@ export function csharpLiteral(value: TypedValue): string {
 }
 
 /**
- * 从 TypedValue 推导 C# 类型名(string/int/double/bool/List<...>/Dictionary<string,...>)。
- * list/map 元素类型取第一个非 null 元素;空/全 null 集合回退 object?。
+ * 从 TypedValue 推导 C# 类型名(string/int/long/double/bool/List<...>/Dictionary<string,...>)。
+ * 内部复用 csharpCommonType(单值即公共类型的特例);含 null 元素的集合回退 object?。
  */
 export function csharpValueTypeName(value: TypedValue): string {
   switch (value.type) {
     case "string":
       return "string";
     case "number":
-      return Number.isInteger(value.value) ? "int" : "double";
+      return csharpNumberTypeName(value.value);
     case "boolean":
       return "bool";
     case "null":
       return "object?";
     case "list": {
-      const first = value.value.find((v) => v.type !== "null");
-      if (!first) return "object?";
-      const inner = csharpValueTypeName(first);
+      const items = value.value;
+      if (items.length === 0) return "object?";
+      const inner = items.some((v) => v.type === "null") ? "object?" : csharpCommonType(items);
       return inner === "object?" ? "object?" : `List<${inner}>`;
     }
     case "map": {
-      const keys = Object.keys(value.value);
-      const first = keys.map((k) => value.value[k] as TypedValue).find((v) => v.type !== "null");
-      if (!first) return "object?";
-      const inner = csharpValueTypeName(first);
+      const values = Object.values(value.value);
+      if (values.length === 0) return "object?";
+      const inner = values.some((v) => v.type === "null") ? "object?" : csharpCommonType(values);
       return inner === "object?" ? "object?" : `Dictionary<string, ${inner}>`;
     }
   }
@@ -152,7 +150,8 @@ export function csharpValueTypeName(value: TypedValue): string {
 
 function csharpListLiteral(items: TypedValue[]): string {
   if (items.length === 0) return "new List<object?>()";
-  const itemType = csharpContainerElementType(items);
+  // 含 null 元素时值类型不能容纳 null,必须回退 object?;否则取公共类型。
+  const itemType = items.some((v) => v.type === "null") ? "object?" : csharpCommonType(items);
   const inner = items.map(csharpLiteral).join(", ");
   return `new List<${itemType}>{ ${inner} }`;
 }
@@ -160,33 +159,31 @@ function csharpListLiteral(items: TypedValue[]): string {
 function csharpMapLiteral(entries: Record<string, TypedValue>): string {
   const keys = Object.keys(entries);
   if (keys.length === 0) return "new Dictionary<string, object?>()";
-  const valueType = csharpContainerElementType(keys.map((k) => entries[k] as TypedValue));
+  const values = keys.map((k) => entries[k] as TypedValue);
+  const valueType = values.some((v) => v.type === "null") ? "object?" : csharpCommonType(values);
   const inner = keys.map((k) => `[${csharpStringLiteral(k)}] = ${csharpLiteral(entries[k] as TypedValue)}`).join(", ");
   return `new Dictionary<string, ${valueType}>{ ${inner} }`;
 }
 
 /**
- * 集合字面量的元素类型:含 null 元素 → object?(C# 值类型不能容纳 null);
- * 否则取所有非 null 元素的公共类型(number 系 int/double → double;其余异质 → object)。
+ * 公共类型推导(与 Java 侧 javaLiteralType 口径对齐):
+ * 合并所有非 null 元素的类型;全部相同 → 该类型;number 系(int/long/double)混合 → "double";
+ * 其余异质 / 空 / 全 null → "object?"。
  */
-function csharpContainerElementType(items: TypedValue[]): string {
-  if (items.some((v) => v.type === "null")) return "object?";
-  let common: string | null = null;
-  for (const item of items) {
-    const t = csharpValueTypeName(item);
-    common = common === null ? t : csharpCommonType(common, t);
-  }
-  return common ?? "object?";
+function csharpCommonType(values: TypedValue[]): string {
+  const nonNull = values.filter((v) => v.type !== "null");
+  if (nonNull.length === 0) return "object?";
+  return nonNull.map(csharpValueTypeName).reduce(mergeCommonType);
 }
 
-function csharpCommonType(a: string, b: string): string {
+function mergeCommonType(a: string, b: string): string {
   if (a === b) return a;
   if (isCSharpNumberType(a) && isCSharpNumberType(b)) return "double";
-  return "object";
+  return "object?";
 }
 
 function isCSharpNumberType(t: string): boolean {
-  return t === "int" || t === "double";
+  return t === "int" || t === "long" || t === "double";
 }
 
 function csharpStringLiteral(value: string): string {
@@ -223,6 +220,29 @@ function csharpNumberLiteral(value: number): string {
   if (Number.isNaN(value)) return "double.NaN";
   if (value === Infinity) return "double.PositiveInfinity";
   if (value === -Infinity) return "double.NegativeInfinity";
+  if (Number.isInteger(value) && Math.abs(value) <= 2147483647) return String(value);
+  if (Number.isInteger(value) && Math.abs(value) <= 9223372036854775807) return `${String(value)}L`;
+  // 其余(超出 long 的整数与浮点):模拟 double.ToString("R", InvariantCulture),
+  // 如 1E+20 / 1.5 / 2.5E-07,均为合法 C# double 字面量。
+  return csharpRoundTrip(value);
+}
+
+/** number 的 C# 类型名:int(≤ int.MaxValue)/ long(≤ long.MaxValue)/ double。 */
+function csharpNumberTypeName(value: number): "int" | "long" | "double" {
+  if (Number.isInteger(value) && Math.abs(value) <= 2147483647) return "int";
+  if (Number.isInteger(value) && Math.abs(value) <= 9223372036854775807) return "long";
+  return "double";
+}
+
+/** 模拟 C# double.ToString("R", InvariantCulture):大数量级用 E±dd 指数形式(指数至少两位),其余十进制。 */
+function csharpRoundTrip(value: number): string {
+  const abs = Math.abs(value);
+  if (value !== 0 && (abs >= 1e7 || abs < 1e-3)) {
+    const [mantissa, expPart] = value.toExponential().split("e");
+    const sign = expPart.startsWith("-") ? "-" : "+";
+    const digits = expPart.replace(/^[+-]/, "").padStart(2, "0");
+    return `${mantissa}E${sign}${digits}`;
+  }
   return String(value);
 }
 

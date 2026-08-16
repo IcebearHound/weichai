@@ -118,6 +118,29 @@ describe("javaLiteral 字面量映射", () => {
     expect(javaLiteral({ type: "number", value: -0.25 })).toBe("-0.25");
   });
 
+  it("number 边界:int 内整数原样;long 内整数加 L 后缀", () => {
+    expect(javaLiteral({ type: "number", value: 2147483647 })).toBe("2147483647");
+    expect(javaLiteral({ type: "number", value: 3000000000 })).toBe("3000000000L");
+    expect(javaLiteral({ type: "number", value: -3000000000 })).toBe("-3000000000L");
+  });
+
+  it("number 边界:超出 long 的整数走 double 指数形式(Java Double.toString 口径,1e20 → 1.0E20)", () => {
+    expect(javaLiteral({ type: "number", value: 1e20 })).toBe("1.0E20");
+    expect(javaLiteral({ type: "number", value: 1e21 })).toBe("1.0E21");
+  });
+
+  it("list 含 null + 大整数 → Arrays.<Long>asList(...)", () => {
+    expect(
+      javaLiteral({
+        type: "list",
+        value: [
+          { type: "null", value: null },
+          { type: "number", value: 3000000000 },
+        ],
+      }),
+    ).toBe("Arrays.<Long>asList(null, 3000000000L)");
+  });
+
   it("boolean / null", () => {
     expect(javaLiteral({ type: "boolean", value: true })).toBe("true");
     expect(javaLiteral({ type: "boolean", value: false })).toBe("false");
@@ -194,6 +217,25 @@ describe("生成源码中的字面量", () => {
       }),
     );
     expect(src).toContain("Util.doubleIt(42, 1.5, -0.25)");
+  });
+
+  it("1e20 与 3000000000 的字面量形式出现在源码中(1.0E20 / 3000000000L)", () => {
+    const src = generateJavaDriver(
+      validDescription({
+        cases: [
+          {
+            id: "big",
+            inputs: [
+              { type: "number", value: 1e20 },
+              { type: "number", value: 3000000000 },
+            ],
+            expected: { kind: "return", value: { type: "null", value: null } },
+          },
+        ],
+      }),
+    );
+    expect(src).toContain("com.example.Util.doubleIt(1.0E20, 3000000000L)");
+    expect(src).not.toContain("doubleIt(100000000000000000000,");
   });
 
   it("List.of(...) 与空 List.of() 出现在源码中", () => {

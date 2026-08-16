@@ -115,10 +115,51 @@ describe("csharpLiteral 字面量映射", () => {
     expect(csharpLiteral({ type: "number", value: -0.25 })).toBe("-0.25");
   });
 
+  it("number 边界:int 内整数原样;long 内整数加 L 后缀(否则 CS1021)", () => {
+    expect(csharpLiteral({ type: "number", value: 2147483647 })).toBe("2147483647");
+    expect(csharpLiteral({ type: "number", value: 3000000000 })).toBe("3000000000L");
+    expect(csharpLiteral({ type: "number", value: -3000000000 })).toBe("-3000000000L");
+  });
+
+  it("number 边界:超出 long 的整数走 double 指数形式(R 格式,1e20 → 1E+20)", () => {
+    expect(csharpLiteral({ type: "number", value: 1e20 })).toBe("1E+20");
+    expect(csharpLiteral({ type: "number", value: 1e21 })).toBe("1E+21");
+  });
+
   it("boolean / null", () => {
     expect(csharpLiteral({ type: "boolean", value: true })).toBe("true");
     expect(csharpLiteral({ type: "boolean", value: false })).toBe("false");
     expect(csharpLiteral({ type: "null", value: null })).toBe("null");
+  });
+
+  it("list:含大整数元素 → List<long> 且字面量加 L 后缀", () => {
+    expect(csharpLiteral({ type: "list", value: [{ type: "number", value: 3000000000 }] })).toBe(
+      "new List<long>{ 3000000000L }",
+    );
+  });
+
+  it("list:number 系混合(int+double)→ List<double> 公共类型", () => {
+    expect(
+      csharpLiteral({
+        type: "list",
+        value: [
+          { type: "number", value: 1 },
+          { type: "number", value: 2.5 },
+        ],
+      }),
+    ).toBe("new List<double>{ 1, 2.5 }");
+  });
+
+  it('list:异构 [1, "a"] → List<object?>', () => {
+    expect(
+      csharpLiteral({
+        type: "list",
+        value: [
+          { type: "number", value: 1 },
+          { type: "string", value: "a" },
+        ],
+      }),
+    ).toBe('new List<object?>{ 1, "a" }');
   });
 
   it("list:平铺 / 嵌套 / 空 / 全 null 元素", () => {
@@ -165,6 +206,8 @@ describe("csharpValueTypeName", () => {
     expect(csharpValueTypeName({ type: "string", value: "x" })).toBe("string");
     expect(csharpValueTypeName({ type: "number", value: 42 })).toBe("int");
     expect(csharpValueTypeName({ type: "number", value: 1.5 })).toBe("double");
+    expect(csharpValueTypeName({ type: "number", value: 3000000000 })).toBe("long");
+    expect(csharpValueTypeName({ type: "number", value: 1e20 })).toBe("double");
     expect(csharpValueTypeName({ type: "boolean", value: true })).toBe("bool");
     expect(csharpValueTypeName({ type: "null", value: null })).toBe("object?");
   });
@@ -216,6 +259,25 @@ describe("生成源码中的字面量", () => {
       }),
     );
     expect(src).toContain("Util.DoubleIt(42, 1.5, -0.25)");
+  });
+
+  it("1e20 与 3000000000 的字面量形式出现在源码中(1E+20 / 3000000000L)", () => {
+    const src = generateCSharpDriver(
+      validDescription({
+        cases: [
+          {
+            id: "big",
+            inputs: [
+              { type: "number", value: 1e20 },
+              { type: "number", value: 3000000000 },
+            ],
+            expected: { kind: "return", value: { type: "null", value: null } },
+          },
+        ],
+      }),
+    );
+    expect(src).toContain("Util.DoubleIt(1E+20, 3000000000L)");
+    expect(src).not.toContain("Util.DoubleIt(100000000000000000000,");
   });
 
   it("List<...>{...} / 嵌套 / 空 List<object?>() / 全 null 元素出现在源码中", () => {

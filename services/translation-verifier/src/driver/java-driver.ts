@@ -132,7 +132,7 @@ function javaLiteralType(values: TypedValue[]): string {
 function elementType(value: TypedValue): string {
   switch (value.type) {
     case "string": return "String";
-    case "number": return Number.isInteger(value.value) ? "Integer" : "Double";
+    case "number": return javaNumberTypeName(value.value);
     case "boolean": return "Boolean";
     case "null": return "Object";
     case "list": return `List<${javaLiteralType(value.value)}>`;
@@ -151,15 +151,31 @@ function commonType(a: string, b: string): string {
 }
 
 function isNumberType(t: string): boolean {
-  return t === "Integer" || t === "Double" || t === "Number";
+  return t === "Integer" || t === "Long" || t === "Double" || t === "Number";
+}
+
+/** number 的 Java 装箱类型名:Integer(≤ int.MaxValue)/ Long(≤ long.MaxValue)/ Double。 */
+function javaNumberTypeName(value: number): "Integer" | "Long" | "Double" {
+  if (Number.isInteger(value) && Math.abs(value) <= 2147483647) return "Integer";
+  if (Number.isInteger(value) && Math.abs(value) <= 9223372036854775807) return "Long";
+  return "Double";
 }
 
 function javaNumberLiteral(value: number): string {
   if (Number.isNaN(value)) return "Double.NaN";
   if (value === Infinity) return "Double.POSITIVE_INFINITY";
   if (value === -Infinity) return "Double.NEGATIVE_INFINITY";
-  if (Number.isInteger(value)) return String(value);
+  if (Number.isInteger(value) && Math.abs(value) <= 2147483647) return String(value);
+  if (Number.isInteger(value) && Math.abs(value) <= 9223372036854775807) return `${String(value)}L`;
+  if (Number.isInteger(value)) return javaDoubleLiteral(value);
   return String(value);
+}
+
+/** Java Double.toString 口径的指数形式(1e20 → "1.0E20"):超出 long 的整数走这里。 */
+function javaDoubleLiteral(value: number): string {
+  const [mantissa, expPart] = value.toExponential().split("e");
+  const m = mantissa.includes(".") ? mantissa : `${mantissa}.0`;
+  return `${m}E${Number(expPart)}`;
 }
 
 function javaJsonWriterSource(): string {

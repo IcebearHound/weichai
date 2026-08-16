@@ -21,6 +21,8 @@ export interface TestCase {
 
 export interface TestDescription {
   schemaVersion: "1.0";
+  /** 用户需求原文(可选;需求第一原则下由调用方随描述传递,修复闭环以其为准)。 */
+  requirement?: string;
   target: {
     language: VerifierLanguage;
     className: string;

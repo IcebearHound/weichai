@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+// TestCalculateNetPositionsBalancesCurrencyStreams 验证净头寸计算:账户按币种
+// 分别记账、净额正确、同一币种全部账户净额之和为零,且时间跨度记录准确。
 func TestCalculateNetPositionsBalancesCurrencyStreams(t *testing.T) {
 	payments := []Payment{
 		testPayment("net-1", "alpha", "beta", CurrencyUSD, 1_000, time.Minute),
@@ -54,6 +56,8 @@ func TestCalculateNetPositionsBalancesCurrencyStreams(t *testing.T) {
 	}
 }
 
+// TestCalculateNetPositionsRejectsInvalidPayment 验证非法支付(自转)使整个
+// 计算失败,且错误信息能定位到具体支付下标。
 func TestCalculateNetPositionsRejectsInvalidPayment(t *testing.T) {
 	valid := testPayment("net-valid", "source", "target", CurrencyGBP, 100, 0)
 	invalid := testPayment("net-invalid", "same", "same", CurrencyGBP, 200, time.Second)
@@ -66,6 +70,8 @@ func TestCalculateNetPositionsRejectsInvalidPayment(t *testing.T) {
 	}
 }
 
+// TestBuildNettingCyclesGroupsAndPrioritizes 验证周期按币种分组并按币种排序、
+// 批内按优先级/时间/身份排序、总额与净付缺口汇总正确,且收付平衡。
 func TestBuildNettingCyclesGroupsAndPrioritizes(t *testing.T) {
 	payments := []Payment{
 		testPayment("usd-late", "u1", "u2", CurrencyUSD, 500, 5*time.Minute),
@@ -96,6 +102,8 @@ func TestBuildNettingCyclesGroupsAndPrioritizes(t *testing.T) {
 	}
 }
 
+// TestBuildNettingCyclesValidatesWindowAndOpening 验证缺失开启时间、窗口时长为
+// 零/负/超过一天时都被拒绝。
 func TestBuildNettingCyclesValidatesWindowAndOpening(t *testing.T) {
 	payment := testPayment("cycle-valid", "source", "target", CurrencyUSD, 100, 0)
 	tests := []struct {
@@ -117,6 +125,8 @@ func TestBuildNettingCyclesValidatesWindowAndOpening(t *testing.T) {
 	}
 }
 
+// TestLiquidityPlanSortsShortfallsBeforeCoveredAccounts 验证流动性计划:缺口大
+// 的账户排前、余额充足的账户缺口为零并标记为现有余额来源、截止时间透传。
 func TestLiquidityPlanSortsShortfallsBeforeCoveredAccounts(t *testing.T) {
 	positions := []NetPosition{
 		{Account: "covered", Currency: CurrencyUSD, NetMinor: -1_000},
@@ -152,6 +162,8 @@ func TestLiquidityPlanSortsShortfallsBeforeCoveredAccounts(t *testing.T) {
 	}
 }
 
+// TestSelectSettlingPaymentsRespectsPerAccountLimits 验证限额约束:账户累计金额
+// 超过限额后剩余支付被顺延,限额按“账户+币种”分别生效。
 func TestSelectSettlingPaymentsRespectsPerAccountLimits(t *testing.T) {
 	cycle := NettingCycle{Currency: CurrencyUSD, Payments: []Payment{
 		testPayment("select-a", "account-a", "target-1", CurrencyUSD, 400, 0),
@@ -173,6 +185,8 @@ func TestSelectSettlingPaymentsRespectsPerAccountLimits(t *testing.T) {
 	}
 }
 
+// TestSelectSettlingPaymentsTreatsMissingLimitAsUnconstrained 验证未配置限额的
+// 账户不受约束,全部支付都被接受。
 func TestSelectSettlingPaymentsTreatsMissingLimitAsUnconstrained(t *testing.T) {
 	cycle := NettingCycle{Payments: []Payment{
 		testPayment("free-a", "unconstrained", "target-a", CurrencyCAD, 10_000, 0),
@@ -184,6 +198,8 @@ func TestSelectSettlingPaymentsTreatsMissingLimitAsUnconstrained(t *testing.T) {
 	}
 }
 
+// TestNetPositionsRecordIncomingAndOutgoingCounts 验证收付金额与支付笔数的统计:
+// 收付相抵的账户净额为零,同时出现在收付两方的账户计数正确。
 func TestNetPositionsRecordIncomingAndOutgoingCounts(t *testing.T) {
 	payments := []Payment{
 		testPayment("count-1", "hub", "leaf-a", CurrencyCHF, 111, 0),

@@ -15,6 +15,12 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
 
+/**
+ * 报价文本格式化器:在内存中的 QuoteEnvelope 与可传输的纯文本格式之间双向转换。
+ *
+ * <p>文本格式为 {@code key=value} 行;provider 与 tag 的键/值用 URL 安全的 Base64 编码,
+ * 避免特殊字符破坏行式结构;价格以小数形式输出(内部以微分为单位)。
+ */
 public final class QuotationFormatter {
     private final int decimalPlaces;
 
@@ -25,6 +31,10 @@ public final class QuotationFormatter {
         this.decimalPlaces = decimalPlaces;
     }
 
+    /**
+     * 把报价渲染为纯文本。价格从微分换算成小数(按配置的小数位,要求可整除)。
+     * 标签按键排序后输出,保证同一条目多次渲染结果一致。
+     */
     public String render(MarketModels.QuoteEnvelope quote, Locale locale) {
         Objects.requireNonNull(quote, "formatted quote");
         Objects.requireNonNull(locale, "quotation locale");
@@ -67,6 +77,10 @@ public final class QuotationFormatter {
         return text.toString();
     }
 
+    /**
+     * 反向解析纯文本为报价对象,并对数值/时间/编码字段做严格校验,最后按一天内有效期校验报价。
+     * 未知字段或重复字段都会导致解析失败,确保格式的向前兼容性可控。
+     */
     public MarketModels.QuoteEnvelope parse(String text, Instant now) {
         Objects.requireNonNull(text, "quotation text");
         Objects.requireNonNull(now, "quotation parse time");
@@ -80,6 +94,7 @@ public final class QuotationFormatter {
         }
         Map<String, String> fields = new LinkedHashMap<>();
         List<String> tagLines = new ArrayList<>();
+        // 逐行解析 key=value;tag 行单独收集(允许多个),其余字段必须唯一
         for (int index = 1; index < lines.length; index++) {
             String line = lines[index];
             if (line.isEmpty()) {
@@ -125,6 +140,7 @@ public final class QuotationFormatter {
             expectedTags = Integer.parseInt(fields.get("tag-count"));
             observed = Instant.parse(fields.get("observed"));
             expires = Instant.parse(fields.get("expires"));
+            // 小数价右移 6 位还原为微分为单位的整数价;无法精确换算(循环小数)即报错
         } catch (ArithmeticException | NumberFormatException | DateTimeParseException failure) {
             throw new IllegalArgumentException("quotation numeric or time field is invalid", failure);
         }

@@ -1,3 +1,10 @@
+"""敞口簿:跟踪在途(未结算)与已结算的敞口,并对照限额预警。
+
+apply 处理取消、新意图与收据三类事件,维护 pending/settled 两本账,
+对超限或接近限额(≥80%)生成发现;历史仅保留 horizon 内的已结算记录;
+snapshot 输出按账户/币种的敞口分布、账龄分布与集中度。
+"""
+
 from __future__ import annotations
 
 from collections import defaultdict, deque
@@ -10,6 +17,11 @@ from .model import DeliveryReceipt, PayoutIntent
 
 
 class ExposureBook:
+    """账户-币种维度的敞口簿。
+
+    apply 应用一批事件并返回发现;snapshot 输出观测快照。
+    """
+
     def __init__(
         self,
         account_limits: Mapping[tuple[str, str], Decimal],
@@ -31,6 +43,14 @@ class ExposureBook:
         receipts: Sequence[DeliveryReceipt] = (),
         cancelled_identities: Sequence[str] = (),
     ) -> tuple[str, ...]:
+        """应用取消/意图/收据事件,返回敞口发现列表(去重、字符串形式)。
+
+        - 取消:移除在途意图;已结算后取消或取消不存在的意图记为发现;
+        - 意图:已结算的重复意图、互相冲突的意图、非正金额记为发现;
+        - 收据:收据冲突、孤儿收据(无对应意图)、金额/账户不匹配记为发现,
+          合法收据将意图转入 settled 并进入 horizon 内历史;
+        - 汇总在途+已结算敞口,超限与 ≥80% 限额产生 limit-exceeded/limit-warning。
+        """
         findings: list[str] = []
         for identity in cancelled_identities:
             removed = self._pending.pop(identity, None)
@@ -54,6 +74,7 @@ class ExposureBook:
             existing = self._settled.get(receipt.idempotency_key)
             if existing is not None:
                 if existing.receipt_id != receipt.receipt_id:
+                    # 同幂等键但收据内容不同:冲突
                     findings.append(f"receipt-conflict:{receipt.idempotency_key}")
                 continue
             source_identity = str(receipt.metadata.get("source_identity", receipt.idempotency_key))
@@ -76,6 +97,7 @@ class ExposureBook:
         if self._history:
             newest = max(row[0] for row in self._history)
             cutoff = newest - self._horizon
+            # 历史只保留 horizon 内的记录,防止无界增长
             while self._history and self._history[0][0] < cutoff:
                 self._history.popleft()
         pending_totals: dict[tuple[str, str], Decimal] = defaultdict(Decimal)
@@ -92,10 +114,16 @@ class ExposureBook:
             if combined > limit:
                 findings.append(f"limit-exceeded:{key[0]}:{key[1]}:{combined}:{limit}")
             elif limit > 0 and combined / limit >= Decimal("0.8"):
+                # 接近限额(≥80%)提前预警,避免被动超限
                 findings.append(f"limit-warning:{key[0]}:{key[1]}:{combined}:{limit}")
         return tuple(dict.fromkeys(findings))
 
     def snapshot(self, at: datetime) -> Mapping[str, object]:
+        """输出敞口观测快照。
+
+        包含在途/已结算的账户级与币种级汇总、在途意图的账龄分布
+        (0d/1d/2-7d/8d+)、以及占在途总额 ≥20% 的账户集中度列表。
+        """
         pending_by_account: dict[str, Decimal] = defaultdict(Decimal)
         settled_by_account: dict[str, Decimal] = defaultdict(Decimal)
         currency_pending: dict[str, Decimal] = defaultdict(Decimal)
@@ -118,6 +146,7 @@ class ExposureBook:
         if total_pending > 0:
             for account, amount in sorted(pending_by_account.items(), key=lambda row: (-row[1], row[0])):
                 share = amount / total_pending
+                # 单个账户占在途总额 ≥20% 视为集中度风险
                 if share >= Decimal("0.2"):
                     concentrations.append((account, str(share)))
         return MappingProxyType(

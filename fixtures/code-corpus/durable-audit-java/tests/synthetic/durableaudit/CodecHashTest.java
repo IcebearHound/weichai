@@ -14,7 +14,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 编解码器与哈希链的行为测试:帧编解码往返、帧信封防篡改、帧切分/截断识别、
+ * 链验证/断链诊断/最长有效前缀、检查点令牌与周期检查点。
+ */
 final class CodecHashTest {
+    /** 汇总入口:运行全部用例,返回本类新增的断言数。 */
     static int run() throws Exception {
         int before = TestSupport.assertions();
         roundTripsRichBatch();
@@ -33,6 +38,7 @@ final class CodecHashTest {
         return TestSupport.assertions() - before;
     }
 
+    /** 构造含全部严重级别/属性/金额的富批次,覆盖各字段编码路径。 */
     private static AuditBatch richBatch(long number) {
         List<AuditEvent> events = new ArrayList<>();
         Severity[] severities = Severity.values();
@@ -53,6 +59,7 @@ final class CodecHashTest {
         return new AuditBatch(number, TestSupport.BASE.plusSeconds(number).plusNanos(987_654_321), events);
     }
 
+    /** 富批次编解码应语义等价,帧头携带魔数与版本。 */
     private static void roundTripsRichBatch() {
         LedgerCodec codec = new LedgerCodec();
         AuditBatch source = richBatch(7);
@@ -69,6 +76,7 @@ final class CodecHashTest {
         TestSupport.equal(LedgerCodec.VERSION, ByteBuffer.wrap(frame, 4, 2).getShort(), "frame should declare current version");
     }
 
+    /** 前一帧摘要应嵌入帧内并原样取出,且长度校验严格。 */
     private static void preservesPreviousDigest() {
         LedgerCodec codec = new LedgerCodec();
         byte[] digest = MessageDigestHolder.sha256("previous-frame");
@@ -81,6 +89,7 @@ final class CodecHashTest {
         TestSupport.expectThrows(IllegalArgumentException.class, () -> codec.encode(TestSupport.batch(0, 1), new byte[33]), "long predecessor should fail");
     }
 
+    /** 魔数/版本/标志/长度/CRC/尾部任一损坏都应解码失败。 */
     private static void rejectsMalformedFrameEnvelope() {
         LedgerCodec codec = new LedgerCodec();
         byte[] valid = codec.encode(TestSupport.batch(0, 2), new byte[32]);
@@ -120,6 +129,7 @@ final class CodecHashTest {
         TestSupport.expectThrows(NullPointerException.class, () -> codec.decode(null), "null frame should fail");
     }
 
+    /** 连续帧字节流可切分还原;错位或尾部不完整时报错。 */
     private static void splitsConcatenatedFrames() {
         LedgerCodec codec = new LedgerCodec();
         HashChain chain = new HashChain(codec);
@@ -143,6 +153,7 @@ final class CodecHashTest {
         TestSupport.expectThrows(DecodeException.class, () -> codec.splitFrames(Arrays.copyOf(journal, journal.length - 5)), "partial journal tail should fail");
     }
 
+    /** 末帧不完整或 CRC 损坏时,前缀扫描应止于最后一个完整帧。 */
     private static void findsCompletePrefixBeforePartialTail() {
         LedgerCodec codec = new LedgerCodec();
         byte[] first = codec.encode(TestSupport.batch(0, 2), new byte[32]);
@@ -159,6 +170,7 @@ final class CodecHashTest {
         TestSupport.equal(first.length, codec.findLastCompleteOffset(corruption), "invalid next CRC should stop prefix scan");
     }
 
+    /** 文本长度前缀编解码往返,超限/截断/非法十进制应被拒绝。 */
     private static void validatesTextEncodingHelpers() throws Exception {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         DataOutputStream output = new DataOutputStream(buffer);
@@ -180,6 +192,7 @@ final class CodecHashTest {
         TestSupport.expectThrows(DecodeException.class, () -> LedgerCodec.parseDecimal("twelve", 4), "invalid decimal should fail");
     }
 
+    /** 健康链验证通过,并暴露每帧摘要与最终摘要。 */
     private static void buildsAndVerifiesHashChain() {
         LedgerCodec codec = new LedgerCodec();
         HashChain chain = new HashChain(codec);
@@ -193,6 +206,7 @@ final class CodecHashTest {
         TestSupport.arrayEqual(chain.checkpoints(frames, 12).get(11L), result.digestCopy(), "verification digest should equal final checkpoint");
     }
 
+    /** 前驱不匹配、批次号跳号、流序号回归、事件时间过晚应被诊断。 */
     private static void reportsChainAndSequenceFaults() {
         LedgerCodec codec = new LedgerCodec();
         HashChain chain = new HashChain(codec);
@@ -212,6 +226,7 @@ final class CodecHashTest {
         TestSupport.check(futureResult.faults().stream().anyMatch(fault -> fault.contains("too far after")), "future event should be diagnosed");
     }
 
+    /** 损坏帧或编号断档应缩短最长有效前缀。 */
     private static void computesLongestValidPrefix() {
         LedgerCodec codec = new LedgerCodec();
         HashChain chain = new HashChain(codec);
@@ -231,6 +246,7 @@ final class CodecHashTest {
         TestSupport.equal(1, chain.longestValidPrefix(numberGap), "number gap should end prefix");
     }
 
+    /** 检查点令牌含签名;篡改或格式错误应校验失败。 */
     private static void createsCheckpointTokens() {
         HashChain chain = new HashChain(new LedgerCodec());
         byte[] digest = MessageDigestHolder.sha256("checkpoint");
@@ -248,6 +264,7 @@ final class CodecHashTest {
         TestSupport.expectThrows(IllegalArgumentException.class, () -> chain.checkpointToken(0, -1, digest), "negative offset should fail");
     }
 
+    /** 按间隔提取周期检查点,且末帧必须包含;断链拒绝。 */
     private static void extractsPeriodicCheckpoints() {
         LedgerCodec codec = new LedgerCodec();
         HashChain chain = new HashChain(codec);
@@ -261,6 +278,7 @@ final class CodecHashTest {
         TestSupport.expectThrows(IllegalArgumentException.class, () -> chain.checkpoints(broken, 2), "broken chain should reject checkpoints");
     }
 
+    /** 验证结果集合不可变,摘要拷贝隔离外部修改。 */
     private static void protectsVerificationCollections() {
         LedgerCodec codec = new LedgerCodec();
         HashChain chain = new HashChain(codec);
@@ -273,6 +291,7 @@ final class CodecHashTest {
         TestSupport.check(!Arrays.equals(first, second), "digestCopy should isolate mutation");
     }
 
+    /** 摘要工具:长度校验、大端 long 编码、SHA-256 已知值。 */
     private static void validatesDigestUtilities() {
         TestSupport.expectThrows(NullPointerException.class, () -> HashChain.requireDigest(null), "null digest should fail");
         TestSupport.expectThrows(IllegalArgumentException.class, () -> HashChain.requireDigest(new byte[0]), "empty digest should fail");
@@ -282,6 +301,7 @@ final class CodecHashTest {
         TestSupport.equal("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", HexFormat.of().formatHex(HashChain.sha256().digest()), "SHA-256 implementation should match known empty digest");
     }
 
+    /** 工具:构造 count 帧的连续哈希链(前一帧摘要衔接)。 */
     private static List<byte[]> chainedFrames(LedgerCodec codec, HashChain chain, int count) {
         List<byte[]> frames = new ArrayList<>();
         byte[] prior = chain.genesis();

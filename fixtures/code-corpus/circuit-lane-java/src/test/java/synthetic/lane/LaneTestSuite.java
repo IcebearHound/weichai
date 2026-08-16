@@ -1,5 +1,9 @@
 package synthetic.lane;
 
+/**
+ * 测试套件主入口:按依赖顺序依次运行各测试类,并输出总耗时。
+ * 无测试框架依赖,直接由 main 驱动。
+ */
 public final class LaneTestSuite {
     private LaneTestSuite() {
     }

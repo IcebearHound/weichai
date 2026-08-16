@@ -12,9 +12,19 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
 
+/**
+ * 消费者价格指数(CPI)计算器:基于一篮子商品的基准价与权重,把观测价格折算成指数值。
+ *
+ * <p>指数定义:对每个商品取观测价/基准价的相对比值,按权重加权求和,再乘以 100 得到指数。
+ * 构造时即对篮子做完整性校验(权重必须为正、和为 1、与基准价覆盖面一致),
+ * 保证后续计算的前提数据是自洽的。
+ */
 public final class ConsumerPriceIndex {
+    // 商品 -> 权重(内部按商品名排序的不可变映射,保证计算顺序确定)
     private final Map<String, BigDecimal> basketWeights;
+    // 商品 -> 基准价
     private final Map<String, BigDecimal> basePrices;
+    // 指数基准日期,观测日期不得早于该日期
     private final LocalDate baseDate;
 
     public ConsumerPriceIndex(
@@ -66,6 +76,10 @@ public final class ConsumerPriceIndex {
         this.basePrices = Collections.unmodifiableMap(copiedPrices);
     }
 
+    /**
+     * 计算观测日期下的指数值:对每个商品计算 观测价/基准价 的比值,按权重加权求和后乘以 100。
+     * 要求观测价的覆盖面与篮子完全一致,否则说明观测数据不完整。
+     */
     public BigDecimal value(Map<String, BigDecimal> observedPrices, LocalDate observationDate) {
         Objects.requireNonNull(observedPrices, "price index observations");
         Objects.requireNonNull(observationDate, "price index observation date");
@@ -96,6 +110,11 @@ public final class ConsumerPriceIndex {
         return index.setScale(6, RoundingMode.HALF_EVEN);
     }
 
+    /**
+     * 把任意的原始权重列表归一化为总和为 1 的权重。
+     * 为避免浮点误差累积,最后一个商品取 1 减去已分配权重之和(凑尾),
+     * 其余商品按比例分配(12 位小数)。
+     */
     public Map<String, BigDecimal> normalize(Map<String, BigDecimal> rawWeights) {
         Objects.requireNonNull(rawWeights, "raw price index weights");
         if (rawWeights.isEmpty() || rawWeights.size() > 10_000) {
@@ -120,6 +139,7 @@ public final class ConsumerPriceIndex {
         Map<String, BigDecimal> normalized = new LinkedHashMap<>();
         BigDecimal assigned = BigDecimal.ZERO;
         List<String> products = new ArrayList<>(cleaned.keySet());
+        // 除最后一个商品外按比例分配;最后一个商品取余量,保证总和精确为 1
         for (int index = 0; index < products.size(); index++) {
             String product = products.get(index);
             BigDecimal value;

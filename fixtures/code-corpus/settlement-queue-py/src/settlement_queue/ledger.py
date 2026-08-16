@@ -1,3 +1,10 @@
+"""收据账本:幂等收据与租约的持久化存储。
+
+reserve 按幂等键建立租约(同键并发只放行一个执行者,已有收据直接返回);
+commit 把租约升级为收据并原子快照落盘;release 释放租约并可等待其它键的
+收据出现(用于批次内的依赖等待)。全部状态经 asyncio.Condition 串行化。
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -13,6 +20,12 @@ from .model import DeliveryReceipt, Money, Reservation
 
 
 class ReceiptLedger:
+    """幂等收据账本(内存 + 可选 JSON 快照)。
+
+    reserve/commit/release 三个操作构成收据的生命周期:
+    租约 → 提交 → 收据;可选快照在 commit 时原子写入。
+    """
+
     def __init__(self, snapshot_path: Path | None = None) -> None:
         self._snapshot_path = snapshot_path
         self._receipts: dict[str, DeliveryReceipt] = {}
@@ -46,6 +59,12 @@ class ReceiptLedger:
         now: datetime,
         lease_seconds: float,
     ) -> tuple[DeliveryReceipt | None, Reservation | None, bool]:
+        """为幂等键建立/查看租约,返回 (已有收据, 租约, 是否新建)。
+
+        - 已有收据:直接返回收据(幂等命中);
+        - 租约被他人持有且未过期:返回该租约(调用方应等待或放弃);
+        - 否则创建新租约(版本号递增),并 notify_all 唤醒等待者。
+        """
         if not key.strip():
             raise ValueError("idempotency key is required")
         if not owner.strip():
@@ -61,6 +80,7 @@ class ReceiptLedger:
                 return existing, None, False
             active = self._reservations.get(key)
             if active is not None and active.expires_at > now and active.owner != owner:
+                # 他人租约仍有效:返回现状,不覆盖
                 return None, active, False
             version = self._versions.get(key, 0) + 1
             reservation = Reservation(
@@ -73,10 +93,17 @@ class ReceiptLedger:
             )
             self._versions[key] = version
             self._reservations[key] = reservation
+            # 通知等待该键的其它执行者:租约状态已变化
             self._changed.notify_all()
             return None, reservation, True
 
     async def commit(self, reservation: Reservation, receipt: DeliveryReceipt) -> DeliveryReceipt:
+        """把租约升级为收据,返回入库的 DeliveryReceipt。
+
+        校验租约仍存在且所有权(owner/version)未变,防止被他人抢占后
+        误提交;入库后移除租约并原子写快照;已有收据时直接返回旧值
+        (幂等重放)。
+        """
         if reservation.key != receipt.idempotency_key:
             raise ValueError("receipt key does not match reservation")
         async with self._changed:
@@ -95,6 +122,7 @@ class ReceiptLedger:
             self._receipts[reservation.key] = receipt
             self._reservations.pop(reservation.key, None)
             if self._snapshot_path is not None:
+                # 快照写临时文件后原子替换,避免崩溃留下半截文件
                 self._snapshot_path.parent.mkdir(parents=True, exist_ok=True)
                 rows: list[dict[str, object]] = []
                 for key, stored in sorted(self._receipts.items()):
@@ -129,6 +157,12 @@ class ReceiptLedger:
         wait_for_keys: Iterable[str] = (),
         timeout_seconds: float = 0,
     ) -> tuple[DeliveryReceipt, ...]:
+        """释放租约,并可选择等待其它键的收据出现。
+
+        先释放自己的租约(所有权匹配才移除);wait_for_keys 非空时,
+        等待这些键中出现收据(至多 timeout_seconds),返回当前已出现的收据
+        (未出现的键不在结果中)。
+        """
         requested = tuple(dict.fromkeys(key for key in wait_for_keys if key))
         async with self._changed:
             current = self._reservations.get(reservation.key)

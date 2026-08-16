@@ -1,3 +1,9 @@
+/**
+ * NettingPlanner(多边轧差)与 QuotedFeeTable(费用表)的单元测试。
+ *
+ * 前半覆盖轧差的确定性、同账户聚合、币种独立、失衡处理与残差守恒;
+ * 后半覆盖费用分层查找、封顶、取整、层级边界与费率回归评估。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { NettingPlanner, type NetPosition } from "../src/netting-planner.js";
@@ -23,6 +29,7 @@ const standardTiers: FeeTier[] = [
 
 test("balanced positions collapse into deterministic transfers", () => {
   const planner = new NettingPlanner(true);
+  // 优先级相同(此处为 1/2)时按账户名排序,输出必须完全确定。
   const instructions = planner.plan([
     position("debtor-b", "EUR", -40n, 2),
     position("creditor-a", "EUR", 70n, 1),
@@ -38,6 +45,7 @@ test("balanced positions collapse into deterministic transfers", () => {
 
 test("same account positions are aggregated before matching", () => {
   const planner = new NettingPlanner(true);
+  // 同账户多笔头寸先合并:净 -30 与对方 +30 配对为单笔 30 转账。
   const instructions = planner.plan([
     position("a", "USD", -50n),
     position("a", "USD", 20n),
@@ -98,6 +106,7 @@ test("buildGroups separates currency and debit direction", () => {
 
 test("allocated residuals balance to zero within each currency", () => {
   const planner = new NettingPlanner();
+  // 残差表中借贷符号相反,全部残差之和为 0(资金守恒)。
   const instructions = [
     { from: "a", to: "b", currency: "EUR", amountMinor: 40n },
     { from: "a", to: "c", currency: "EUR", amountMinor: 10n },
@@ -155,6 +164,7 @@ test("netting inspection totals parsed positions", () => {
 
 test("fee lookup applies the matching fixed and proportional tier", () => {
   const table = new QuotedFeeTable();
+  // 500 → 固定 2 + 500×1% = 7;2000 → 固定 5 + 2000×0.5% = 15。
   assert.equal(table.lookup(500n, standardTiers), 7n);
   assert.equal(table.lookup(2_000n, standardTiers), 15n);
   assert.equal(table.lookup(20_000n, standardTiers), 60n);
@@ -162,6 +172,7 @@ test("fee lookup applies the matching fixed and proportional tier", () => {
 
 test("fees are capped at notional by default", () => {
   const table = new QuotedFeeTable(true);
+  // 10% 费率下费用(130)超过本金(30),默认封顶为本金,关闭封顶则放行。
   const expensive: FeeTier[] = [
     { minimumMinor: 0n, basisPoints: 10_000, fixedMinor: 100n },
   ];
@@ -191,6 +202,7 @@ test("charge rounding is symmetric around zero", () => {
 
 test("fee tier gaps and overlaps are explicit", () => {
   const table = new QuotedFeeTable();
+  // 层间留空:区间外金额无层级可用;层间重叠:边界金额同时命中两层。
   const gap: FeeTier[] = [
     { minimumMinor: 0n, maximumMinor: 9n, basisPoints: 1, fixedMinor: 0n },
     { minimumMinor: 20n, basisPoints: 1, fixedMinor: 0n },
@@ -222,6 +234,7 @@ test("fee tier validation rejects invalid bounds and rates", () => {
 
 test("fee policy regression recognizes a linear schedule", () => {
   const table = new QuotedFeeTable();
+  // 费用随金额线性增长(每 100 加 2)时,回归斜率应为 0.02、截距 1、RMSE 为 0。
   const report = table.evaluateFeePolicies({
     feeTableId: " linear ",
     pricedAt: 1,
@@ -239,6 +252,7 @@ test("fee policy regression recognizes a linear schedule", () => {
 
 test("generated balanced books always allocate full debtor totals", () => {
   const planner = new NettingPlanner(true);
+  // 规模从 1 到 20 的平衡账本,轧差转移总额必须等于全部借方总额之和。
   for (let size = 1; size <= 20; size += 1) {
     const positions: NetPosition[] = [];
     for (let index = 0; index < size; index += 1) {

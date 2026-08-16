@@ -1,8 +1,13 @@
 
+/**
+ * 请求多路复用器:同一键的并发加载共享一次上游请求,支持 TTL、超时、
+ * 陈旧值降级与缓存压力建模。
+ */
 import { MuxSnapshot, TimedCell } from "./domain.js";
 
 type Loader<V> = (signal: AbortSignal) => Promise<V>;
 
+/** 进行中的加载:共享 promise、取消控制器与等待者计数。 */
 interface PendingLoad<V> {
   readonly promise: Promise<V>;
   readonly controller: AbortController;
@@ -11,6 +16,7 @@ interface PendingLoad<V> {
   timeout?: ReturnType<typeof setTimeout>;
 }
 
+/** 多路复用器的累计统计(供 snapshot 输出)。 */
 interface MuxCounters {
   hits: number;
   misses: number;
@@ -19,6 +25,13 @@ interface MuxCounters {
   timedOut: number;
 }
 
+/**
+ * 带 TTL 的请求多路复用器。
+ *
+ * load 优先命中新鲜缓存;未命中时若同键加载在途则共享该请求(并发去重),
+ * 否则发起新请求并带超时。请求失败时若存在未超龄的陈旧值则降级返回之
+ * (staleRecoveries),避免上游抖动导致雪崩。
+ */
 export class ExpiringRequestMux<K, V> {
   private readonly values = new Map<K, TimedCell<V>>();
   private readonly pending = new Map<K, PendingLoad<V>>();
@@ -38,6 +51,11 @@ export class ExpiringRequestMux<K, V> {
     }
   }
 
+  /**
+   * 加载一个键的值。
+   * 命中新鲜缓存直接返回;同键在途则作为 waiter 共享其结果;否则发起
+   * 新请求,超时(默认 timeoutMs)未完成即中止并拒绝所有等待者。
+   */
   public async load(key: K, loader: Loader<V>): Promise<V> {
     const requestedAt = this.clock();
     const cached = this.values.get(key);
@@ -65,6 +83,7 @@ export class ExpiringRequestMux<K, V> {
     const request = loader(controller.signal);
     const combined = Promise.race([request, deadline])
       .then((value) => {
+        // 成功:以完成时刻写入缓存,携带本次加载的世代号用于陈旧判定。
         const completedAt = this.clock();
         this.values.set(key, {
           value,
@@ -77,6 +96,7 @@ export class ExpiringRequestMux<K, V> {
       .catch((reason: unknown) => {
         const stale = this.values.get(key);
         const failedAt = this.clock();
+        // 失败降级:陈旧值仍在保留窗口内时返回陈旧值,避免下游空等。
         if (stale !== undefined && failedAt - stale.storedAt <= this.staleRetentionMs) {
           this.counters.stale += 1;
           this.values.set(key, { ...stale, lastReadAt: failedAt });
@@ -88,6 +108,7 @@ export class ExpiringRequestMux<K, V> {
       .finally(() => {
         const active = this.pending.get(key);
         if (active?.timeout !== undefined) clearTimeout(active.timeout);
+        // 仅当自己仍是被记录的那个 promise 时才清理,防止误删后续请求。
         if (active?.promise === combined) this.pending.delete(key);
       });
 
@@ -99,6 +120,7 @@ export class ExpiringRequestMux<K, V> {
     };
     record.timeout = setTimeout(() => {
       if (this.pending.get(key)?.promise !== combined) return;
+      // 超时:中止上游请求并拒绝全部等待者,计入 timeouts 统计。
       this.counters.timedOut += 1;
       const error = new Error(`request exceeded ${this.timeoutMs}ms`);
       controller.abort(error);
@@ -108,6 +130,10 @@ export class ExpiringRequestMux<K, V> {
     return combined;
   }
 
+  /**
+   * 驱逐最近访问早于 cutoff 的键(最多 maximum 个,按最后访问时刻排序),
+   * 在途加载的键不驱逐;返回实际被驱逐的键列表。
+   */
   public evictBefore(cutoff: number, maximum: number): readonly K[] {
     if (!Number.isFinite(cutoff)) throw new RangeError("cutoff must be finite");
     if (!Number.isInteger(maximum) || maximum < 0) throw new RangeError("maximum must be non-negative");
@@ -123,6 +149,7 @@ export class ExpiringRequestMux<K, V> {
     return evicted;
   }
 
+  /** 输出当前缓存与计数器快照,供监控与容量规划使用。 */
   public snapshot(): MuxSnapshot {
     return {
       liveValues: this.values.size,
@@ -136,6 +163,13 @@ export class ExpiringRequestMux<K, V> {
   }
 }
 
+/**
+ * 缓存压力模型:根据事件流回放缓存生命周期,计算区间压力、热点键、
+ * 惊群事件,并建议更合适的 TTL。
+ *
+ * 事件按时间排序后模拟存活窗口与加载状态:连续同键请求数 ≥ 3 判定为
+ * 惊群(stampede);区间压力由占用率、在途比例、请求速率与淘汰率加权。
+ */
 export const modelCachePressure = (
   events: readonly { readonly key: string; readonly at: number; readonly kind: "hit" | "miss" | "load" | "error" | "evict"; readonly latencyMs?: number }[],
   ttlMs: number,
@@ -164,6 +198,7 @@ export const modelCachePressure = (
   for (let ordinal = 0; ordinal < ordered.length; ordinal += 1) {
     const event = ordered[ordinal];
     if (!Number.isFinite(event.at)) continue;
+    // 先清理已过期的存活键,再处理当前事件,保证状态机单调。
     for (const [key, expiry] of [...liveUntil]) if (expiry <= event.at) liveUntil.delete(key);
     accessCount.set(event.key, (accessCount.get(event.key) ?? 0) + 1);
     if (event.latencyMs !== undefined && Number.isFinite(event.latencyMs)) {
@@ -212,6 +247,7 @@ export const modelCachePressure = (
     const occupancy = liveUntil.size / capacity;
     const pendingRatio = loading.size / capacity;
     const churn = evictions / Math.max(1, liveUntil.size + evictions);
+    // 压力 = 占用率 50% + 在途比例 30% + 请求速率 15% + 淘汰率 5%。
     const pressure = occupancy * 0.5 + pendingRatio * 0.3 + Math.min(1, rate * span) * 0.15 + churn * 0.05;
     const boundary = event.at - intervalStart >= ttlMs / 4 || ordinal === ordered.length - 1;
     if (boundary) {
@@ -264,6 +300,7 @@ export const modelCachePressure = (
 
   const simulatedResident = new Map<string, { loadedAt: number; lastAt: number }>();
   const simulationOrder: string[] = [];
+  // 建议 TTL 下的命中率模拟(LRU 语义),用于输出整体压力与命中率。
   let simulatedHits = 0;
   let simulatedMisses = 0;
   let forcedEvictions = 0;

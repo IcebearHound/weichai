@@ -1,3 +1,9 @@
+/**
+ * OrderedBatchCommitter(幂等批次结算)的单元测试。
+ *
+ * 覆盖输出槽位与输入顺序一致、只重试失败项、并发同键合并、完成后重放不
+ * 再调用 writer、容量/指纹契约、并行度上限与输入前置校验等行为。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -24,6 +30,7 @@ const deferred = <T>() => {
 
 test("successful batch outcomes retain the original input order", async () => {
   const committer = new OrderedBatchCommitter(3, 0, async () => undefined);
+  // 完成顺序与输入顺序不同,但输出槽位必须与输入一一对应。
   const items = [
     item("third", "c", 30n),
     item("first", "a", 10n),
@@ -61,6 +68,7 @@ test("only the failing instruction is retried", async () => {
   const committer = new OrderedBatchCommitter(3, 5, async (delay) => {
     delays.push(delay);
   });
+  // 稳定项只调一次,抖动项重试 3 次,退避延迟依次为 5ms、10ms。
   const attempts = new Map<string, number>();
   const result = await committer.commit(
     [item("stable", "a", 1n), item("flaky", "b", 2n)],
@@ -86,6 +94,7 @@ test("only the failing instruction is retried", async () => {
 test("same-key concurrent callers join one running operation", async () => {
   const gate = deferred<string>();
   const committer = new OrderedBatchCommitter();
+  // 同一幂等键的三个并发调用共享一次执行,writer 只被调用一次。
   const batch = [item("one", "a", 10n)];
   let writes = 0;
   const writer = async () => {
@@ -133,6 +142,7 @@ test("different idempotency keys may settle concurrently", async () => {
 
 test("completed idempotent replay never calls the writer again", async () => {
   const committer = new OrderedBatchCommitter();
+  // 全部成功的批次重放直接返回缓存结果,writer 不再被调用。
   const batch = [item("x", "a", 9n), item("y", "b", 8n)];
   let writes = 0;
   const first = await committer.commit(batch, "complete", async (entry) => {
@@ -206,6 +216,7 @@ test("same key with changed content is rejected while running", async () => {
 
 test("writer receipt validation participates in retry policy", async () => {
   const committer = new OrderedBatchCommitter(3, 0, async () => undefined);
+  // 空凭据视为无效:前两次返回空串触发重试,第三次返回规范凭据。
   let calls = 0;
   const result = await committer.commit(
     [item("x", "a", 1n)],
@@ -235,6 +246,7 @@ test("empty batches are idempotent and frozen", async () => {
 
 test("maximum parallelism bounds concurrent writer calls", async () => {
   const committer = new OrderedBatchCommitter(1, 0, async () => undefined, 3);
+  // 18 条指令在并行度 3 下执行,同时活跃的 writer 调用不得超过 3。
   const batch = Array.from({ length: 18 }, (_, index) =>
     item(`i-${index}`, `a-${index}`, BigInt(index + 1)),
   );
@@ -271,6 +283,7 @@ test("inspect and forget expose only completed operations", async () => {
 
 test("input validation occurs before any settlement write", async () => {
   const committer = new OrderedBatchCommitter();
+  // 所有参数校验都在调用 writer 之前完成:全部拒绝后写入次数仍为 0。
   let writes = 0;
   const writer = async () => {
     writes += 1;

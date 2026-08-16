@@ -1,3 +1,7 @@
+/**
+ * CrossRateGraph 的单元测试:最优路径(含成本)、套利环检测与规范化、
+ * 邻接表排序与路由策略评估。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CrossRateGraph, type RateEdge } from "../src/cross-rate-graph.js";
@@ -10,6 +14,7 @@ const edge = (from: string, to: string, rate: number, cost = 0): RateEdge => ({
 });
 
 test("best path maximizes the exchange yield after proportional costs", () => {
+  // 直达 160 扣 1% 成本,不如经 GBP(0.86×190 扣两份 0.1%)。
   const graph = new CrossRateGraph();
   const path = graph.findPath(
     [
@@ -45,6 +50,7 @@ test("unreachable destinations return undefined", () => {
 });
 
 test("arbitrage cycles are canonicalized without rotation duplicates", () => {
+  // 三角环以最小旋转序去重,输出单一规范表示。
   const graph = new CrossRateGraph();
   const cycles = graph.detectArbitrage([
     edge("USD", "EUR", 0.95),
@@ -55,6 +61,7 @@ test("arbitrage cycles are canonicalized without rotation duplicates", () => {
 });
 
 test("costs can eliminate an apparent arbitrage opportunity", () => {
+  // 3% 成本使双向环的净乘积低于 1+ε,套利机会被成本消除。
   const graph = new CrossRateGraph();
   const cycles = graph.detectArbitrage([
     edge("USD", "EUR", 0.95, 0.03),
@@ -129,6 +136,7 @@ test("invalid edge rates, costs and codes are rejected", () => {
 });
 
 test("a neutral reciprocal graph never reports a profitable cycle", () => {
+  // 互为倒数的双向边:任何汇率下净乘积恒为 1,不应报告套利。
   const graph = new CrossRateGraph();
   for (const rate of [0.1, 0.5, 0.9, 1, 1.5, 10]) {
     const cycles = graph.detectArbitrage([

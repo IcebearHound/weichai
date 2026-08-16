@@ -1,3 +1,7 @@
+/**
+ * SettlementDateTable 的单元测试:营业日顺延/提前/修正顺延、窗口滚动、
+ * 时段分类与节假日观察评估。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -9,6 +13,7 @@ const day = (isoDate: string): number =>
   Date.parse(`${isoDate}T00:00:00Z`) / 86_400_000;
 
 test("weekends roll in either requested direction", () => {
+  // 周六顺延到周一,提前到周五。
   const calendar = new SettlementDateTable();
   const saturday = day("2026-07-11");
   assert.equal(calendar.adjust(saturday, [], "following"), day("2026-07-13"));
@@ -26,6 +31,7 @@ test("explicit closures are observed on weekdays", () => {
 });
 
 test("modified following stays inside the source month", () => {
+  // 修正顺延:2026-01-31(周六)不滚到 2 月,而提前回 1 月 30 日。
   const calendar = new SettlementDateTable();
   const saturday = day("2026-01-31");
   assert.equal(calendar.adjust(saturday, [], "following"), day("2026-02-02"));
@@ -42,6 +48,7 @@ test("a business day is returned without movement", () => {
 });
 
 test("rollWindow produces unique increasing business days", () => {
+  // 连续 4 个营业日,跳过周末与休市日,输出严格递增。
   const calendar = new SettlementDateTable();
   const rules: CalendarRule[] = [
     { epochDay: day("2026-07-13"), label: "closed", closed: true },
@@ -78,6 +85,7 @@ test("session classification handles weekend and cutoff boundaries", () => {
 });
 
 test("observance inspection reports malformed and missing metadata", () => {
+  // 规则键解析失败记入畸形,法域去重后保留大写规范形式。
   const calendar = new SettlementDateTable();
   const summary = calendar.evaluateObservancePolicies({
     calendarId: " gb-lon ",
@@ -109,6 +117,7 @@ test("invalid conventions, counts and cutoffs are rejected", () => {
 });
 
 test("search limit protects a calendar closed for too long", () => {
+  // 连续 8 天休市超过搜索上限(7 天)时抛错,避免无限搜索。
   const calendar = new SettlementDateTable(7);
   const monday = day("2026-07-13");
   const rules = Array.from({ length: 8 }, (_, offset) => ({

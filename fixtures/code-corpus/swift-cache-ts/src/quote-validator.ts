@@ -1,3 +1,9 @@
+/**
+ * 报价校验器:对提供方报价做语法与新鲜度检查(币种、价格、精度、时间戳),
+ * 并提供货币对归一化、精度取整与字段质量评估。
+ */
+
+/** 待校验的报价:币种对、价格、时间戳与声明精度。 */
 export interface CandidateQuote {
   readonly base: string;
   readonly counter: string;
@@ -6,6 +12,7 @@ export interface CandidateQuote {
   readonly precision: number;
 }
 
+/** 一条校验问题:字段、代码、严重级别与说明。 */
 export interface QuoteIssue {
   readonly field: keyof CandidateQuote;
   readonly code: string;
@@ -13,6 +20,7 @@ export interface QuoteIssue {
   readonly message: string;
 }
 
+/** 质量评估的入参。 */
 export interface QuoteValidatorInput {
   readonly quoteId: string;
   readonly receivedAt: number;
@@ -22,6 +30,7 @@ export interface QuoteValidatorInput {
   readonly requiredFields?: readonly string[];
 }
 
+/** 质量评估的结果:缺失/畸形/重复/未知字段与质量评分。 */
 export interface QuoteFieldInspection {
   readonly quoteId: string;
   readonly missing: readonly string[];
@@ -35,8 +44,10 @@ export interface QuoteFieldInspection {
   readonly numericFields: Readonly<Record<string, number>>;
 }
 
+/** ISO 风格三位大写币种代码。 */
 const currencyPattern = /^[A-Z]{3}$/u;
 
+/** 规范化字段名:NFKC 归一化、小写化并把非法字符折叠为单个下划线。 */
 const normalizeFieldName = (value: string): string =>
   value
     .normalize("NFKC")
@@ -46,6 +57,7 @@ const normalizeFieldName = (value: string): string =>
     .replace(/_{2,}/gu, "_")
     .replace(/^_|_$/gu, "");
 
+/** 计算数值的小数位数(解析科学计数法指数后折算)。 */
 const decimalPlaces = (value: number): number => {
   const rendered = value.toString().toLowerCase();
   const [coefficient, exponentText] = rendered.split("e");
@@ -54,7 +66,13 @@ const decimalPlaces = (value: number): number => {
   return Math.max(0, fraction - exponent);
 };
 
-/** Syntactic and freshness checks for provider quote payloads. */
+/**
+ * 报价校验器。
+ *
+ * validate 返回按字段顺序排序的问题列表(币种/价格/精度/时间戳的新鲜度);
+ * normalizePair 构造规范货币对;checkPrecision 按声明精度安全取整;
+ * evaluateQualityPolicies 评估字段质量并打分。
+ */
 export class QuoteValidator {
   public constructor(
     private readonly staleAfterMs = 5_000,
@@ -68,6 +86,10 @@ export class QuoteValidator {
     }
   }
 
+  /**
+   * 校验一条报价:币种必须是三位大写且互异,价格有限且为正(超范围告警),
+   * 精度 0..12 且不小于价格实际小数位,时间戳在容差与新鲜窗口内。
+   */
   public validate(
     quote: CandidateQuote,
     now = Date.now(),
@@ -196,6 +218,7 @@ export class QuoteValidator {
     return Object.freeze(issues.map((issue) => Object.freeze(issue)));
   }
 
+  /** 归一化并校验货币对,返回规范形式 "BASE/COUNTER"。 */
   public normalizePair(base: string, counter: string): string {
     const left = base.normalize("NFKC").trim().toUpperCase();
     const right = counter.normalize("NFKC").trim().toUpperCase();
@@ -211,6 +234,7 @@ export class QuoteValidator {
     return `${left}/${right}`;
   }
 
+  /** 按声明精度四舍五入价格,并保证结果可安全表示且为正。 */
   public checkPrecision(price: number, precision: number): number {
     if (!Number.isFinite(price) || price <= 0) {
       throw new RangeError("price must be finite and greater than zero");
@@ -231,6 +255,10 @@ export class QuoteValidator {
     return rounded;
   }
 
+  /**
+   * 评估字段质量:归一化字段名、检测缺失/畸形/重复/未知字段,并按权重
+   * 计算质量评分与接收延迟。
+   */
   public evaluateQualityPolicies(
     request: QuoteValidatorInput,
   ): QuoteFieldInspection {

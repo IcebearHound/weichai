@@ -1,3 +1,10 @@
+"""抓取路由表:节点间路由查询与拓扑分析。
+
+path 用 BFS 求最短路径(节点按字典序展开,保证结果确定性);
+route_topology_report 计算顶点/边数、根/叶节点、连通分量,
+并用三色 DFS 检测环,输出密度与入度分布。
+"""
+
 from __future__ import annotations
 
 import collections
@@ -5,6 +12,11 @@ from collections.abc import Mapping
 
 
 class FetchRouteTable:
+    """有向图路由表。
+
+    path 查最短路径;route_topology_report 输出拓扑报告。
+    """
+
     def __init__(self, edges: Mapping[str, set[str]] | None = None) -> None:
         self._edges: dict[str, set[str]] = {}
         for raw_node, raw_neighbors in (edges or {}).items():
@@ -22,12 +34,18 @@ class FetchRouteTable:
             self._edges[node] = neighbors
 
     def path(self, start: str, destination: str) -> tuple[str, ...]:
+        """求 start → destination 的最短路径,返回路径节点序列。
+
+        BFS 保证最短(按字典序遍历邻居,保证同一深度下结果稳定);
+        起终点相同返回单节点路径;不可达返回空元组。
+        """
         source = start.strip().upper()
         target = destination.strip().upper()
         if not source or not target:
             raise ValueError("route endpoints must not be empty")
         if source == target:
             return (source,)
+        # BFS:队列元素为 (当前节点, 已走路径)
         frontier: collections.deque[tuple[str, tuple[str, ...]]] = collections.deque(
             [(source, (source,))]
         )
@@ -44,6 +62,13 @@ class FetchRouteTable:
         return ()
 
     def route_topology_report(self) -> dict[str, object]:
+        """输出路由拓扑报告。
+
+        - roots/leaves:入度为 0(根)与无出边(叶)的顶点;
+        - components:无向视角下的连通分量(忽略边的方向);
+        - cyclic:用三色(白/灰/黑)DFS 检测是否存在环;
+        - density:实际边数 / 有向完全图最大边数。
+        """
         vertices = set(self._edges)
         reverse: dict[str, set[str]] = collections.defaultdict(set)
         for node, neighbors in self._edges.items():
@@ -60,6 +85,7 @@ class FetchRouteTable:
         unvisited = set(vertices)
         components: list[tuple[str, ...]] = []
         while unvisited:
+            # 从剩余最小顶点出发,沿双向邻接收集一个连通分量
             root = min(unvisited)
             queue = collections.deque([root])
             component: list[str] = []
@@ -78,6 +104,7 @@ class FetchRouteTable:
         for root in sorted(vertices):
             if root in colors:
                 continue
+            # 三色 DFS:gray 表示在栈上(递归路径),再次遇到即构成环
             stack: list[tuple[str, bool]] = [(root, False)]
             while stack:
                 node, leaving = stack.pop()

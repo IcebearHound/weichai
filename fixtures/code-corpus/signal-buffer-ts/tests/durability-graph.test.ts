@@ -1,3 +1,8 @@
+/**
+ * 持久性与图算法测试:ThresholdSink、planAuditPartitions、PacketJournal、
+ * repairFrameSequence、SegmentStore、planSegmentMigration、DependencyMap 与
+ * minimumDependencyCut。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -45,6 +50,7 @@ test("manual flush returns the number of persisted entries", async () => {
 });
 
 test("concurrent callers produce lossless batches", async () => {
+  // 并发追加 41 条:全部落盘、无重复、每批不超过阈值。
   const persisted = new Set<string>();
   const batchSizes: number[] = [];
   const sink = new ThresholdSink(7, 60_000, async (entries) => {
@@ -63,6 +69,7 @@ test("concurrent callers produce lossless batches", async () => {
 });
 
 test("failed writer restores a batch for a later flush", async () => {
+  // 首次写入失败后批次回退缓冲,下次 flush 仍能完整落盘。
   let attempts = 0;
   const persisted: string[] = [];
   const sink = new ThresholdSink(10, 60_000, async (entries) => {
@@ -100,6 +107,7 @@ test("timer flush persists a partial buffer", async () => {
 });
 
 test("audit partitions redact sensitive fields", () => {
+  // 敏感字段脱敏只发生在分区副本,不修改调用方的原始条目。
   const entries = [
     { ...audit("a", "s"), fields: { subject: "s", token: "visible-before-redaction", region: "eu" } },
   ];
@@ -146,6 +154,7 @@ test("packet journal verifies checksums", () => {
 
 test("packet journal reorders a complete stream", () => {
   const journal = new PacketJournal();
+  // 乱序到达的帧在末帧就绪后按序号拼接为完整负载。
   assert.equal(journal.reorder(frame(2, [5, 6], true), 100, 10), undefined);
   assert.equal(journal.reorder(frame(0, [1, 2]), 110, 10), undefined);
   const joined = journal.reorder(frame(1, [3, 4]), 120, 10);
@@ -185,6 +194,7 @@ test("frame repair discards checksum failures and foreign streams", () => {
 });
 
 test("frame repair chooses the longer conflicting payload", () => {
+  // 同序号冲突帧:保留负载更长者,冲突尺寸记录在 conflicts 中。
   const short = frame(0, [1], true);
   const long = frame(0, [1, 2, 3], true);
   const result = repairFrameSequence([short, long], 0);
@@ -212,6 +222,7 @@ test("segment migration reports insufficient capacity", () => {
 });
 
 test("migration waves avoid using a segment twice", () => {
+  // 同一波次内任何段(源或目标)至多被一个迁移占用,避免读写冲突。
   const plan = planSegmentMigration(extentFixture, { "new-a": 512, "new-b": 512, "new-c": 512 });
   for (const wave of plan.waves) {
     const busy = new Set<string>();
@@ -245,6 +256,7 @@ test("empty segment store queries return neutral state", () => {
 
 test("dependency map returns stable topological order", () => {
   const graph = new DependencyMap();
+  // 拓扑序:每个节点的前置必须排在它之前。
   dependencyFixture.forEach((entry, index) => graph.register(entry, 1_000 + index));
   const result = graph.topological();
   const position = new Map(result.ordered.map((entry, index) => [entry.id, index]));
@@ -283,6 +295,7 @@ test("propagation batches descendants by capacity", () => {
 });
 
 test("minimum dependency cut separates root and terminal", () => {
+  // 从 ingest 到 publish 的最小代价割:存在割、代价为正且无环。
   const result = minimumDependencyCut(dependencyFixture, ["ingest"], new Set(["publish"]));
   assert.ok(result.cut.length >= 1);
   assert.ok(result.cost > 0);

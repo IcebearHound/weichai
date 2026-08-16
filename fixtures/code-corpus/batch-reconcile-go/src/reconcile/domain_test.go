@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+// TestCurrencyValidityAndMoneyFormatting 验证币种白名单边界(大小写、未知码、
+// 空值均非法)以及金额的展示格式(含负号、小数位补零)。
 func TestCurrencyValidityAndMoneyFormatting(t *testing.T) {
 	valid := []Currency{CurrencyAUD, CurrencyCAD, CurrencyCHF, CurrencyCNY, CurrencyEUR, CurrencyGBP, CurrencyJPY, CurrencyUSD}
 	for _, currency := range valid {
@@ -41,6 +43,8 @@ func TestCurrencyValidityAndMoneyFormatting(t *testing.T) {
 	}
 }
 
+// TestMoneyCreationAdditionAndOverflow 验证构造函数对非法币种的拒绝、同币种
+// 加减正确、跨币种拒绝,以及正负两侧的溢出保护。
 func TestMoneyCreationAdditionAndOverflow(t *testing.T) {
 	created, err := NewMoney(CurrencyUSD, 4_250)
 	if err != nil || created.Minor != 4_250 {
@@ -64,6 +68,8 @@ func TestMoneyCreationAdditionAndOverflow(t *testing.T) {
 	}
 }
 
+// TestPaymentValidationMatrix 用参数化用例覆盖支付校验的全部规则,包括自转、
+// 金额非正、引用超长、优先级越界与属性键值超限等边界。
 func TestPaymentValidationMatrix(t *testing.T) {
 	base := testPayment("payment-valid", "source-100", "target-200", CurrencyUSD, 5_000, 0)
 	if err := base.Validate(); err != nil {
@@ -110,6 +116,8 @@ func TestPaymentValidationMatrix(t *testing.T) {
 	}
 }
 
+// TestPaymentFingerprintIsCanonicalAndSensitive 验证指纹的规范性(属性插入顺序
+// 不影响结果、长度为 64 位十六进制)与敏感性(任意业务字段变化都改变指纹)。
 func TestPaymentFingerprintIsCanonicalAndSensitive(t *testing.T) {
 	first := testPayment("fingerprint", "account-a", "account-b", CurrencyEUR, 8_888, 0)
 	first.Attributes = map[string]string{"zeta": "last", "alpha": "first", "middle": "value"}
@@ -146,6 +154,8 @@ func TestPaymentFingerprintIsCanonicalAndSensitive(t *testing.T) {
 	}
 }
 
+// TestCommitRequestValidationAndFingerprint 验证批次请求的校验规则(键长、空批、
+// 尝试次数、时间与截止、批内重复身份),并确认指纹对支付顺序敏感。
 func TestCommitRequestValidationAndFingerprint(t *testing.T) {
 	paymentA := testPayment("request-a", "src-a", "dst-a", CurrencyUSD, 100, 0)
 	paymentB := testPayment("request-b", "src-b", "dst-b", CurrencyEUR, 200, time.Second)
@@ -189,6 +199,8 @@ func TestCommitRequestValidationAndFingerprint(t *testing.T) {
 	}
 }
 
+// TestReceiptValidationMatrix 验证回执校验:必填引用、正尝试次数、提交时间与
+// 证据摘要的十六进制格式及长度。
 func TestReceiptValidationMatrix(t *testing.T) {
 	valid := Receipt{
 		ReceiptID:      "receipt-123",
@@ -229,6 +241,8 @@ func TestReceiptValidationMatrix(t *testing.T) {
 	}
 }
 
+// TestFailureClassification 验证错误分类:context 取消/超时、已分类错误、消息
+// 关键词启发式与普通拒绝各自映射到正确的失败类别与可重试性。
 func TestFailureClassification(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -259,6 +273,8 @@ func TestFailureClassification(t *testing.T) {
 	}
 }
 
+// TestBatchSummaryPreservesTotalsAndFailures 验证汇总的正确性:成功/失败计数、
+// 总尝试次数、按币种金额累计、失败类别分布与回执 ID 顺序。
 func TestBatchSummaryPreservesTotalsAndFailures(t *testing.T) {
 	receiptUSD := Receipt{ReceiptID: "r-usd", PaymentID: "p-usd", BatchKey: "summary-batch", Amount: Money{Currency: CurrencyUSD, Minor: 125}, Attempt: 1, CommittedAt: testEpoch, EvidenceDigest: strings.Repeat("1", 64)}
 	receiptEUR := Receipt{ReceiptID: "r-eur", PaymentID: "p-eur", BatchKey: "summary-batch", Amount: Money{Currency: CurrencyEUR, Minor: 250}, Attempt: 2, CommittedAt: testEpoch, EvidenceDigest: strings.Repeat("2", 64)}

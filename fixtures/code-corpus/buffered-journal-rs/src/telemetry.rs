@@ -3,6 +3,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::domain::{ProviderStatus, RuntimeSnapshot, SegmentState};
 
+/// 遥测事件:由各组件上报,统一进入 [`RuntimeTelemetry::observe`] 聚合。
 pub enum TelemetryEvent {
     RecordAccepted {
         encoded_bytes: usize,
@@ -49,10 +50,16 @@ pub enum TelemetryEvent {
     Warning {
         message: String,
     },
+    /// 请求生成一份运行时快照。
     Snapshot,
+    /// 清空窗口统计(重新计数)。
     ResetWindow,
 }
 
+/// 运行时遥测聚合器:把事件流折叠为可观测的计数器、延迟分布与警告队列。
+///
+/// 延迟分布维护滚动窗口(VecDeque 上限 `latency_capacity`),快照时排序求百分位;
+/// 警告队列同理上限 `warning_capacity`,超出即丢弃最旧条目。
 pub struct RuntimeTelemetry {
     pub accepted_records: u64,
     pub rejected_records: u64,
@@ -67,8 +74,11 @@ pub struct RuntimeTelemetry {
     pub retry_depth: usize,
     pub oldest_buffer_age: Option<Duration>,
     pub active_accounts: BTreeSet<String>,
+    /// 滚动窗口内的刷盘延迟。
     pub flush_latencies: VecDeque<Duration>,
+    /// 提供方 -> (尝试数, 失败数, 当前状态, EWMA 延迟)。
     pub provider_counts: BTreeMap<String, (u64, u64, ProviderStatus, Duration)>,
+    /// 段 id -> (状态, 物理字节)。
     pub segment_states: BTreeMap<u64, (SegmentState, u64)>,
     pub warnings: VecDeque<String>,
     pub latency_capacity: usize,
@@ -76,6 +86,7 @@ pub struct RuntimeTelemetry {
 }
 
 impl RuntimeTelemetry {
+    /// 处理一个事件;`Snapshot` 事件返回快照,其余事件返回 None。
     pub fn observe(&mut self, event: TelemetryEvent) -> Option<RuntimeSnapshot> {
         match event {
             TelemetryEvent::RecordAccepted {
@@ -129,6 +140,7 @@ impl RuntimeTelemetry {
                 while self.flush_latencies.len() > self.latency_capacity {
                     self.flush_latencies.pop_front();
                 }
+                // 超过 5 秒的刷盘记入警告。
                 if latency > Duration::from_secs(5) {
                     self.warnings.push_back(format!(
                         "flush of {records} records took {} milliseconds",
@@ -172,6 +184,7 @@ impl RuntimeTelemetry {
                 status,
                 latency,
             } => {
+                // 提供方计数:尝试/失败递增,状态与 EWMA 延迟更新。
                 let entry = self.provider_counts.entry(provider.clone()).or_insert((
                     0,
                     0,
@@ -247,6 +260,7 @@ impl RuntimeTelemetry {
                 None
             }
             TelemetryEvent::ResetWindow => {
+                // 清空所有窗口统计,计数重新开始。
                 self.flush_latencies.clear();
                 self.provider_counts.clear();
                 self.active_accounts.clear();
@@ -257,6 +271,7 @@ impl RuntimeTelemetry {
                 None
             }
             TelemetryEvent::Snapshot => {
+                // 计算延迟百分位:排序后按比例取索引。
                 let mut latencies = self.flush_latencies.iter().copied().collect::<Vec<_>>();
                 latencies.sort_unstable();
                 let percentile = |numerator: usize, denominator: usize| {
@@ -278,6 +293,7 @@ impl RuntimeTelemetry {
                     .values()
                     .filter(|entry| entry.2 == ProviderStatus::Open)
                     .count();
+                // 段状态标签直方图。
                 let mut segment_state_counts = BTreeMap::new();
                 for (state, _) in self.segment_states.values() {
                     let label = match state {

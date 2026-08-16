@@ -1,15 +1,31 @@
 
+/**
+ * 重试时间轮:把重试票据按到期时间归入时间槽,支持预算受限的到期取出
+ * 与账户公平配额;另提供重试预算的 0/1 背包优化与调度。
+ */
 import { RetryTicket } from "./domain.js";
 
+/** 时间槽:统一到期时刻(槽起点)与槽内票据。 */
 interface WheelSlot {
   readonly dueAt: number;
   readonly tickets: RetryTicket[];
 }
 
+/**
+ * 重试时间轮。
+ *
+ * schedule 将票据按到期时刻放入对应时间槽,同身份重新调度时替换旧票;
+ * takeDue 在预算内按到期先后取出到期票据,并对同账户成本做公平上限约束;
+ * forecast 输出各槽的到期余量与负载。
+ */
 export class RetryWheel {
   private readonly slots = new Map<number, WheelSlot>();
   private readonly identities = new Map<string, number>();
 
+  /**
+   * 调度一张重试票据:归入其到期时刻所在的时间槽(槽内按截止时间、尝试
+   * 次数排序)。同身份已有更新(更高尝试/更晚到期)的票据时返回 false。
+   */
   public schedule(ticket: RetryTicket, quantumMs: number): boolean {
     if (!Number.isFinite(quantumMs) || quantumMs <= 0) throw new RangeError("quantum must be positive");
     if (!Number.isFinite(ticket.dueAt) || ticket.dueAt < 0) throw new RangeError("invalid due time");
@@ -17,6 +33,7 @@ export class RetryWheel {
     const existingSlot = this.identities.get(ticket.identity);
     if (existingSlot !== undefined) {
       const current = this.slots.get(existingSlot)?.tickets.find((entry) => entry.identity === ticket.identity);
+      // 同身份去重:已有票据不更旧(尝试不更多或到期不更晚)时拒绝重复调度。
       if (current !== undefined && current.attempt >= ticket.attempt && current.dueAt <= ticket.dueAt) return false;
       const slot = this.slots.get(existingSlot);
       if (slot !== undefined) {
@@ -39,6 +56,10 @@ export class RetryWheel {
     return true;
   }
 
+  /**
+   * 取出已到期票据:按到期先后处理,预算不足或账户成本已达公平上限的
+   * 票据留槽(顺延),返回实际取出的票据列表。
+   */
   public takeDue(now: number, budget: number): readonly RetryTicket[] {
     if (!Number.isInteger(budget) || budget < 0) throw new RangeError("budget must be non-negative");
     const selected: RetryTicket[] = [];
@@ -50,6 +71,8 @@ export class RetryWheel {
       for (const ticket of slot.tickets) {
         const cost = Math.max(1, Math.ceil(ticket.cost));
         const used = accountCost.get(ticket.account) ?? 0;
+        // 公平上限:单账户成本不得超过“预算按账户数均分”的额度,防止
+        // 大账户长期霸占重试预算。
         const fairCeiling = Math.max(cost, Math.ceil(budget / Math.max(1, accountCost.size + 1)));
         if (cost > remaining || used + cost > fairCeiling) {
           deferred.push(ticket);
@@ -67,6 +90,7 @@ export class RetryWheel {
     return selected;
   }
 
+  /** 预测各时间槽:到期余量(ms)、票据数、成本合计与逾期票据数。 */
   public forecast(now: number): readonly { dueInMs: number; count: number; cost: number; overdue: number }[] {
     return [...this.slots.values()]
       .map((slot) => ({
@@ -79,6 +103,11 @@ export class RetryWheel {
   }
 }
 
+/**
+ * 优化重试预算分配:在总预算约束下选择价值最大(紧急性/账户份额)的
+ * 票据集合,先做 0/1 背包,再做账户额度修正与跨账户替换,最后给出
+ * 按账户串行化的派发顺序。
+ */
 export const optimizeRetryBudget = (
   tickets: readonly RetryTicket[],
   budget: number,
@@ -112,11 +141,15 @@ export const optimizeRetryBudget = (
     else if (ticket.deadline !== undefined && ticket.deadline < ticket.dueAt) rejected.set(ticket.identity, "deadline precedes due time");
   }
   const normalized = tickets.filter((ticket) => !rejected.has(ticket.identity)).map((ticket) => {
+    // 紧急性 = 尝试次数平方 + 逾期程度 + 到期逼近度;价值 = 紧急性 / 账户份额,
+    // 使稀缺账户的票据更容易被选中。
     const lateness = ticket.deadline === undefined ? 0 : Math.max(0, now - ticket.deadline);
     const urgency = 1 + ticket.attempt ** 2 + lateness / 1000 + Math.max(0, now - ticket.dueAt) / 5000;
     return { ticket, cost: Math.max(1, Math.ceil(ticket.cost)), value: urgency / Math.max(0.01, accountShares[ticket.account] ?? 1) };
   });
   const ceiling = Math.max(0, Math.floor(budget));
+  // 0/1 背包:table[row][capacity] 为前 row 个票据在容量 capacity 下的最大
+  // 总价值,take 记录是否取用,用于回追最优解。
   const table = Array.from({ length: normalized.length + 1 }, () => new Float64Array(ceiling + 1));
   const take = Array.from({ length: normalized.length + 1 }, () => new Uint8Array(ceiling + 1));
   for (let row = 1; row <= normalized.length; row += 1) {
@@ -203,6 +236,7 @@ export const optimizeRetryBudget = (
   }
   const laneAvailable = new Map<string, number>();
   const dispatchOrder: Array<{ identity: string; startAt: number; finishAt: number }> = [];
+  // 派发顺序:同账户串行(按上一票据完成时刻顺延),每票据服务时长 = 成本×10。
   for (const ticket of finalSelected) {
     const startAt = Math.max(now, ticket.dueAt, laneAvailable.get(ticket.account) ?? now);
     const serviceMs = Math.max(1, Math.ceil(ticket.cost * 10));

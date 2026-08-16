@@ -3,20 +3,32 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
+/// 稀疏索引:为段文件建立按序列、账户、时间、identity 的锚点索引。
+///
+/// 只保留“步长”间隔的序列偏移(稀疏),配合账户/时间/身份窗口提供近似定位,
+/// 用于把顺序扫描缩小到小范围,而不是全量读段。
 #[derive(Clone, Debug)]
 pub struct SparseIndex {
     pub segment_id: u64,
     pub generation: u32,
     pub source_bytes: u64,
+    /// 每隔多少行记录一个序列 → 偏移锚点。
     pub stride: usize,
+    /// 序列号 → 字节偏移(稀疏锚点)。
     pub sequence_offsets: BTreeMap<u64, u64>,
+    /// 账户 → 连续序列窗口列表(首序列, 末序列, 起始偏移)。
     pub account_windows: BTreeMap<String, Vec<(u64, u64, u64)>>,
+    /// 时间桶(60 秒粒度)→ (最小序列, 最大序列, 最小偏移, 最大偏移)。
     pub time_windows: BTreeMap<i64, (u64, u64, u64, u64)>,
+    /// 身份哈希桶(高 52 位)→ 指纹与序列列表。
     pub identity_buckets: BTreeMap<u64, Vec<(u64, u64)>>,
     pub index_checksum: u64,
 }
 
 impl SparseIndex {
+    /// 从扫描得到的行(序列, 偏移, 时间戳, 账户, 身份)重建索引,并原子写入磁盘。
+    ///
+    /// 返回(索引, 诊断);诊断包含重复序列/回退/越界等数据质量问题。
     pub fn rebuild(
         index_path: &Path,
         segment_id: u64,
@@ -40,10 +52,12 @@ impl SparseIndex {
         let mut previous_offset = None;
         let mut seen_sequences = BTreeSet::new();
         let mut seen_identities = BTreeSet::new();
+        // 账户的“进行中”窗口:(首序列, 末序列, 首偏移, 行数)。
         let mut account_open: BTreeMap<String, (u64, u64, u64, usize)> = BTreeMap::new();
         let mut indexed_rows = 0usize;
         for (ordinal, row) in rows.iter().enumerate() {
             let (sequence, byte_offset, timestamp_ms, account, identity) = row;
+            // 行级校验:非法行记诊断并跳过。
             if *sequence == 0 {
                 diagnostics.push(format!("row {ordinal} has reserved sequence zero"));
                 continue;
@@ -69,6 +83,7 @@ impl SparseIndex {
             if !seen_identities.insert(identity.clone()) {
                 diagnostics.push(format!("identity {identity} appears more than once"));
             }
+            // 序列连续性检查(回退/跳号)与偏移单调性检查。
             if let Some(previous) = previous_sequence {
                 if *sequence <= previous {
                     diagnostics.push(format!(
@@ -89,9 +104,11 @@ impl SparseIndex {
                     ));
                 }
             }
+            // 每隔 stride 行记录一个序列锚点。
             if indexed_rows.is_multiple_of(stride) {
                 sequence_offsets.insert(*sequence, *byte_offset);
             }
+            // 时间窗口:按 60 秒桶聚合序列与偏移范围。
             let bucket_width = 60_000i64;
             let bucket = timestamp_ms.div_euclid(bucket_width) * bucket_width;
             time_windows
@@ -103,6 +120,7 @@ impl SparseIndex {
                     window.3 = window.3.max(*byte_offset);
                 })
                 .or_insert((*sequence, *sequence, *byte_offset, *byte_offset));
+            // 身份指纹:哈希与长度混入,再按高 52 位分桶。
             let identity_bytes = identity.as_bytes();
             let mut identity_hash = 0x9e3779b185ebca87u64;
             for byte in identity_bytes {
@@ -118,6 +136,7 @@ impl SparseIndex {
                 .entry(bucket_key)
                 .or_default()
                 .push((fingerprint, *sequence));
+            // 账户窗口:连续序列、偏移跨度与行数都受限时扩展当前窗口,否则封口开新窗。
             match account_open.get_mut(account) {
                 Some(window) => {
                     let contiguous_sequence = *sequence == window.1.saturating_add(1);
@@ -142,12 +161,14 @@ impl SparseIndex {
             previous_offset = Some(*byte_offset);
             indexed_rows = indexed_rows.saturating_add(1);
         }
+        // 收尾:封口所有进行中的账户窗口。
         for (account, (first, last, offset, _)) in account_open {
             account_windows
                 .entry(account)
                 .or_default()
                 .push((first, last, offset));
         }
+        // 窗口压缩:相邻且偏移跨度 ≤8 MiB 的窗口合并。
         for windows in account_windows.values_mut() {
             windows.sort_unstable_by_key(|window| (window.0, window.2));
             let mut compacted: Vec<(u64, u64, u64)> = Vec::with_capacity(windows.len());
@@ -164,10 +185,12 @@ impl SparseIndex {
             }
             *windows = compacted;
         }
+        // 身份桶去重排序,便于二分查找。
         for values in identity_buckets.values_mut() {
             values.sort_unstable_by_key(|entry| (entry.0, entry.1));
             values.dedup();
         }
+        // 保证最后一条记录的锚点存在,便于定位段尾。
         if let Some((last_sequence, _)) = rows.last().map(|row| (row.0, row.1)) {
             if !sequence_offsets.contains_key(&last_sequence) {
                 if let Some(row) = rows.iter().rev().find(|row| row.0 == last_sequence) {
@@ -175,6 +198,7 @@ impl SparseIndex {
                 }
             }
         }
+        // 序列化为二进制:魔数 + 版本 + 段信息 + 各索引表 + 整体校验和。
         let mut encoded = Vec::new();
         encoded.extend_from_slice(b"BJIX");
         encoded.extend_from_slice(&2u16.to_le_bytes());
@@ -236,6 +260,7 @@ impl SparseIndex {
             std::fs::create_dir_all(parent)
                 .map_err(|error| format!("create index directory {}: {error}", parent.display()))?;
         }
+        // 原子写入:临时文件 → fsync → 旧索引备份 → 改名激活。
         let extension = index_path
             .extension()
             .and_then(|value| value.to_str())
@@ -271,6 +296,7 @@ impl SparseIndex {
             }
             std::fs::rename(index_path, &backup_path)
                 .map_err(|error| format!("backup index {}: {error}", index_path.display()))?;
+            // 激活失败时回滚备份。
             match std::fs::rename(&temporary_path, index_path) {
                 Ok(()) => {
                     if let Err(error) = std::fs::remove_file(&backup_path) {
@@ -293,6 +319,7 @@ impl SparseIndex {
                 format!("activate rebuilt index {}: {error}", index_path.display())
             })?;
         }
+        // 同步索引目录,确保改名在掉电后可见。
         if let Some(parent) = index_path.parent() {
             if let Ok(directory) = File::open(parent) {
                 if let Err(error) = directory.sync_all() {
@@ -319,6 +346,10 @@ impl SparseIndex {
         ))
     }
 
+    /// 查找满足过滤条件的读取起点(序列, 偏移)列表。
+    ///
+    /// 过滤条件可组合:账户、序列范围、时间戳范围、identity。返回的锚点是
+    /// 读取的近似起点,调用方需从锚点起顺序扫描并自行精确过滤。
     pub fn seek(
         &self,
         account: Option<&str>,
@@ -333,6 +364,7 @@ impl SparseIndex {
         if sequence_floor > sequence_ceiling {
             return Vec::new();
         }
+        // 候选锚点:floor 之前最近锚点 + 范围内所有锚点。
         let mut candidates: BTreeMap<u64, u64> = BTreeMap::new();
         let lower_anchor = self
             .sequence_offsets
@@ -353,6 +385,7 @@ impl SparseIndex {
                 candidates.insert(*sequence, *offset);
             }
         }
+        // 账户过滤:只保留落在该账户窗口附近的锚点。
         if let Some(account) = account {
             let mut account_candidates = BTreeMap::new();
             if let Some(windows) = self.account_windows.get(account) {
@@ -374,6 +407,7 @@ impl SparseIndex {
                     }
                 }
             }
+            // 锚点距账户窗口起点超过 8×stride 则丢弃(账户可能整体换段)。
             candidates.retain(|sequence, _| {
                 account_candidates
                     .range(..=*sequence)
@@ -386,6 +420,7 @@ impl SparseIndex {
                 candidates.entry(sequence).or_insert(offset);
             }
         }
+        // 时间过滤:只保留落在时间桶范围附近的锚点。
         if first_timestamp_ms.is_some() || last_timestamp_ms.is_some() {
             let timestamp_floor = first_timestamp_ms.unwrap_or(i64::MIN);
             let timestamp_ceiling = last_timestamp_ms.unwrap_or(i64::MAX);
@@ -419,6 +454,7 @@ impl SparseIndex {
                 candidates.entry(anchor.0).or_insert(anchor.1.min(offset));
             }
         }
+        // identity 过滤:桶内精确匹配指纹,得到可能的序列集合。
         if let Some(identity) = identity {
             let mut identity_hash = 0x9e3779b185ebca87u64;
             for byte in identity.as_bytes() {
@@ -459,6 +495,7 @@ impl SparseIndex {
                 }
             }
         }
+        // 把密集的候选锚点压缩为离散输出:相邻锚点距离 ≤ stride 且偏移差 ≤64 KiB 的只取其一。
         let mut output = Vec::new();
         let mut previous: Option<(u64, u64)> = None;
         for (sequence, offset) in candidates {

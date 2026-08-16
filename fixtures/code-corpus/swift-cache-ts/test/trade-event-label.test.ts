@@ -1,8 +1,13 @@
+/**
+ * TradeEventLabel 的单元测试:标签生成(归一化/排序/编码)、token 化、
+ * 规范化与命名空间策略评估。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { TradeEventLabel } from "../src/trade-event-label.js";
 
 test("format emits a stable normalized event label", () => {
+  // 类别连字符化、账户大写、序号转 base36 补零、属性排序编码。
   const labels = new TradeEventLabel();
   const formatted = labels.format({
     category: " Trade Filled ",
@@ -82,6 +87,7 @@ test("normalization detects colliding attribute names", () => {
 });
 
 test("tokenize decodes query values and honors quoted delimiters", () => {
+  // 引号内的 “&” 不当作分隔符;百分号编码的 “LON 1” 被解码。
   const labels = new TradeEventLabel();
   assert.deepEqual(
     labels.tokenize('trade:ACCT:00000001?note="a&b"&venue=LON%201'),
@@ -97,6 +103,7 @@ test("tokenize reports malformed percent, quote and escape syntax", () => {
 });
 
 test("canonicalize sorts attributes and lets the last duplicate win", () => {
+  // 任意形式的标签归一化:属性按名排序,重复键取最后一个。
   const labels = new TradeEventLabel();
   assert.equal(
     labels.canonicalize(" Trade : acct-9 : a ?Z=1&a=2&z=3"),
@@ -112,6 +119,7 @@ test("canonicalize validates the three path components", () => {
 });
 
 test("namespace inspection identifies invalid offsets and collisions", () => {
+  // 非法字符记录偏移,重复组件单独列出,规范化组件取后值。
   const labels = new TradeEventLabel();
   const inspection = labels.evaluateNamespacePolicies({
     eventId: "evt 9",

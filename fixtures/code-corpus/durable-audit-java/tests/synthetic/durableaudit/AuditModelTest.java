@@ -10,7 +10,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * 审计领域模型(AuditEvent/AuditBatch/WriteReceipt)的行为测试:
+ * 字段规范化、校验与转义、批次汇总/排序/分片/公平交错,以及回执契约。
+ */
 final class AuditModelTest {
+    /** 汇总入口:运行全部用例,返回本类新增的断言数。 */
     static int run() throws Exception {
         int before = TestSupport.assertions();
         constructsNormalizedEvent();
@@ -31,6 +36,7 @@ final class AuditModelTest {
         return TestSupport.assertions() - before;
     }
 
+    /** 事件构造应裁剪空白、排序属性、归一化币种。 */
     private static void constructsNormalizedEvent() {
         Map<String, String> attributes = new LinkedHashMap<>();
         attributes.put(" zone ", " east ");
@@ -58,6 +64,7 @@ final class AuditModelTest {
         TestSupport.check(event.toString().contains("severity=WARNING"), "diagnostic text should include severity");
     }
 
+    /** 租户/分类/主体/执行者/序号等非法字段应被拒绝。 */
     private static void rejectsMalformedEventFields() {
         UUID id = UUID.randomUUID();
         Map<String, String> none = Map.of();
@@ -77,6 +84,7 @@ final class AuditModelTest {
         TestSupport.expectThrows(IllegalArgumentException.class, () -> new AuditEvent(id, "tenant", "category", "subject", "actor", TestSupport.BASE, Severity.INFO, null, null, -1, none), "negative sequence should fail");
     }
 
+    /** 币种与金额必须成对出现;金额超精度时银行家舍入,超范围拒绝。 */
     private static void normalizesAmountsAndCurrencies() {
         AuditEvent rounded = TestSupport.event("money", "account:1", 1, TestSupport.BASE, Severity.NOTICE, "gbp", new BigDecimal("1.234567895"), Map.of());
         TestSupport.equal("GBP", rounded.currency(), "lowercase currency should normalize");
@@ -92,6 +100,7 @@ final class AuditModelTest {
         TestSupport.expectThrows(IllegalArgumentException.class, () -> TestSupport.event("money", "account:7", 7, TestSupport.BASE, Severity.INFO, "USD", new BigDecimal("1000000000000000"), Map.of()), "limit amount should fail");
     }
 
+    /** 属性:排序、不可变、去空白后不得重复、保留字与数量/长度受限。 */
     private static void validatesAttributeContracts() {
         AuditEvent event = TestSupport.event("attrs", "account:1", 1, TestSupport.BASE, Severity.INFO, null, null, Map.of("b", "2", "a", "1"));
         TestSupport.equal(List.of("a", "b"), List.copyOf(event.attributes().keySet()), "attributes should have deterministic order");
@@ -108,6 +117,7 @@ final class AuditModelTest {
         TestSupport.expectThrows(IllegalArgumentException.class, () -> event.withAttributes(Map.of("key", "v".repeat(513))), "attribute values should be bounded");
     }
 
+    /** fromMap 宽松解析:缺省执行者、大小写不敏感严重级别、类型转换。 */
     private static void convertsMapRepresentations() {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("eventId", "00000000-0000-0000-0000-000000000123");
@@ -140,6 +150,7 @@ final class AuditModelTest {
         TestSupport.expectThrows(IllegalArgumentException.class, () -> AuditEvent.fromMap(values), "unknown severity should fail");
     }
 
+    /** 字段编码应转义换行/分隔符/反斜杠,保证可逆。 */
     private static void escapesCanonicalFields() {
         AuditEvent event = TestSupport.event("escape", "account:pipe", 4, TestSupport.BASE, Severity.INFO, null, null, Map.of("line", "one\ntwo", "pipe", "a|b", "slash", "a\\b"));
         String fields = new String(event.encodeFields(), java.nio.charset.StandardCharsets.UTF_8);
@@ -149,6 +160,7 @@ final class AuditModelTest {
         TestSupport.check(fields.endsWith("|"), "encoded fields should end at a boundary");
     }
 
+    /** UTF-8 字节估算应正确处理 ASCII/CJK/增补平面字符。 */
     private static void estimatesUtf8PayloadSizes() {
         TestSupport.equal(3, AuditEvent.utf8Length("abc"), "ASCII byte count should match");
         TestSupport.equal(6, AuditEvent.utf8Length("东京"), "CJK byte count should match UTF-8");
@@ -158,6 +170,7 @@ final class AuditModelTest {
         TestSupport.check(rich.estimatedBytes() > small.estimatedBytes(), "attributes should increase estimate");
     }
 
+    /** 相等性、哈希与全序比较应反映语义字段。 */
     private static void comparesEventsAndCopies() {
         AuditEvent original = TestSupport.event("copy", "account:1", 1, TestSupport.BASE, Severity.WARNING, "EUR", new BigDecimal("5"), Map.of("key", "value"));
         AuditEvent same = original.withActor(original.actor());
@@ -170,6 +183,7 @@ final class AuditModelTest {
         TestSupport.check(!later.belongsBefore(original), "later event should not sort before earlier event");
     }
 
+    /** 批次汇总:租户计数、最大流序号、字节估算、负载与不可变性。 */
     private static void constructsBatchSummaries() {
         List<AuditEvent> events = List.of(
                 TestSupport.event("tenant-a", "account:1", 1),
@@ -187,6 +201,7 @@ final class AuditModelTest {
         TestSupport.expectThrows(UnsupportedOperationException.class, () -> batch.events().add(events.get(0)), "batch events should be immutable");
     }
 
+    /** 密封排序按 租户/主体/序号/时间/ID;已有序批次返回自身。 */
     private static void sealsBatchOrdering() {
         AuditEvent third = TestSupport.event("tenant-b", "account:2", 5);
         AuditEvent second = TestSupport.event("tenant-a", "account:2", 3);
@@ -199,6 +214,7 @@ final class AuditModelTest {
         TestSupport.check(source.checksum() != sealed.checksum(), "event order should affect checksum");
     }
 
+    /** 同一流内序号回归或重复都应被识别为顺序违规。 */
     private static void detectsOrderingViolations() {
         List<AuditEvent> events = List.of(
                 TestSupport.eventWithId("v1", "tenant-a", "account:1", 1),
@@ -212,6 +228,7 @@ final class AuditModelTest {
         TestSupport.check(violations.get(1).contains("follows 2 with 2"), "equal sequence should be rejected");
     }
 
+    /** 按 事件数/字节数 双维度分片,子批次号可追溯,事件不丢失。 */
     private static void partitionsByCountAndBytes() {
         AuditBatch batch = TestSupport.batch(7, 11);
         List<AuditBatch> byCount = batch.partition(4, Long.MAX_VALUE);
@@ -225,6 +242,7 @@ final class AuditModelTest {
         TestSupport.expectThrows(IllegalArgumentException.class, () -> batch.partition(1, 0), "zero bytes should fail");
     }
 
+    /** 按租户分组保持首次出现顺序;公平交错轮转不丢事件。 */
     private static void groupsAndFairlyInterleavesTenants() {
         List<AuditEvent> events = new ArrayList<>();
         for (int index = 0; index < 6; index++) {
@@ -244,6 +262,7 @@ final class AuditModelTest {
         TestSupport.equal(events.stream().map(AuditEvent::eventId).sorted().toList(), fair.stream().map(AuditEvent::eventId).sorted().toList(), "fair ordering should preserve identities");
     }
 
+    /** 批次契约:编号非负、非空、事件去重、数量上限。 */
     private static void validatesBatchContracts() {
         AuditEvent source = TestSupport.event("batch", "account:1", 1);
         TestSupport.expectThrows(IllegalArgumentException.class, () -> new AuditBatch(-1, TestSupport.BASE, List.of(source)), "negative number should fail");
@@ -259,6 +278,7 @@ final class AuditModelTest {
         TestSupport.expectThrows(IllegalArgumentException.class, () -> new AuditBatch(0, TestSupport.BASE, tooMany), "event limit should be enforced");
     }
 
+    /** 回执契约:位置/大小非负、事件数/字节数正、摘要为 64 位十六进制。 */
     private static void verifiesReceiptContracts() {
         WriteReceipt receipt = new WriteReceipt(4, 2, 99, 3, 500, TestSupport.BASE, "a".repeat(64));
         TestSupport.equal(4L, receipt.batchNumber(), "receipt should retain batch number");

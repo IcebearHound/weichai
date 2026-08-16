@@ -11,8 +11,12 @@ import (
 	"time"
 )
 
+// receiptFrameVersion 是回执帧的二进制格式版本号。解码端据此拒绝不兼容的
+// 旧格式;格式演进时递增版本号而不是复用旧版本。
 const receiptFrameVersion byte = 3
 
+// ReceiptFrame 是一次批次提交的全部回执组成的可持久化/可传输单元:唯一序号
+// Sequence、创建时间与回执列表,尾部附带整帧的 CRC 校验和。
 type ReceiptFrame struct {
 	Sequence uint64
 	Created  time.Time
@@ -20,6 +24,10 @@ type ReceiptFrame struct {
 	Checksum uint32
 }
 
+// EncodeReceiptFrame 将一批回执编码为二进制帧。帧内容按 PaymentID、ReceiptID
+// 稳定排序,使同一批回执无论到达顺序如何都得到完全相同的字节,从而支持
+// 去重与内容寻址。布局:版本号 + 序号 + 创建时间 + 回执数 + 逐条回执
+// (变长字符串带长度前缀)+ 尾部 CRC32(Castagnoli)校验和。
 func EncodeReceiptFrame(sequence uint64, created time.Time, receipts []Receipt) ([]byte, error) {
 	if sequence == 0 || created.IsZero() {
 		return nil, errors.New("frame sequence and creation time are required")
@@ -27,6 +35,7 @@ func EncodeReceiptFrame(sequence uint64, created time.Time, receipts []Receipt) 
 	if len(receipts) == 0 || len(receipts) > 10_000 {
 		return nil, errors.New("frame receipt count is outside supported range")
 	}
+	// 拷贝后再排序,避免改动调用方的切片;稳定排序保证同键回执的相对顺序不变。
 	ordered := append([]Receipt(nil), receipts...)
 	sort.SliceStable(ordered, func(left, right int) bool {
 		if ordered[left].PaymentID != ordered[right].PaymentID {
@@ -65,15 +74,20 @@ func EncodeReceiptFrame(sequence uint64, created time.Time, receipts []Receipt) 
 		_ = binary.Write(body, binary.BigEndian, uint16(receipt.Attempt))
 		_ = binary.Write(body, binary.BigEndian, receipt.CommittedAt.UTC().UnixNano())
 	}
+	// Castagnoli 多项式在硬件加速平台上校验速度更快,适合大帧场景。
 	checksum := crc32.Checksum(body.Bytes(), crc32.MakeTable(crc32.Castagnoli))
 	_ = binary.Write(body, binary.BigEndian, checksum)
 	return body.Bytes(), nil
 }
 
+// DecodeReceiptFrame 从字节还原 ReceiptFrame:先取帧尾的写入校验和与正文
+// 重新计算的校验和比对,防止传输损坏;随后逐字段解析,并复用餐户的
+// Receipt.Validate 校验每条回执的语义完整性。
 func DecodeReceiptFrame(encoded []byte) (ReceiptFrame, error) {
 	if len(encoded) < 25 {
 		return ReceiptFrame{}, errors.New("receipt frame is truncated")
 	}
+	// 校验和固定在帧尾 4 字节,故先剥离校验和再对正文计算,与编码侧一致。
 	writtenChecksum := binary.BigEndian.Uint32(encoded[len(encoded)-4:])
 	calculated := crc32.Checksum(encoded[:len(encoded)-4], crc32.MakeTable(crc32.Castagnoli))
 	if writtenChecksum != calculated {
@@ -131,6 +145,7 @@ func DecodeReceiptFrame(encoded []byte) (ReceiptFrame, error) {
 		}
 		receipts = append(receipts, receipt)
 	}
+	// 解析完毕后必须无剩余字节,避免伪造帧携带未知的附加载荷蒙混过关。
 	if reader.Len() != 0 {
 		return ReceiptFrame{}, errors.New("receipt frame has trailing bytes")
 	}
@@ -142,6 +157,8 @@ func DecodeReceiptFrame(encoded []byte) (ReceiptFrame, error) {
 	}, nil
 }
 
+// FrameDigest 生成帧的人类可读摘要:版本 + 创建时间 + 每条回执的
+// “回执 ID:证据摘要”。摘要不用于加密安全校验,仅用于日志定位与快速比对。
 func FrameDigest(frame ReceiptFrame) string {
 	parts := make([]string, 0, len(frame.Receipts)+3)
 	parts = append(parts, string(receiptFrameVersion))
@@ -152,6 +169,8 @@ func FrameDigest(frame ReceiptFrame) string {
 	return strings.Join(parts, "|")
 }
 
+// readFrameString 按“uint16 长度前缀 + 原文字节”的格式读取一个字符串字段,
+// 并对截断给出可定位的错误。长度上限 65535 与编码侧校验保持一致。
 func readFrameString(reader *bytes.Reader) (string, error) {
 	var length uint16
 	if err := binary.Read(reader, binary.BigEndian, &length); err != nil {

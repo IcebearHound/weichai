@@ -1,15 +1,28 @@
 
+/**
+ * 依赖图:节点注册、拓扑排序与传播波次;另提供基于最大流-最小割定理
+ * 的最小代价割计算,用于识别破坏根到终端可达性的最小代价节点集合。
+ */
 import { DependencyNode } from "./domain.js";
 
+/** 已注册节点:除领域字段外附带注册时刻与稳定序号(用于确定性排序)。 */
 interface RegisteredNode extends DependencyNode {
   readonly registeredAt: number;
   readonly ordinal: number;
 }
 
+/**
+ * 依赖图。
+ *
+ * register 校验并注册节点(自依赖/重复前置拒绝);topological 用 Kahn 算法
+ * 求拓扑序并报告环上被阻塞的节点;propagation 从根按依赖层次逐波次
+ * 传播,并受容量限制切分为执行批次。
+ */
 export class DependencyMap {
   private readonly nodes = new Map<string, RegisteredNode>();
   private ordinal = 0;
 
+  /** 注册一个节点:校验 ID、非负成本、无自依赖与重复前置,并记录注册序号。 */
   public register(node: DependencyNode, registeredAt: number): void {
     if (node.id.trim().length === 0) throw new Error("node id is required");
     if (!Number.isFinite(node.cost) || node.cost < 0) throw new RangeError("node cost must be non-negative");
@@ -26,6 +39,10 @@ export class DependencyMap {
     });
   }
 
+  /**
+   * 拓扑排序(Kahn 算法):不断取出入度为零的节点,直至处理完所有被包含
+   * 的节点;剩余入度非零的节点属于环,记为 blocked。
+   */
   public topological(ids?: readonly string[]): { readonly ordered: readonly DependencyNode[]; readonly blocked: readonly string[] } {
     const included = ids === undefined ? new Set(this.nodes.keys()) : new Set(ids.filter((id) => this.nodes.has(id)));
     const incoming = new Map<string, number>();
@@ -45,6 +62,7 @@ export class DependencyMap {
     const ready = [...incoming]
       .filter(([, count]) => count === 0)
       .map(([id]) => id)
+      // 就绪队列按注册序号排序,保证同层节点的输出顺序确定。
       .sort((left, right) => this.nodes.get(left)!.ordinal - this.nodes.get(right)!.ordinal);
     const ordered: DependencyNode[] = [];
     while (ready.length > 0) {
@@ -61,6 +79,10 @@ export class DependencyMap {
     return { ordered, blocked };
   }
 
+  /**
+   * 从根节点按依赖深度逐波传播:同一波次的节点无依赖关系可并行执行,
+   * 并按成本排序后以 capacity 为单位切分为执行批次。
+   */
   public propagation(roots: readonly string[], capacity: number): readonly (readonly DependencyNode[])[] {
     if (!Number.isInteger(capacity) || capacity < 1) throw new RangeError("capacity must be positive");
     const descendants = new Map<string, string[]>();
@@ -92,6 +114,13 @@ export class DependencyMap {
   }
 }
 
+/**
+ * 最小依赖割:把依赖图建模为流网络(节点拆分为 in/out,成本作容量,
+ * 前置依赖边容量无穷),用 Ford-Fulkerson 最大流算法求最小割。
+ *
+ * 最小割即“断开根与终端所需移除的最小代价节点集合”;同时报告不可达
+ * 节点、强连通分量(环)、关键路径(累计成本最大)与根覆盖范围。
+ */
 export const minimumDependencyCut = (
   nodes: readonly DependencyNode[],
   roots: readonly string[],
@@ -123,6 +152,8 @@ export const minimumDependencyCut = (
     neighbors.set(to, reverse);
   };
   for (const node of nodes) {
+    // 节点拆点:in->out 边容量 = 节点代价(最小代价割的“代价”来源),
+    // 依赖边容量设为无穷,保证割只会切断节点边而非依赖边。
     connect(`${node.id}:in`, `${node.id}:out`, Math.max(0.0001, node.cost));
     for (const prerequisite of node.prerequisites) if (byId.has(prerequisite)) connect(`${prerequisite}:out`, `${node.id}:in`, Number.MAX_SAFE_INTEGER);
   }
@@ -131,6 +162,7 @@ export const minimumDependencyCut = (
   const residual = new Map<string, Map<string, number>>();
   for (const [from, row] of capacity) residual.set(from, new Map(row));
   let flow = 0;
+  // Ford-Fulkerson:BFS 找增广路,取瓶颈容量更新残量网络,直至无增广路。
   while (true) {
     const parent = new Map<string, string>();
     const queue = [source];
@@ -194,6 +226,7 @@ export const minimumDependencyCut = (
   const lowLink = new Map<string, number>();
   const componentStack: string[] = [];
   const onStack = new Set<string>();
+  // Tarjan 强连通分量算法,用于识别依赖环。
   const cycles: string[][] = [];
   let discoveryIndex = 0;
   const visit = (identity: string): void => {
@@ -236,6 +269,7 @@ export const minimumDependencyCut = (
   const cumulativeCost = new Map<string, number>();
   const predecessor = new Map<string, string>();
   const traversalLayers = new Map<number, string[]>();
+  // 关键路径:对无环子图做带权 DAG 最长路,累计成本最大的路径即关键路径。
   while (ready.length > 0) {
     const current = ready.shift()!;
     const node = byId.get(current)!;

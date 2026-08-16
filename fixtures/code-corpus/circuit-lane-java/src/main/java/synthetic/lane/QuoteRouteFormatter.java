@@ -12,6 +12,10 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+/**
+ * 报价路由文本格式化器:把「币种对 + 区域 + 跳点列表 + 修订号」编码成 URL 形式的规范路由,
+ * 并支持解析回跳点列表。解析时要求输入与规范格式完全一致(反序列化即校验)。
+ */
 public final class QuoteRouteFormatter {
     private final String prefix;
     private final int maximumHops;
@@ -30,6 +34,10 @@ public final class QuoteRouteFormatter {
         this.maximumHops = maximumHops;
     }
 
+    /**
+     * 生成规范路由:路径段为前缀 + 币种对,查询段带 region/revision/hops。
+     * 跳点逐个 URL 编码后以逗号连接,跳点不允许重复。
+     */
     public String format(
             MarketModels.CurrencyPair pair,
             String region,
@@ -77,6 +85,10 @@ public final class QuoteRouteFormatter {
         return route;
     }
 
+    /**
+     * 解析路由文本,还原跳点列表。解析结果必须与 format 生成的规范串完全一致,
+     * 任何顺序/编码偏差都会被视为非法输入,防止缓存/分发中出现同义不同串的混乱。
+     */
     public List<String> parse(String route) {
         Objects.requireNonNull(route, "quote route");
         if (route.length() > 16_384) {
@@ -139,6 +151,7 @@ public final class QuoteRouteFormatter {
         if (hops.size() > maximumHops) {
             throw new IllegalArgumentException("quote route exceeds hop capacity");
         }
+        // 用规范格式重新生成并与输入比对,保证解析结果的唯一规范化表示
         String canonical = format(pair, region, hops, revision);
         if (!canonical.equals(route)) {
             throw new IllegalArgumentException("quote route is not canonical");

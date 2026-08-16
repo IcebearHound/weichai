@@ -1,3 +1,8 @@
+/**
+ * OperationsWorkbench 与 ForensicReplay 的集成测试:验证运维计划(结算波次、
+ * 重试预算、审计分区、提供方探测、资金缺口)与事故回放(时间线、相关性、
+ * 依赖割、数据包与存储迁移)的端到端行为。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -25,6 +30,7 @@ import {
 
 const workbench = (): OperationsWorkbench => new OperationsWorkbench(3, 512, 18, 2, 500);
 
+// 标准运维规划输入:5 个货币对、10 条结算、10 条交易、带失败的提供方事件。
 const planningInput = (now = 5_000): OperationsPlanningInput => ({
   pairs: [
     pair(USD, EUR),
@@ -81,6 +87,7 @@ const planningInput = (now = 5_000): OperationsPlanningInput => ({
 
 test("operations workbench produces bounded settlement waves", () => {
   const plan = workbench().buildPlan(planningInput());
+  // 波次内结算数受并行度(3)约束,且计划内身份不重复。
   assert.ok(plan.acceptedSettlementWaves.length > 0);
   assert.ok(plan.acceptedSettlementWaves.every((wave) => wave.length <= 3));
   const planned = plan.acceptedSettlementWaves.flat();
@@ -106,6 +113,7 @@ test("operations workbench partitions every audit identity", () => {
 
 test("operations workbench exposes an open-provider recovery probe", () => {
   const plan = workbench().buildPlan(planningInput());
+  // east-feed 两次失败后熔断,探测最早时刻应落在冷却期之后。
   const east = plan.providerProbes.find((probe) => probe.provider === "east-feed")!;
   assert.equal(east.reason, "recovery");
   assert.ok(east.earliestAt >= 1_520);
@@ -122,6 +130,7 @@ test("operations workbench funding reports currency shortfall", () => {
 
 test("operations workbench rejects settlements on a blocked date", () => {
   const input = planningInput();
+  // 起息日被阻断的结算在规划前即被拒绝并列入延期。
   const blocked = {
     ...input,
     blockedDates: new Set(["2026-07-13"]),
@@ -181,6 +190,7 @@ const incidentInput = (): IncidentReplayInput => ({
 
 test("forensic replay builds a chronological combined timeline", () => {
   const report = new ForensicReplay().replay(incidentInput());
+  // 多证据源的时间线合并后必须保持时刻单调递增。
   assert.ok(report.timeline.length > observationSeries.length + tradeStream.length);
   for (let index = 1; index < report.timeline.length; index += 1) {
     assert.ok(report.timeline[index - 1].at <= report.timeline[index].at);
@@ -191,6 +201,7 @@ test("forensic replay builds a chronological combined timeline", () => {
 
 test("forensic replay retains account-level correlations", () => {
   const report = new ForensicReplay().replay(incidentInput());
+  // acct-a 的信号/观测/缺口/变化传感器与阻断计数与固件数据吻合。
   const accountA = report.correlations.find((entry) => entry.account === "acct-a")!;
   assert.equal(accountA.signalCount, 3);
   assert.equal(accountA.observationCount, 4);
@@ -217,6 +228,7 @@ test("forensic replay verifies packets and plans storage movement", () => {
 
 test("forensic replay explains missing packet data", () => {
   const input = incidentInput();
+  // 移除两帧后回放应报告数据包不完整与缺失序号。
   const report = new ForensicReplay().replay({
     ...input,
     frames: input.frames.filter((entry) => entry.ordinal !== 1 && entry.ordinal !== 2),

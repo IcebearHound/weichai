@@ -13,10 +13,15 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * 结算与审计域的行为测试:节假日日历与营业日推算、结算通道规划,
+ * 以及审计分段存储的封存/验签/并发语义。
+ */
 final class SettlementAndAuditTest {
     private SettlementAndAuditTest() {
     }
 
+    /** 汇总入口:顺序执行全部用例。 */
     static void run() {
         holidayIndexDistinguishesWeekendClosureAndExceptionalOpen();
         holidayIndexFindsBusinessDatesAcrossClosures();
@@ -32,6 +37,7 @@ final class SettlementAndAuditTest {
         auditEntryDefensivelyCopiesFields();
     }
 
+    /** 营业日判定应区分周末、节假日闭市与异常开市,优先级正确。 */
     private static void holidayIndexDistinguishesWeekendClosureAndExceptionalOpen() {
         HolidayIndex index = TestSupport.holidays();
         TestSupport.truth(
@@ -56,6 +62,7 @@ final class SettlementAndAuditTest {
         );
     }
 
+    /** 按营业日推进应跳过周末与节假日;偏移为 0 时取最近营业日。 */
     private static void holidayIndexFindsBusinessDatesAcrossClosures() {
         HolidayIndex index = TestSupport.holidays();
         LocalDate friday = LocalDate.parse("2026-01-16");
@@ -86,6 +93,7 @@ final class SettlementAndAuditTest {
         );
     }
 
+    /** 同一天既闭市又异常开市、周末集合为空、币种码非法等应被拒绝。 */
     private static void holidayIndexRejectsConflictingAndUnknownCalendars() {
         TestSupport.failure(
                 IllegalArgumentException.class,
@@ -161,6 +169,7 @@ final class SettlementAndAuditTest {
         );
     }
 
+    /** 结算规划应叠加截止时间、周末与节假日的顺延效果。 */
     private static void settlementPlannerAppliesCutoffWeekendAndHoliday() {
         SettlementCalendar planner = planner();
         MarketModels.SettlementInstruction instruction = new MarketModels.SettlementInstruction(
@@ -184,6 +193,7 @@ final class SettlementAndAuditTest {
         TestSupport.equal(List.of("reserve-euro"), result.alternatives(), "eligible reserve should be listed");
     }
 
+    /** 规划应按优先级选通道,并把其余候选列为备选。 */
     private static void settlementPlannerRanksPriorityAndListsAlternatives() {
         SettlementCalendar planner = planner();
         MarketModels.SettlementInstruction instruction = new MarketModels.SettlementInstruction(
@@ -210,6 +220,7 @@ final class SettlementAndAuditTest {
         );
     }
 
+    /** 无可用通道(国家/金额不匹配)或请求日期早于提交日期应被拒绝。 */
     private static void settlementPlannerRejectsUnsupportedInstruction() {
         SettlementCalendar planner = planner();
         MarketModels.SettlementInstruction unsupportedCountry = new MarketModels.SettlementInstruction(
@@ -253,6 +264,7 @@ final class SettlementAndAuditTest {
         );
     }
 
+    /** 指令 ID、国家码、通道名、备选列表等身份字段应严格校验。 */
     private static void settlementRecordsDefendIdentityAndDestination() {
         TestSupport.failure(
                 IllegalArgumentException.class,
@@ -305,6 +317,7 @@ final class SettlementAndAuditTest {
         );
     }
 
+    /** 同一分段内条目按时间排序,封存幂等且可验证。 */
     private static void auditStoreSortsEntriesAndSealsDeterministically() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         AuditSegmentStore store = new AuditSegmentStore(Duration.ofHours(1), 20);
@@ -321,6 +334,7 @@ final class SettlementAndAuditTest {
         TestSupport.truth(store.verify(segment, firstSeal), "freshly sealed segment should verify");
     }
 
+    /** 重复条目、容量已满与已封存分段的追加应被拒绝。 */
     private static void auditStoreRejectsDuplicateAndSealedAppend() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         AuditSegmentStore store = new AuditSegmentStore(Duration.ofHours(1), 2);
@@ -352,6 +366,7 @@ final class SettlementAndAuditTest {
         );
     }
 
+    /** 篡改后的密封值、错误分段或非法格式都应验签失败。 */
     private static void auditStoreVerifyDetectsWrongOrMalformedSeal() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         AuditSegmentStore store = new AuditSegmentStore(Duration.ofMinutes(30), 10);
@@ -375,6 +390,7 @@ final class SettlementAndAuditTest {
         );
     }
 
+    /** 多写者并发追加唯一条目后,分段仍能正确封存并验签。 */
     private static void auditStoreAcceptsConcurrentUniqueEntries() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         AuditSegmentStore store = new AuditSegmentStore(Duration.ofHours(1), 1_000);
@@ -428,6 +444,7 @@ final class SettlementAndAuditTest {
         TestSupport.truth(store.verify(segment.get(), seal), "concurrently filled segment should verify");
     }
 
+    /** 审计条目应防御性拷贝字段,且字段不可变。 */
     private static void auditEntryDefensivelyCopiesFields() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         Map<String, String> mutable = new java.util.LinkedHashMap<>();

@@ -1,3 +1,11 @@
+"""追加式审计日志:带哈希链的只追加记录。
+
+每条记录是 JSON 行,含序号、时间、类别、主题、负载与哈希链
+(previous_digest → digest,SHA-256)。写入采用"临时文件 + 拷贝旧内容 +
+fsync + 原子替换",崩溃不会损坏既有内容;recover 逐行校验
+序号连续、前序摘要一致、摘要与重算值一致。
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -13,6 +21,11 @@ from .model import JournalRecord
 
 
 class AppendJournal:
+    """哈希链追加日志。
+
+    append 追加一条记录并原子落盘;recover 从磁盘恢复并校验完整性。
+    """
+
     def __init__(self, path: Path) -> None:
         self._path = path
         self._records: list[JournalRecord] = []
@@ -29,6 +42,11 @@ class AppendJournal:
         payload: Mapping[str, Any],
         occurred_at: datetime | None = None,
     ) -> JournalRecord:
+        """追加一条审计记录并返回 JournalRecord。
+
+        payload 先经 JSON 规范化(排序键、统一序列化),保证摘要与磁盘字节、
+        内存对象一致;摘要覆盖"除自身 digest 外的全部字段",形成链式校验。
+        """
         if not category.strip():
             raise ValueError("journal category is required")
         if not subject.strip():
@@ -37,6 +55,7 @@ class AppendJournal:
         if at.tzinfo is None:
             at = at.replace(tzinfo=UTC)
         sequence = len(self._records)
+        # 序列化再反序列化:统一字段表示,保证摘要计算与落盘字节一致
         normalized_payload = json.loads(json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, default=str))
         body = {
             "sequence": sequence,
@@ -65,6 +84,7 @@ class AppendJournal:
         temporary = self._path.with_suffix(self._path.suffix + ".tmp")
         with temporary.open("wb") as output:
             if self._path.exists():
+                # 先拷贝既有内容,保持"每行一条"的追加语义
                 with self._path.open("rb") as existing:
                     while True:
                         block = existing.read(128 * 1024)
@@ -74,6 +94,7 @@ class AppendJournal:
             output.write(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
             output.write(b"\n")
             output.flush()
+            # fsync 确保应答前数据已落盘,满足审计语义
             os.fsync(output.fileno())
         os.replace(temporary, self._path)
         self._records.append(record)
@@ -81,6 +102,11 @@ class AppendJournal:
         return record
 
     def recover(self, strict: bool = True) -> tuple[JournalRecord, ...]:
+        """从磁盘逐行恢复日志并校验哈希链。
+
+        逐条校验:序号连续、previous_digest 与上一条摘要一致、digest 与重算值
+        一致;strict=False 时遇损坏行即停止并返回已恢复部分。
+        """
         if not self._path.exists():
             return ()
         recovered: list[JournalRecord] = []

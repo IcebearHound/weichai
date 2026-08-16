@@ -3,17 +3,30 @@ use std::time::{Duration, SystemTime};
 
 use crate::domain::{RetentionDecision, SegmentDescriptor, SegmentState};
 
+/// 保留策略:决定哪些段可删除、哪些必须保留(或暂缓删除)。
+///
+/// 判定优先级:隔离 → 法律保留 → 活跃读者 → 副本未确认 → Active 段 →
+/// 最新 N 段保护 → 最近序列跨度保护 → 超出检查点保护 → 最小封存时长 →
+/// 最大年龄删除 / 被取代段删除。磁盘压力超过阈值时会额外挑选可删段。
 pub struct RetentionPolicy {
+    /// 无论如何都至少保留的段数(取最新者)。
     pub minimum_segments: usize,
+    /// 总字节预算;超出时触发压力删除。
     pub maximum_total_bytes: u64,
+    /// 最小封存时长(过早的段不删)。
     pub minimum_age: Duration,
+    /// 最大段年龄(超过即删除)。
     pub maximum_age: Duration,
+    /// 必须完成副本确认的副本集合。
     pub required_replicas: BTreeSet<String>,
+    /// 距离最新序列的保护跨度(最新序列 - 该值以下可删)。
     pub preserve_sequence_span: u64,
+    /// 单轮压力删除的最大段数。
     pub pressure_delete_batch: usize,
 }
 
 impl RetentionPolicy {
+    /// 为每个段返回 (段 id, 决策, 原因)。
     pub fn choose(
         &self,
         segments: &[SegmentDescriptor],
@@ -60,6 +73,7 @@ impl RetentionPolicy {
             .max()
             .unwrap_or(0);
         let protected_sequence_floor = highest_sequence.saturating_sub(self.preserve_sequence_span);
+        // 最新 N 段(按末序列倒序)受到保护。
         let mut newest = segments.iter().collect::<Vec<_>>();
         newest.sort_by_key(|descriptor| {
             std::cmp::Reverse((
@@ -73,6 +87,7 @@ impl RetentionPolicy {
             .take(self.minimum_segments.min(newest.len()))
             .map(|descriptor| descriptor.segment_id)
             .collect::<BTreeSet<_>>();
+        // 第一遍:按优先级逐段打分。
         let mut provisional = BTreeMap::new();
         for descriptor in segments {
             let created_age = now
@@ -136,6 +151,7 @@ impl RetentionPolicy {
                     ),
                 )
             } else if descriptor.last_sequence > durable_checkpoint {
+                // 超出检查点的数据可能在恢复时仍需要,不能删。
                 (
                     RetentionDecision::Preserve,
                     format!(
@@ -175,7 +191,9 @@ impl RetentionPolicy {
             };
             provisional.insert(descriptor.segment_id, decision);
         }
+        // 第二遍:磁盘压力(超预算或 ≥850‰)时,把“可删候选”提升为删除。
         if over_budget > 0 || disk_pressure_per_mille >= 850 {
+            // 候选条件:目前 Preserve、非最新 N、非 Active、无保留约束、已过检查点、副本齐全。
             let mut pressure_candidates = segments
                 .iter()
                 .filter(|descriptor| {
@@ -190,6 +208,7 @@ impl RetentionPolicy {
                         && self.required_replicas.is_subset(&descriptor.replica_acks)
                 })
                 .collect::<Vec<_>>();
+            // 从最旧到最新、从小到大地删除,优先清小段。
             pressure_candidates.sort_by_key(|descriptor| {
                 (
                     descriptor.last_sequence,
@@ -198,6 +217,7 @@ impl RetentionPolicy {
                     descriptor.segment_id,
                 )
             });
+            // 已确定的删除量 + 压力等级决定需要回收多少。
             let mut reclaimed = provisional
                 .iter()
                 .filter(|(_, entry)| entry.0 == RetentionDecision::Delete)
@@ -234,6 +254,7 @@ impl RetentionPolicy {
                 promoted = promoted.saturating_add(1);
             }
         }
+        // 第三遍:保证至少保留 minimum_segments 个段(从删除候选中按最新优先恢复)。
         let mut delete_ids = provisional
             .iter()
             .filter(|(_, entry)| entry.0 == RetentionDecision::Delete)
@@ -260,6 +281,7 @@ impl RetentionPolicy {
                 );
             }
         }
+        // 输出:保持输入顺序,未命中的段兜底 Preserve。
         let mut output = segments
             .iter()
             .map(|descriptor| {

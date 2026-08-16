@@ -6,6 +6,7 @@ use std::io::Write;
 use buffered_journal_rs::{Durability, SegmentFile};
 use support::{codec, record, TempWorkspace};
 
+/// 编解码往返保持字段与顺序一致,批次以 BJR2 魔数开头。
 #[test]
 fn codec_round_trip_preserves_domain_fields_and_order() {
     let codec = codec();
@@ -26,6 +27,7 @@ fn codec_round_trip_preserves_domain_fields_and_order() {
     );
 }
 
+/// 批内重复 identity 在写入任何字节前就被拒绝。
 #[test]
 fn codec_rejects_duplicate_identity_before_writing_bytes() {
     let codec = codec();
@@ -39,12 +41,14 @@ fn codec_rejects_duplicate_identity_before_writing_bytes() {
     assert!(error.contains("duplicate identity"));
 }
 
+/// 帧内数据损坏由校验和识别:损坏帧被丢弃且不当作有效记录返回。
 #[test]
 fn codec_reports_corrupted_frame_without_returning_it_as_valid() {
     let codec = codec();
     let mut encoded = codec
         .encode_batch(&[record("frame-1", "account-a", 10, "audit|protected")])
         .expect("encode frame");
+    // 翻转接近帧尾的一个字节,破坏帧校验和。
     let body_byte = encoded.len() - 16;
     encoded[body_byte] ^= 0x5a;
     let (decoded, diagnostics) = codec.decode_stream(&encoded);
@@ -54,6 +58,7 @@ fn codec_reports_corrupted_frame_without_returning_it_as_valid() {
         .any(|message| message.contains("checksum")));
 }
 
+/// 段追加具备持久性,检查后能重建序列范围与账户范围。
 #[test]
 fn segment_append_is_durable_and_recovery_reconstructs_ranges() {
     let workspace = TempWorkspace::new("segment-roundtrip");
@@ -84,6 +89,7 @@ fn segment_append_is_durable_and_recovery_reconstructs_ranges() {
     assert_eq!(descriptor.account_ranges["account-a"], (1, 3));
 }
 
+/// 恢复只截断不完整的尾部,完整批次原样保留。
 #[test]
 fn recovery_truncates_only_the_incomplete_tail() {
     let workspace = TempWorkspace::new("segment-tail");
@@ -94,6 +100,7 @@ fn recovery_truncates_only_the_incomplete_tail() {
         .append(&[record("stable", "account", 7, "audit|stable")])
         .expect("append stable batch");
     let stable_length = std::fs::metadata(&path).expect("metadata").len();
+    // 在文件末尾追加一段残缺字节,模拟崩溃残留。
     let mut file = OpenOptions::new()
         .append(true)
         .open(&path)
@@ -105,6 +112,7 @@ fn recovery_truncates_only_the_incomplete_tail() {
         .inspect_and_repair(true)
         .expect("repair incomplete tail");
     assert_eq!(descriptor.last_sequence, 1);
+    // 修复后文件长度回到损坏前。
     assert_eq!(
         std::fs::metadata(&path)
             .expect("metadata after repair")

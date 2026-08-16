@@ -4,26 +4,37 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+/// 检查点事务操作。
 pub enum CheckpointOperation {
+    /// 读取当前检查点(不存在则返回 Missing)。
     Load,
+    /// 校验当前检查点内容与一致性。
     Verify,
+    /// 提交新检查点:可选 epoch 比较交换(乐观锁),写入新的持久化序列与账户位置。
     Commit {
+        /// 期望的当前 epoch;不一致则拒绝提交(防止并发覆盖)。
         expected_epoch: Option<u64>,
         durable_sequence: u64,
+        /// 需要更新/新增的账户 -> 位置映射。
         account_positions: BTreeMap<String, u64>,
+        /// 需要从检查点移除的账户。
         remove_accounts: BTreeSet<String>,
     },
 }
 
+/// 检查点事务的结果。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CheckpointOutcome {
+    /// 检查点文件不存在。
     Missing,
+    /// Load 成功:返回文件中的内容与解析警告。
     Loaded {
         epoch: u64,
         durable_sequence: u64,
         account_positions: BTreeMap<String, u64>,
         warnings: Vec<String>,
     },
+    /// Commit 成功:返回新旧 epoch 与写入摘要。
     Committed {
         previous_epoch: u64,
         epoch: u64,
@@ -31,6 +42,7 @@ pub enum CheckpointOutcome {
         account_count: usize,
         checksum: u64,
     },
+    /// Verify 成功:返回一致性校验结果。
     Verified {
         epoch: u64,
         valid_accounts: usize,
@@ -39,15 +51,24 @@ pub enum CheckpointOutcome {
     },
 }
 
+/// 文件系统检查点账本。
+///
+/// 通过“临时文件写入 → fsync → 原子改名激活 → 备份旧文件”三步提交,
+/// 保证任何时刻磁盘上都存在一个完整可读的检查点;
+/// 同一命名空间内的所有操作由 `transaction` 互斥锁串行化。
+/// 文件格式为文本行(便于人工审计),带整体校验和,账户名使用反斜杠转义。
 pub struct CheckpointLedger {
     pub directory: PathBuf,
     pub namespace: String,
     pub maximum_accounts: usize,
+    /// 提交后是否同步目录(保证改名操作持久化,Windows 上跳过)。
     pub synchronize_directory: bool,
     transaction: Mutex<()>,
 }
 
 impl CheckpointLedger {
+    /// 创建账本:校验命名空间字符集(仅字母数字、连字符、下划线,防止路径注入)
+    /// 与账户数量上限。
     pub fn new(
         directory: PathBuf,
         namespace: impl Into<String>,
@@ -78,6 +99,10 @@ impl CheckpointLedger {
         })
     }
 
+    /// 执行一个检查点事务(Load / Verify / Commit)。
+    ///
+    /// 无论哪种操作,都会先尝试读取现有检查点并解析、校验其内容;
+    /// 解析产生的警告会被保留并在结果中返回。
     pub fn transact(&self, operation: CheckpointOperation) -> Result<CheckpointOutcome, String> {
         let _transaction = self
             .transaction
@@ -105,6 +130,7 @@ impl CheckpointLedger {
                 self.directory.display()
             )
         })?;
+        // 三个文件:active(当前)、previous(上一般备份)、writing(提交中的临时文件)。
         let active_path = self
             .directory
             .join(format!("{}.checkpoint", self.namespace));
@@ -125,6 +151,7 @@ impl CheckpointLedger {
             let mut content = String::new();
             file.read_to_string(&mut content)
                 .map_err(|error| format!("read checkpoint {}: {error}", active_path.display()))?;
+            // 64 MiB 上限防止恶意/损坏文件耗尽内存。
             if content.len() > 64 * 1024 * 1024 {
                 return Err(format!(
                     "checkpoint {} exceeds 64 MiB",
@@ -139,6 +166,7 @@ impl CheckpointLedger {
                     active_path.display()
                 ));
             }
+            // 解析各头部行:命名空间、epoch、持久化序列、账户数、校验和。
             let namespace_line = lines.next().unwrap_or_default();
             let stored_namespace = namespace_line
                 .strip_prefix("namespace=")
@@ -183,6 +211,8 @@ impl CheckpointLedger {
             if separator != "accounts:" {
                 return Err("checkpoint account section is missing".to_owned());
             }
+            // 逐行解析账户:反斜杠转义 → 账户名;每行格式 `账户名\t位置`。
+            // 校验和只覆盖“内容部分”(不含魔法行与 checksum 行本身)。
             let mut checksummed = String::new();
             checksummed.push_str(&format!("namespace={}\n", self.namespace));
             checksummed.push_str(&format!("epoch={current_epoch}\n"));
@@ -195,6 +225,7 @@ impl CheckpointLedger {
                 let (escaped_account, position_text) = line.split_once('\t').ok_or_else(|| {
                     format!("checkpoint account line {} lacks a tab", line_number + 8)
                 })?;
+                // 反斜杠转义解码(\\、\t、\n、\r)。
                 let mut account = String::new();
                 let mut escaped = false;
                 for ch in escaped_account.chars() {
@@ -238,6 +269,7 @@ impl CheckpointLedger {
                         line_number + 8
                     )
                 })?;
+                // 账户位置不应超过全局持久化序列(只警告,不致命)。
                 if position > current_durable_sequence {
                     warnings.push(format!(
                         "account {account} position {position} exceeds durable sequence {current_durable_sequence}"
@@ -255,6 +287,7 @@ impl CheckpointLedger {
                     current_accounts.len()
                 ));
             }
+            // 校验和:与写入端一致的旋转哈希。
             let mut actual_checksum = 0x6a09e667f3bcc909u64;
             for byte in checksummed.as_bytes() {
                 actual_checksum ^= *byte as u64;
@@ -269,6 +302,7 @@ impl CheckpointLedger {
                 ));
             }
         } else if previous_path.exists() {
+            // active 缺失但 previous 还在:说明上次提交中断,提醒接管备份。
             warnings.push(format!(
                 "active checkpoint is missing while backup {} remains",
                 previous_path.display()
@@ -291,6 +325,7 @@ impl CheckpointLedger {
                 if !active_path.exists() {
                     Ok(CheckpointOutcome::Missing)
                 } else {
+                    // 附加一致性检查:位置应可排序,epoch 0 不应携带数据。
                     let mut positions = current_accounts.values().copied().collect::<Vec<_>>();
                     positions.sort_unstable();
                     for pair in positions.windows(2) {
@@ -315,6 +350,7 @@ impl CheckpointLedger {
                 account_positions,
                 remove_accounts,
             } => {
+                // 乐观锁:epoch 不符说明有并发提交,拒绝本次。
                 if let Some(expected) = expected_epoch {
                     if expected != current_epoch {
                         return Err(format!(
@@ -322,6 +358,7 @@ impl CheckpointLedger {
                         ));
                     }
                 }
+                // 持久化序列只允许前进。
                 if durable_sequence < current_durable_sequence {
                     return Err(format!(
                         "checkpoint durable sequence would regress from {current_durable_sequence} to {durable_sequence}"
@@ -346,6 +383,7 @@ impl CheckpointLedger {
                             "account {account} position {position} exceeds new durable sequence {durable_sequence}"
                         ));
                     }
+                    // 账户位置不允许回退。
                     if let Some(existing) = merged.get(&account) {
                         if position < *existing {
                             return Err(format!(
@@ -365,6 +403,7 @@ impl CheckpointLedger {
                 let next_epoch = current_epoch
                     .checked_add(1)
                     .ok_or_else(|| "checkpoint epoch exhausted".to_owned())?;
+                // 编码账户行:反斜杠、制表符、换行、回车转义;控制字符禁止。
                 let mut account_lines = String::new();
                 for (account, position) in &merged {
                     let mut escaped = String::with_capacity(account.len());
@@ -387,6 +426,7 @@ impl CheckpointLedger {
                     account_lines.push_str(&position.to_string());
                     account_lines.push('\n');
                 }
+                // 计算校验和(与解析端一致的输入范围)。
                 let mut checksummed = String::new();
                 checksummed.push_str(&format!("namespace={}\n", self.namespace));
                 checksummed.push_str(&format!("epoch={next_epoch}\n"));
@@ -408,6 +448,7 @@ impl CheckpointLedger {
                 encoded.push_str(&format!("checksum={checksum:016x}\n"));
                 encoded.push_str("accounts:\n");
                 encoded.push_str(&account_lines);
+                // 原子提交流程:清理旧临时 → 写临时并 fsync → 旧 active 改名备份 → 激活临时。
                 if temporary_path.exists() {
                     std::fs::remove_file(&temporary_path).map_err(|error| {
                         format!(
@@ -449,6 +490,7 @@ impl CheckpointLedger {
                         format!("backup checkpoint {}: {error}", active_path.display())
                     })?;
                 }
+                // 激活失败时回滚备份,保证 active 总是可读的。
                 if let Err(error) = std::fs::rename(&temporary_path, &active_path) {
                     if previous_path.exists() {
                         let _ = std::fs::rename(&previous_path, &active_path);
@@ -460,6 +502,7 @@ impl CheckpointLedger {
                 }
                 #[cfg(not(windows))]
                 if self.synchronize_directory {
+                    // 同步目录条目,确保改名在掉电后依然可见。
                     let directory = File::open(&self.directory).map_err(|error| {
                         format!(
                             "open checkpoint directory {}: {error}",

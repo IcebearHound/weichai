@@ -1,3 +1,7 @@
+/**
+ * PartitionedSignalRunner、reconstructLaneHistory、WindowLedger 与
+ * compareObservationRegimes 的单元测试。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -24,6 +28,7 @@ test("one account is handled and acknowledged in sequence", async () => {
 
 test("different accounts can execute concurrently", async () => {
   const runner = new PartitionedSignalRunner();
+  // 不同账户的通道互不阻塞,可同时进入 handler。
   const entered: string[] = [];
   let release: (() => void) | undefined;
   const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -75,6 +80,7 @@ test("acknowledged duplicate is skipped", async () => {
 
 test("lane rejects sequence rewind after a completed predecessor", async () => {
   const runner = new PartitionedSignalRunner();
+  // 前序消息完成后,低于其序号的消息被拒绝(序号回退)。
   let release: (() => void) | undefined;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const first = runner.accept(trade("lane", 5), async () => { await gate; }, async () => undefined);
@@ -104,6 +110,7 @@ test("lane history groups and sorts account signals", () => {
 });
 
 test("lane history honors checkpoints when building replay", () => {
+  // 检查点(序号 2)之前的信号不再重放,缺失序号从检查点后计数。
   const history = reconstructLaneHistory([
     trade("a", 1, 101),
     trade("a", 2, 102),
@@ -135,6 +142,7 @@ test("lane history reports event-time regressions", () => {
 
 test("window ledger computes a weighted aggregate", () => {
   const ledger = new WindowLedger();
+  // 加权均值 = (10×1 + 20×3) / (1+3) = 17.5。
   const bucket = ledger.ingest(observation("depth", "a", 1, 1_001, 10, "ready", 1), 1_000);
   ledger.ingest(observation("depth", "a", 2, 1_002, 20, "ready", 3), 1_000);
   const aggregate = ledger.closeWindow(bucket)!;
@@ -171,6 +179,7 @@ test("window ledger rejects non-finite measurements", () => {
 
 test("drift uses all open buckets in chronological order", () => {
   const ledger = new WindowLedger();
+  // 输入桶乱序/重复,漂移分析仍按桶号升序输出。
   const buckets = [
     ledger.ingest(observation("depth", "a", 1, 100, 10), 100),
     ledger.ingest(observation("depth", "a", 2, 200, 20), 100),
@@ -184,6 +193,7 @@ test("drift uses all open buckets in chronological order", () => {
 });
 
 test("regime comparison detects strong sensor shifts", () => {
+  // 边界 1000 之后延迟与队列深度显著上升,应被识别为变化传感器。
   const comparison = compareObservationRegimes(observationSeries, 1_000);
   assert.ok(comparison.meanShift > 0);
   assert.ok(comparison.changedSensors.includes("latency"));

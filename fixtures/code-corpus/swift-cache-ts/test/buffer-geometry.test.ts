@@ -1,3 +1,7 @@
+/**
+ * BufferGeometry 的单元测试:多边形面积(朝向无关、闭合环、退化)、凸包
+ * (去重/内部点/共线)、边界盒、自相交分类与坐标边界校验。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { BufferGeometry, type Point2D } from "../src/buffer-geometry.js";
@@ -5,6 +9,7 @@ import { BufferGeometry, type Point2D } from "../src/buffer-geometry.js";
 const geometry = new BufferGeometry();
 
 test("shoelace area is independent of polygon orientation", () => {
+  // 鞋带公式取绝对值:顺/逆时针遍历面积相同。
   const clockwise: Point2D[] = [
     { x: 0, y: 0 },
     { x: 0, y: 4 },
@@ -16,6 +21,7 @@ test("shoelace area is independent of polygon orientation", () => {
 });
 
 test("an explicitly closed ring does not add a phantom edge", () => {
+  // 首尾重复点应被剔除,不产生额外的零面积边。
   const ring = [
     { x: 1, y: 1 },
     { x: 5, y: 1 },
@@ -91,6 +97,7 @@ test("bounding box reports dimensions and extrema", () => {
 });
 
 test("self-intersection scan distinguishes proper crossings", () => {
+  // 蝴蝶结多边形:两条非相邻边贯穿交叉,应判定为 cross。
   const bowTie = [
     { x: 0, y: 0 },
     { x: 3, y: 3 },
@@ -135,6 +142,7 @@ test("geometry rejects non-finite and out-of-range coordinates", () => {
 });
 
 test("area and hull agree for generated axis-aligned rectangles", () => {
+  // 属性测试:任意尺寸矩形(含中心点)的凸包面积恒等于矩形面积。
   for (let width = 1; width <= 8; width += 1) {
     for (let height = 1; height <= 6; height += 1) {
       const points = [

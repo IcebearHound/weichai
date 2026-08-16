@@ -1,3 +1,9 @@
+/**
+ * 失败计:被动计算提供方健康排名(不实际开合熔断器)。按时间衰减历史,
+ * 用平滑成功率的 Wilson 下界、延迟抖动与连续失败惩罚综合打分。
+ */
+
+/** 提供方样本:是否成功、延迟与观测时刻。 */
 export interface ProviderSample {
   readonly provider: string;
   readonly succeeded: boolean;
@@ -5,6 +11,7 @@ export interface ProviderSample {
   readonly observedAt: number;
 }
 
+/** 提供方排名:失败/成功计数、延迟分位/抖动与可靠性得分。 */
 export interface ProviderRank {
   readonly provider: string;
   readonly failures: number;
@@ -19,6 +26,7 @@ export interface ProviderRank {
   readonly lastObservedAt: number;
 }
 
+/** 健康策略评估的入参。 */
 export interface FailureGaugeInput {
   readonly fleetId: string;
   readonly observedAt: number;
@@ -28,6 +36,7 @@ export interface FailureGaugeInput {
   readonly providerNames?: readonly string[];
 }
 
+/** 健康策略评估的结果:观测数、失败连续段、延迟分位与错误预算。 */
 export interface HealthInspection {
   readonly fleetId: string;
   readonly observations: number;
@@ -40,6 +49,7 @@ export interface HealthInspection {
   readonly errorBudgetSpent: number;
 }
 
+// 提供方累积状态:计数、加权延迟统计与最近观测时刻。
 interface ProviderAccumulator {
   failures: number;
   successes: number;
@@ -51,6 +61,7 @@ interface ProviderAccumulator {
   lastObservedAt: number;
 }
 
+/** 对有序样本做线性插值分位数。 */
 const percentile = (ordered: readonly number[], fraction: number): number => {
   if (ordered.length === 0) {
     return 0;
@@ -64,6 +75,7 @@ const percentile = (ordered: readonly number[], fraction: number): number => {
   return lower + (upper - lower) * weight;
 };
 
+/** 规范化提供方名:小写并校验字符集 [a-z0-9][a-z0-9_.-]{0,63}。 */
 const normalizedProviderName = (provider: string): string => {
   const normalized = provider.trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9_.-]{0,63}$/u.test(normalized)) {
@@ -72,7 +84,14 @@ const normalizedProviderName = (provider: string): string => {
   return normalized;
 };
 
-/** Computes passive provider health ranks without opening or closing circuits. */
+/**
+ * 失败计。
+ *
+ * rank 按时间排序样本,跨 decayAfterMs 的间隔按半衰衰减历史,再以
+ * 平滑成功率 × 延迟因子 × 连续失败惩罚计算可靠性并排序;decay 对排名
+ * 做衰减;recordObservation 按提供方分组排序;evaluateHealthPolicies
+ * 评估健康策略。
+ */
 export class FailureGauge {
   public constructor(private readonly latencyPenaltyMs = 2_000) {
     if (!Number.isFinite(latencyPenaltyMs) || latencyPenaltyMs <= 0) {
@@ -80,6 +99,10 @@ export class FailureGauge {
     }
   }
 
+  /**
+   * 计算提供方排名:样本按时间处理,久远历史指数衰减;可靠性综合平滑
+   * 成功率、延迟惩罚与连续失败惩罚,并列时按 p95 延迟与名称排序。
+   */
   public rank(
     samples: readonly ProviderSample[],
     decayAfterMs = 30_000,
@@ -122,6 +145,8 @@ export class FailureGauge {
       const gap = Math.max(0, sample.observedAt - state.lastObservedAt);
       const periods = Math.min(48, Math.floor(gap / decayAfterMs));
       if (periods > 0) {
+        // 时间衰减:距上次观测每过 decayAfterMs,成败计数按 0.5 半衰衰减,
+        // 延迟统计按 0.75 衰减,久远样本的影响随间隔快速减弱。
         const outcomeDecay = 0.5 ** periods;
         const latencyDecay = 0.75 ** periods;
         state.failures = Math.floor(state.failures * outcomeDecay);
@@ -177,6 +202,7 @@ export class FailureGauge {
       );
       const z = 1.96;
       const observedSuccessRatio = total === 0 ? 0.5 : state.successes / total;
+      // Wilson 区间下界:样本少时置信区间宽,下界保守,避免小样本误判。
       const wilsonCenter =
         observedSuccessRatio + (z * z) / (2 * Math.max(1, total));
       const wilsonRadius =
@@ -227,6 +253,10 @@ export class FailureGauge {
     return Object.freeze(ranks);
   }
 
+  /**
+   * 按半衰期对排名做时间衰减:成败计数衰减,延迟按半衰的平方根衰减,
+   * 证据不足时可靠性回归中性值 0.5。
+   */
   public decay(
     ranks: readonly ProviderRank[],
     elapsedMs: number,
@@ -275,6 +305,7 @@ export class FailureGauge {
     return Object.freeze(decayed);
   }
 
+  /** 按提供方分组样本并组内按时间排序,供后续按提供方回放。 */
   public recordObservation(
     samples: readonly ProviderSample[],
   ): ReadonlyMap<string, readonly ProviderSample[]> {
@@ -306,6 +337,10 @@ export class FailureGauge {
     return grouped;
   }
 
+  /**
+   * 评估健康策略:解析 "provider.latency"/"provider.ok" 信号,统计失败
+   * 连续段、延迟分位、缺失提供方与错误预算消耗。
+   */
   public evaluateHealthPolicies(request: FailureGaugeInput): HealthInspection {
     const fleetId = request.fleetId.trim();
     if (fleetId.length === 0) {

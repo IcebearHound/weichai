@@ -1,3 +1,7 @@
+/**
+ * CoalescingWindow 的单元测试:TTL 新鲜度、并发合并、陈旧降级、超时、
+ * 修剪与诊断排序。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CoalescingWindow } from "../src/coalescing-window.js";
@@ -13,6 +17,7 @@ const deferred = <T>() => {
 };
 
 test("fresh values are served until the five second deadline", async () => {
+  // TTL 边界:4999ms 内命中缓存,恰在 5000ms 处触发重新加载。
   let now = 1_000;
   let calls = 0;
   const cache = new CoalescingWindow<string, number>(5_000, () => now, 100);
@@ -73,6 +78,7 @@ test("different currency pairs may load in parallel", async () => {
 });
 
 test("an expired value is retained when replacement fails", async () => {
+  // 替换加载失败时返回陈旧值,并标记为不新鲜。
   let now = 10;
   const cache = new CoalescingWindow<string, number>(5, () => now, 50);
   assert.equal(await cache.resolve("EUR/USD", async () => 11), 11);
@@ -130,6 +136,7 @@ test("provider timeout rejects if the cache has never succeeded", async () => {
 });
 
 test("prune removes only entries beyond the stale retention window", async () => {
+  // 超过保留窗口的过期条目被修剪,新鲜条目不受影响。
   let now = 0;
   const cache = new CoalescingWindow<string, number>(10, () => now, 100);
   await cache.resolve("A", async () => 1);
@@ -150,6 +157,7 @@ test("prune validates its retention duration", () => {
 });
 
 test("diagnostics order loading, stale, then fresh entries", async () => {
+  // 诊断排序:loading 优先,其次 stale,最后 fresh。
   let now = 0;
   const cache = new CoalescingWindow<string, number>(10, () => now, 100);
   await cache.resolve("stale", async () => 1);

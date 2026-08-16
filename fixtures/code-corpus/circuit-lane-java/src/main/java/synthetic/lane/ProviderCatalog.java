@@ -14,7 +14,14 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+/**
+ * 报价提供方目录:注册各提供方的能力与约束,并按报价请求动态生成调用顺序。
+ *
+ * <p>排序依据为综合「偏好分」:分数越低越优先。偏好分由 优先级、区域匹配、
+ * 近期失败数、观测延迟、延迟是否显著恶化、请求量是否超出容量 加权构成。
+ */
 public final class ProviderCatalog {
+    // 提供方名称 -> 定义(注册顺序保存)
     private final Map<String, ProviderDefinition> definitions = new LinkedHashMap<>();
     private final int maximumProviders;
 
@@ -25,6 +32,9 @@ public final class ProviderCatalog {
         this.maximumProviders = maximumProviders;
     }
 
+    /**
+     * 注册提供方。名称唯一、大小写折叠后不得与同区域同优先级提供方冲突。
+     */
     public synchronized void register(ProviderDefinition definition) {
         Objects.requireNonNull(definition, "provider definition");
         if (definitions.size() >= maximumProviders) {
@@ -43,6 +53,10 @@ public final class ProviderCatalog {
         definitions.put(definition.name(), definition);
     }
 
+    /**
+     * 为一次报价请求排出候选提供方顺序(按偏好分升序)。
+     * 只保留覆盖该币种对的提供方,并用最近失败数/延迟观测动态调整排序。
+     */
     public synchronized List<ProviderDefinition> order(
             MarketModels.QuoteRequest request,
             Map<String, Integer> recentFailures,
@@ -73,6 +87,9 @@ public final class ProviderCatalog {
         }
         List<ProviderDefinition> eligible = new ArrayList<>();
         Map<String, Long> preference = new HashMap<>();
+        // 偏好分设计:基准 优先级*10000;跨区域加 500 万;每次近期失败加 50 万;
+        // 加观测延迟(微秒);延迟超过期望 3 倍再加 200 万;请求量超容量再加 1000 万。
+        // 各惩罚项量级错开,使排序稳定且可控
         for (ProviderDefinition definition : definitions.values()) {
             if (!definition.pairs().contains(request.pair())) {
                 continue;
@@ -109,6 +126,9 @@ public final class ProviderCatalog {
         return List.copyOf(eligible);
     }
 
+    /**
+     * 提供方定义:名称、区域、优先级、可报币种对、容量、期望延迟、最大价差与附加属性。
+     */
     record ProviderDefinition(
             String name,
             String region,

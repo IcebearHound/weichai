@@ -12,6 +12,7 @@ import (
 	"time"
 )
 
+// startJournalBatcher 构造批处理器并在后台运行,返回实例与运行结束通道。
 func startJournalBatcher(t *testing.T, writer JournalWriter, clock Clock, policy JournalPolicy) (*JournalBatcher, <-chan error) {
 	t.Helper()
 	batcher, err := NewJournalBatcher(writer, clock, policy)
@@ -23,6 +24,8 @@ func startJournalBatcher(t *testing.T, writer JournalWriter, clock Clock, policy
 	return batcher, finished
 }
 
+// defaultJournalPolicy 返回批处理器测试默认策略:单批 3 条、定时冲刷 1 小时
+// (测试中主要靠阈值或显式 Drain 触发)。
 func defaultJournalPolicy() JournalPolicy {
 	return JournalPolicy{
 		MaximumBatch:   3,
@@ -32,6 +35,8 @@ func defaultJournalPolicy() JournalPolicy {
 	}
 }
 
+// TestJournalBatcherFlushesAtThresholdInChronologicalOrder 验证达到单批上限即自动
+// 冲刷,写入内容按发生时刻排序,关闭后追加被拒。
 func TestJournalBatcherFlushesAtThresholdInChronologicalOrder(t *testing.T) {
 	clock := newManualClock()
 	writer := &recordingJournal{}
@@ -58,6 +63,8 @@ func TestJournalBatcherFlushesAtThresholdInChronologicalOrder(t *testing.T) {
 	requireErrorIs(t, batcher.Append(context.Background(), sampleJournal(clock, "after-close", 4*time.Second)), ErrBatcherClosed)
 }
 
+// TestJournalBatcherDrainWritesEveryPendingBatch 验证 Drain 把剩余条目全部写出,
+// 分批宽度不超过上限,且整体保持追加顺序。
 func TestJournalBatcherDrainWritesEveryPendingBatch(t *testing.T) {
 	clock := newManualClock()
 	writer := &recordingJournal{}
@@ -95,6 +102,8 @@ func TestJournalBatcherDrainWritesEveryPendingBatch(t *testing.T) {
 	requireNoError(t, <-finished)
 }
 
+// TestJournalBatcherRetainsEntriesAfterWriterFailure 验证写入失败时条目保留在队列
+// 中,失败清除后 Drain 能补齐写入。
 func TestJournalBatcherRetainsEntriesAfterWriterFailure(t *testing.T) {
 	clock := newManualClock()
 	writer := &recordingJournal{failures: []error{errors.New("disk temporarily read-only"), nil}}
@@ -116,6 +125,8 @@ func TestJournalBatcherRetainsEntriesAfterWriterFailure(t *testing.T) {
 	requireNoError(t, <-finished)
 }
 
+// TestJournalBatcherTimerFlushesQuietTraffic 验证低频流量也会被定时器冲刷,不会
+// 长期滞留内存。
 func TestJournalBatcherTimerFlushesQuietTraffic(t *testing.T) {
 	clock := newManualClock()
 	writer := &recordingJournal{}
@@ -131,6 +142,8 @@ func TestJournalBatcherTimerFlushesQuietTraffic(t *testing.T) {
 	requireNoError(t, <-finished)
 }
 
+// TestJournalBatcherCloseWaitsForInFlightWriteAndFlushesRemainder 验证 Close 等待
+// 在途写入完成并冲刷剩余条目后才返回,不丢日志。
 func TestJournalBatcherCloseWaitsForInFlightWriteAndFlushesRemainder(t *testing.T) {
 	clock := newManualClock()
 	writeStarted := make(chan struct{})
@@ -163,6 +176,8 @@ func TestJournalBatcherCloseWaitsForInFlightWriteAndFlushesRemainder(t *testing.
 	requireEqual(t, len(batches[0]), 2)
 }
 
+// TestJournalBatcherAcceptsConcurrentProducersWithoutLosingEntries 验证 8 个并发
+// 生产者追加 136 条消息不丢失、不重复。
 func TestJournalBatcherAcceptsConcurrentProducersWithoutLosingEntries(t *testing.T) {
 	clock := newManualClock()
 	writer := &recordingJournal{}
@@ -209,6 +224,8 @@ func TestJournalBatcherAcceptsConcurrentProducersWithoutLosingEntries(t *testing
 	requireEqual(t, len(seen), producers*perProducer)
 }
 
+// TestJournalBatcherRejectsDuplicateAndMalformedEntries 验证重复 ID 与各类非法
+// 条目在入队前被拒绝。
 func TestJournalBatcherRejectsDuplicateAndMalformedEntries(t *testing.T) {
 	clock := newManualClock()
 	writer := &recordingJournal{}
@@ -235,6 +252,8 @@ func TestJournalBatcherRejectsDuplicateAndMalformedEntries(t *testing.T) {
 	requireNoError(t, <-finished)
 }
 
+// TestJournalEntryCanonicalRepresentationIsStableAndEscaped 验证规范文本对保留
+// 字符(\ | = 换行)的转义与字段排序,保证审计文本可稳定比对。
 func TestJournalEntryCanonicalRepresentationIsStableAndEscaped(t *testing.T) {
 	clock := newManualClock()
 	entry := sampleJournal(clock, "canonical|id", time.Second)
@@ -263,6 +282,7 @@ func TestJournalEntryCanonicalRepresentationIsStableAndEscaped(t *testing.T) {
 	}
 }
 
+// accountMessage 构造账户车道测试消息,并返回记录确认/拒绝次数的计数器。
 func accountMessage(clock Clock, id, account string, sequence uint64) (AccountMessage, *atomic.Int32, *atomic.Int32) {
 	acknowledgements := &atomic.Int32{}
 	rejections := &atomic.Int32{}
@@ -286,6 +306,7 @@ func accountMessage(clock Clock, id, account string, sequence uint64) (AccountMe
 	return message, acknowledgements, rejections
 }
 
+// newLaneWorker 构造车道 worker 并断言构造成功。
 func newLaneWorker(t *testing.T, clock Clock) *AccountLaneWorker {
 	t.Helper()
 	worker, err := NewAccountLaneWorker(clock, AccountLanePolicy{
@@ -298,6 +319,8 @@ func newLaneWorker(t *testing.T, clock Clock) *AccountLaneWorker {
 	return worker
 }
 
+// TestAccountLaneWorkerProcessesAnAccountInSequence 验证同一账户消息按序号顺序
+// 处理,每条均被确认,车道视图记录最近序号。
 func TestAccountLaneWorkerProcessesAnAccountInSequence(t *testing.T) {
 	clock := newManualClock()
 	worker := newLaneWorker(t, clock)
@@ -326,6 +349,8 @@ func TestAccountLaneWorkerProcessesAnAccountInSequence(t *testing.T) {
 	}
 }
 
+// TestAccountLaneWorkerRejectsGapWithoutAcknowledging 验证序号跳变的消息被拒绝
+// 且不确认,不进入处理函数,车道失败计数递增。
 func TestAccountLaneWorkerRejectsGapWithoutAcknowledging(t *testing.T) {
 	clock := newManualClock()
 	worker := newLaneWorker(t, clock)
@@ -347,6 +372,8 @@ func TestAccountLaneWorkerRejectsGapWithoutAcknowledging(t *testing.T) {
 	requireEqual(t, view.Failures, uint64(1))
 }
 
+// TestAccountLaneWorkerDoesNotAcknowledgeHandlerFailureAndAllowsRetry 验证处理函数
+// 失败时不确认消息、触发拒绝回调,重投递成功后正常确认。
 func TestAccountLaneWorkerDoesNotAcknowledgeHandlerFailureAndAllowsRetry(t *testing.T) {
 	clock := newManualClock()
 	worker := newLaneWorker(t, clock)
@@ -369,6 +396,8 @@ func TestAccountLaneWorkerDoesNotAcknowledgeHandlerFailureAndAllowsRetry(t *test
 	requireEqual(t, view.Failures, uint64(0))
 }
 
+// TestAccountLaneWorkerAcknowledgesDuplicateWithoutRunningHandler 验证重复消息被
+// 确认但不重复执行处理函数,标识被换账户重用时报错。
 func TestAccountLaneWorkerAcknowledgesDuplicateWithoutRunningHandler(t *testing.T) {
 	clock := newManualClock()
 	worker := newLaneWorker(t, clock)
@@ -391,6 +420,8 @@ func TestAccountLaneWorkerAcknowledgesDuplicateWithoutRunningHandler(t *testing.
 	}
 }
 
+// TestAccountLaneWorkerAllowsDifferentAccountsToRunInParallel 验证不同账户的车道
+// 互不阻塞,可同时处理(并发峰值达到账户数)。
 func TestAccountLaneWorkerAllowsDifferentAccountsToRunInParallel(t *testing.T) {
 	clock := newManualClock()
 	worker := newLaneWorker(t, clock)
@@ -435,6 +466,8 @@ func TestAccountLaneWorkerAllowsDifferentAccountsToRunInParallel(t *testing.T) {
 	requireEqual(t, maximum.Load(), int32(2))
 }
 
+// TestAccountLaneWorkerSerializesConcurrentMessagesForOneAccount 验证同一账户的
+// 并发消息严格串行:后序消息必须等前序完成才进入处理函数。
 func TestAccountLaneWorkerSerializesConcurrentMessagesForOneAccount(t *testing.T) {
 	clock := newManualClock()
 	worker := newLaneWorker(t, clock)
@@ -479,6 +512,8 @@ func TestAccountLaneWorkerSerializesConcurrentMessagesForOneAccount(t *testing.T
 	}
 }
 
+// TestAccountLaneWorkerRejectsExhaustedDelivery 验证投递次数超限的消息在到达
+// 处理函数前被拒绝并触发拒绝回调。
 func TestAccountLaneWorkerRejectsExhaustedDelivery(t *testing.T) {
 	clock := newManualClock()
 	worker := newLaneWorker(t, clock)
@@ -495,6 +530,8 @@ func TestAccountLaneWorkerRejectsExhaustedDelivery(t *testing.T) {
 	requireEqual(t, rejections.Load(), int32(1))
 }
 
+// TestAccountLaneWorkerPrunesExpiredDedupeRecordsAndIdleLanes 验证过期去重记录与
+// 空闲车道被 Prune 回收,状态清零。
 func TestAccountLaneWorkerPrunesExpiredDedupeRecordsAndIdleLanes(t *testing.T) {
 	clock := newManualClock()
 	worker := newLaneWorker(t, clock)
@@ -510,6 +547,8 @@ func TestAccountLaneWorkerPrunesExpiredDedupeRecordsAndIdleLanes(t *testing.T) {
 	requireEqual(t, len(worker.Snapshot()), 0)
 }
 
+// TestAccountLaneWorkerValidatesMessageEnvelope 用参数化用例覆盖消息信封校验:
+// 缺 ID、时间异常、空载荷、缺回执回调等均被拒绝。
 func TestAccountLaneWorkerValidatesMessageEnvelope(t *testing.T) {
 	clock := newManualClock()
 	worker := newLaneWorker(t, clock)

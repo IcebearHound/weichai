@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+// AccountMessage 是进入账户车道的一条消息:AccountID 决定所属车道,Sequence
+// 为车道内单调序号(从 0 开始),Acknowledge/RejectDelivery 为投递回执回调。
 type AccountMessage struct {
 	MessageID      string
 	EventID        string
@@ -21,8 +23,11 @@ type AccountMessage struct {
 	RejectDelivery func(context.Context, error) error
 }
 
+// AccountHandler 处理车道内单条消息,返回错误即视为处理失败。
 type AccountHandler func(context.Context, AccountMessage) error
 
+// AccountLanePolicy 配置车道行为:单条消息最大投递次数、载荷上限、去重保留
+// 时长与空闲车道回收时长。
 type AccountLanePolicy struct {
 	MaximumDelivery int
 	MaximumPayload  int
@@ -30,6 +35,8 @@ type AccountLanePolicy struct {
 	IdleLaneFor     time.Duration
 }
 
+// accountLane 是单个账户的串行处理状态:已确认的最近序号、上次使用时间、
+// 是否正在处理与累计失败数。
 type accountLane struct {
 	mu           sync.Mutex
 	lastSequence uint64
@@ -39,12 +46,14 @@ type accountLane struct {
 	failures     uint64
 }
 
+// processedMessage 记录已处理消息的去重信息:所属账户、序号与处理时刻。
 type processedMessage struct {
 	accountID string
 	sequence  uint64
 	when      time.Time
 }
 
+// AccountLaneView 是账户车道的状态快照,供监控与排障展示。
 type AccountLaneView struct {
 	AccountID    string
 	LastSequence uint64
@@ -54,6 +63,8 @@ type AccountLaneView struct {
 	Failures     uint64
 }
 
+// AccountLaneWorker 保证同一账户的消息严格串行处理、序号严格递增且不重复:
+// 消息级去重(processed)与账户级车道锁(lanes)共同实现至多一次的投递语义。
 type AccountLaneWorker struct {
 	mu        sync.Mutex
 	clock     Clock
@@ -62,6 +73,7 @@ type AccountLaneWorker struct {
 	processed map[string]processedMessage
 }
 
+// NewAccountLaneWorker 构造车道 worker 并校验策略参数与时钟。
 func NewAccountLaneWorker(clock Clock, policy AccountLanePolicy) (*AccountLaneWorker, error) {
 	if clock == nil {
 		return nil, errors.New("account lane clock is required")
@@ -89,6 +101,9 @@ func NewAccountLaneWorker(clock Clock, policy AccountLanePolicy) (*AccountLaneWo
 	}, nil
 }
 
+// Accept 投递一条消息给车道:先做消息级去重(相同 MessageID 直接确认并返回
+// ErrDuplicateMessage),再检查账户车道内序号是否恰好递增,处理期间持有车道
+// 锁保证串行;处理成功后确认并记录完成状态。
 func (worker *AccountLaneWorker) Accept(
 	ctx context.Context,
 	message AccountMessage,
@@ -149,6 +164,7 @@ func (worker *AccountLaneWorker) Accept(
 		if prior.accountID != message.AccountID || prior.sequence != message.Sequence {
 			return errors.New("message identifier was reused with different account ordering data")
 		}
+		// 已处理过的消息重放:直接确认,不重复调用处理函数。
 		if err := message.Acknowledge(ctx); err != nil {
 			return fmt.Errorf("duplicate acknowledgement failed: %w", err)
 		}
@@ -183,6 +199,7 @@ func (worker *AccountLaneWorker) Accept(
 	}
 	if lane.hasSequence {
 		if message.Sequence <= lane.lastSequence {
+			// 序号不增(迟到或重复)的消息确认后视为已处理,避免重复投递。
 			if err := message.Acknowledge(ctx); err != nil {
 				return fmt.Errorf("late message acknowledgement failed: %w", err)
 			}
@@ -196,6 +213,7 @@ func (worker *AccountLaneWorker) Accept(
 			return ErrDuplicateMessage
 		}
 		if message.Sequence != lane.lastSequence+1 {
+			// 序号跳变说明中间消息丢失,拒绝投递并累加车道失败。
 			reason := fmt.Errorf("account sequence gap: have %d, received %d", lane.lastSequence, message.Sequence)
 			lane.failures++
 			if err := message.RejectDelivery(ctx, reason); err != nil {
@@ -204,6 +222,7 @@ func (worker *AccountLaneWorker) Accept(
 			return reason
 		}
 	} else if message.Sequence != 0 {
+		// 车道首条消息序号必须从 0 开始,保证后续递增语义可判定。
 		reason := fmt.Errorf("first account sequence must be zero, received %d", message.Sequence)
 		lane.failures++
 		if err := message.RejectDelivery(ctx, reason); err != nil {
@@ -256,6 +275,7 @@ func (worker *AccountLaneWorker) Accept(
 	return nil
 }
 
+// Snapshot 返回全部车道按账户名排序的视图快照,遍历中不长时间持有全局锁。
 func (worker *AccountLaneWorker) Snapshot() []AccountLaneView {
 	worker.mu.Lock()
 	accounts := make([]string, 0, len(worker.lanes))
@@ -290,6 +310,8 @@ func (worker *AccountLaneWorker) Snapshot() []AccountLaneView {
 	return views
 }
 
+// Prune 回收过期状态:删除超过去重保留时长的已处理记录,以及超过空闲时长且
+// 未在处理中的车道,返回各自清理的数量。
 func (worker *AccountLaneWorker) Prune() (int, int) {
 	now := worker.clock.Now()
 	worker.mu.Lock()

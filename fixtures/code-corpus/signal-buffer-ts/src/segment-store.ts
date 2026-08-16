@@ -1,6 +1,11 @@
 
+/**
+ * 段存储:管理段内 extent 的压缩(移除死区并 8 字节对齐重排)、稀疏索引
+ * 与碎片化度量;另提供段迁移规划(最佳适配放置 + 无冲突迁移波次)。
+ */
 import { SegmentExtent } from "./domain.js";
 
+/** 可变段:ID、容量、extent 列表、写入游标与封口标志。 */
 interface MutableSegment {
   readonly id: string;
   readonly capacity: number;
@@ -9,15 +14,27 @@ interface MutableSegment {
   sealed: boolean;
 }
 
+/**
+ * 段存储。
+ *
+ * compact 移除死 extent 并把存活 extent 按 8 字节对齐重排(合并碎片);
+ * sparseIndex 生成按步长抽样的稀疏索引(补末尾项);fragmentation 度量
+ * 已占/空隙/尾部空间与碎片率。
+ */
 export class SegmentStore {
   private readonly segments = new Map<string, MutableSegment>();
 
+  /**
+   * 压缩段:剔除死区与指定偏移,存活 extent 按 8 字节对齐重排后写回,
+   * 并更新游标与封口状态;返回重排后的 extent 列表。
+   */
   public compact(segmentId: string, deadOffsets: ReadonlySet<number>): readonly SegmentExtent[] {
     const segment = this.segments.get(segmentId);
     if (segment === undefined) return [];
     const live = segment.extents.filter((extent) => extent.live && !deadOffsets.has(extent.offset));
     const rewritten: SegmentExtent[] = [];
     let cursor = 0;
+    // 8 字节对齐重排:每个 extent 前补对齐填充,消除旧布局留下的碎片。
     for (const extent of live) {
       const padding = (8 - cursor % 8) % 8;
       cursor += padding;
@@ -30,6 +47,7 @@ export class SegmentStore {
     return rewritten;
   }
 
+  /** 生成稀疏索引:每 stride 个 extent 取一条,末尾如有遗漏则补最后一条。 */
   public sparseIndex(segmentId: string, stride: number): readonly {
     ordinal: number;
     offset: number;
@@ -56,6 +74,7 @@ export class SegmentStore {
     return index;
   }
 
+  /** 度量段碎片:已占字节、空隙/尾部字节与碎片率(空隙占比)。 */
   public fragmentation(segmentId: string): {
     readonly occupied: number;
     readonly gaps: number;
@@ -88,6 +107,10 @@ export class SegmentStore {
   }
 }
 
+/**
+ * 规划段迁移:把存活 extent 重新放置到目标容量内(最佳适配,优先
+ * 减少碎片),输出放置方案、未放置项、迁移动作与无冲突迁移波次。
+ */
 export const planSegmentMigration = (
   extents: readonly SegmentExtent[],
   capacities: Readonly<Record<string, number>>,
@@ -132,6 +155,7 @@ export const planSegmentMigration = (
   }
   const free = new Map<string, Array<{ start: number; end: number }>>();
   for (const [segment, capacity] of Object.entries(capacities)) free.set(segment, [{ start: 0, end: Math.max(0, capacity) }]);
+  // 最佳适配放置:按长度降序处理,在空闲区间中选碎片浪费最少、段名最小者。
   const placements = new Map<number, { segment: string; offset: number }>();
   const unplaced: number[] = [];
   const ordered = extents.map((extent, ordinal) => ({ extent, ordinal })).filter(({ extent }) => extent.live)
@@ -192,6 +216,7 @@ export const planSegmentMigration = (
     .sort((left, right) => right.length - left.length || left.ordinal - right.ordinal);
   const waves: number[][] = [];
   const waveSegments: Array<Set<string>> = [];
+  // 迁移波次:同一波次内的迁移不能同时占用同一段(源或目标),避免读写冲突。
   for (const move of moves) {
     let assigned = false;
     for (let index = 0; index < waves.length; index += 1) {

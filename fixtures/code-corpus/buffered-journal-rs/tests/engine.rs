@@ -8,6 +8,7 @@ use buffered_journal_rs::{
 };
 use support::{record, TempWorkspace};
 
+/// 达到阈值后追加即落盘,快照计数与磁盘段一致。
 #[test]
 fn engine_threshold_append_reaches_segment_and_snapshot() {
     let workspace = TempWorkspace::new("engine-threshold");
@@ -47,6 +48,7 @@ fn engine_threshold_append_reaches_segment_and_snapshot() {
     assert!(workspace.path().join("segment-1-g0.bjseg").exists());
 }
 
+/// 未达阈值的少量记录先缓冲,定时刷盘命令可将其落盘。
 #[test]
 fn engine_timer_flushes_a_small_batch() {
     let workspace = TempWorkspace::new("engine-timer");
@@ -57,7 +59,9 @@ fn engine_timer_flushes_a_small_batch() {
             records: vec![record("single", "account", 1, "audit|single")],
         })
         .unwrap();
+    // 单条记录低于阈值(64),先缓冲不落盘。
     assert!(matches!(append, EngineOutcome::Append { durable: 0, .. }));
+    // 等待超过累积器定时间隔(500ms)后主动刷盘。
     std::thread::sleep(Duration::from_millis(550));
     let flush = engine
         .execute(EngineCommand::FlushDue)
@@ -65,6 +69,7 @@ fn engine_timer_flushes_a_small_batch() {
     assert!(matches!(flush, EngineOutcome::Flushed(1)));
 }
 
+/// 优雅停机:排空缓冲、提交检查点,检查点文件包含最新进度。
 #[test]
 fn engine_shutdown_durably_drains_and_commits_checkpoint() {
     let workspace = TempWorkspace::new("engine-shutdown");
@@ -98,6 +103,7 @@ fn engine_shutdown_durably_drains_and_commits_checkpoint() {
     assert!(content.contains("account-b"));
 }
 
+/// 重试调度可通过引擎命令推进,且反映在运行时快照中。
 #[test]
 fn engine_exposes_retry_scheduler_without_crossing_storage_state() {
     let workspace = TempWorkspace::new("engine-retry");
@@ -126,6 +132,7 @@ fn engine_exposes_retry_scheduler_without_crossing_storage_state() {
     assert!(matches!(snapshot, EngineOutcome::Snapshot(snapshot) if snapshot.retry_depth == 1));
 }
 
+/// 只读维护:扫描段、产生动作报告,但不实际删除任何段。
 #[test]
 fn maintenance_scans_segments_and_reports_actions_without_deleting() {
     let workspace = TempWorkspace::new("engine-maintenance");

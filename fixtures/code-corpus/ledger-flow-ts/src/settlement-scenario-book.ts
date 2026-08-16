@@ -1,3 +1,11 @@
+/**
+ * 确定性合成结算场景的构建与演练(集成取向的固件模块)。
+ *
+ * 校验多边头寸簿、推导双边指令、附加费用与路由,以受限并发执行结果工作,
+ * 并在汇总时保留部分失败而不隐藏,供端到端测试与基准演练使用。
+ */
+
+/** 场景中的单条净头寸:账户、币种、最小货币单位金额与优先级。 */
 export interface ScenarioPosition {
   readonly account: string;
   readonly currency: string;
@@ -5,6 +13,7 @@ export interface ScenarioPosition {
   readonly priority: number;
 }
 
+/** 单币种费用规则:按基点比例 + 固定费用,且费用在 [minimumFeeMinor, maximumFeeMinor] 区间内。 */
 export interface ScenarioFeeRule {
   readonly currency: string;
   readonly basisPoints: number;
@@ -13,6 +22,7 @@ export interface ScenarioFeeRule {
   readonly maximumFeeMinor?: bigint;
 }
 
+/** 场景定义:头寸簿、费用规则、账户路由与可选的阻断账户列表。 */
 export interface ScenarioDefinition {
   readonly scenarioId: string;
   readonly positions: readonly ScenarioPosition[];
@@ -21,6 +31,7 @@ export interface ScenarioDefinition {
   readonly blockedAccounts?: readonly string[];
 }
 
+/** 编译产出的单条指令:本金、费用、总借项与路由,槽位与输入序号一致。 */
 export interface ScenarioInstruction {
   readonly index: number;
   readonly instructionId: string;
@@ -34,6 +45,7 @@ export interface ScenarioInstruction {
   readonly priority: number;
 }
 
+/** 场景编译结果:指令列表、内容指纹、按币种未轧差金额与账户统计。 */
 export interface CompiledScenario {
   readonly scenarioId: string;
   readonly fingerprint: string;
@@ -45,6 +57,7 @@ export interface CompiledScenario {
   readonly unmatchedByCurrency: Readonly<Record<string, bigint>>;
 }
 
+/** 单条指令的执行记录:状态(成功/失败/阻断)、尝试次数与耗时。 */
 export interface ScenarioExecutionRecord {
   readonly index: number;
   readonly instructionId: string;
@@ -60,6 +73,7 @@ export interface ScenarioExecutionRecord {
   readonly error?: string;
 }
 
+/** 执行汇总:成功/失败/阻断计数、凭据去重、重试直方图与延迟分位。 */
 export interface ScenarioSummary {
   readonly instructionCount: number;
   readonly settled: number;
@@ -81,6 +95,7 @@ export interface ScenarioSummary {
   readonly p95LatencyMs: number;
 }
 
+// 轧差过程中的可变余额(账户内同币种多笔头寸先合并)。
 interface MutableBalance {
   account: string;
   amountMinor: bigint;
@@ -90,10 +105,8 @@ interface MutableBalance {
 /**
  * Builds and exercises deterministic synthetic settlement scenarios.
  *
- * This module is intentionally an integration-oriented fixture: it validates a
- * multilateral position book, derives bilateral instructions, attaches fees and
- * routes, executes the resulting work with bounded concurrency, and summarizes
- * the outcome without hiding partial failure.
+ * 该模块是面向集成的固件:校验多边头寸簿、推导双边指令、附加费用与路由,
+ * 以受限并发执行结果工作,并在汇总时保留部分失败而不隐藏。
  */
 export class SettlementScenarioBook {
   public constructor(
@@ -112,6 +125,10 @@ export class SettlementScenarioBook {
     }
   }
 
+  /**
+   * 编译场景定义:校验头寸/费率/路由,按币种轧差出双边指令并附加费用与
+   * 路由,最后生成内容指纹(供幂等缓存与对比)。
+   */
   public compile(definition: ScenarioDefinition): CompiledScenario {
     const scenarioId = definition.scenarioId.normalize("NFKC").trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u.test(scenarioId)) {
@@ -179,6 +196,7 @@ export class SettlementScenarioBook {
 
     const balances = new Map<string, Map<string, MutableBalance>>();
     const accounts = new Set<string>();
+    // 先按币种、再按账户聚合头寸,同账户同币种的多笔头寸合并为单条净额。
     for (let index = 0; index < definition.positions.length; index += 1) {
       const rawPosition = definition.positions[index]!;
       const account = rawPosition.account.trim();
@@ -260,6 +278,8 @@ export class SettlementScenarioBook {
 
         const feeRule = feeRules.get(currency);
         let feeMinor = 0n;
+        // 费用 = 本金 × 基点 / 10000(余数达半步进位)+ 固定费用,并夹在
+        // [minimumFeeMinor, maximumFeeMinor] 区间内。
         if (feeRule !== undefined) {
           const numerator = principalMinor * BigInt(feeRule.basisPoints);
           feeMinor = numerator / 10_000n + feeRule.fixedMinor;
@@ -311,6 +331,8 @@ export class SettlementScenarioBook {
         left.currency.localeCompare(right.currency) ||
         left.index - right.index,
     );
+    // 内容指纹:对每条指令的 ID/账户/金额逐字节滚动哈希,任何字段变化都
+    // 会改变指纹,用于检测相同场景的重复编译。
     const encoder = new TextEncoder();
     let fingerprintState = 2_166_136_261;
     for (const instruction of instructions) {
@@ -333,6 +355,10 @@ export class SettlementScenarioBook {
     });
   }
 
+  /**
+   * 执行已编译场景:受限并发逐条调用 writer,失败按 maximumAttempts 重试,
+   * 凭据跨指令去重(同一凭据被两个指令复用即判定失败),并记录每次耗时。
+   */
   public async execute(
     scenario: CompiledScenario,
     writer: (
@@ -358,6 +384,8 @@ export class SettlementScenarioBook {
     let cursor = 0;
 
     const worker = async (): Promise<void> => {
+      // 无锁任务分发:各 worker 从共享游标取下一条指令,避免重复执行,
+      // 输出槽位与输入顺序一一对应。
       while (true) {
         const outputIndex = cursor;
         cursor += 1;
@@ -371,6 +399,7 @@ export class SettlementScenarioBook {
           blockedAccounts.has(instruction.from) ||
           blockedAccounts.has(instruction.to)
         ) {
+          // 阻断账户:涉及任一阻断账户的指令直接标记为 blocked,不调用 writer。
           output[outputIndex] = Object.freeze({
             index: instruction.index,
             instructionId: instruction.instructionId,
@@ -395,6 +424,7 @@ export class SettlementScenarioBook {
               throw new TypeError("writer returned an invalid receipt");
             }
             const priorInstruction = receipts.get(proposedReceipt);
+            // 凭据去重:同一凭据若已被其他指令使用,说明写入方异常,按失败处理。
             if (
               priorInstruction !== undefined &&
               priorInstruction !== instruction.instructionId
@@ -449,6 +479,10 @@ export class SettlementScenarioBook {
     return Object.freeze(output);
   }
 
+  /**
+   * 汇总执行记录:统计成功/失败/阻断、凭据去重、重试直方图、按币种/账户
+   * 的金额归集与延迟分位(p50/p95),并对非法记录抛错。
+   */
   public summarize(
     records: readonly ScenarioExecutionRecord[],
   ): ScenarioSummary {
@@ -492,6 +526,7 @@ export class SettlementScenarioBook {
           record.feeMinor;
         creditByAccount[record.to] =
           (creditByAccount[record.to] ?? 0n) + record.principalMinor;
+        // 凭据所有者登记:同一凭据被多个指令使用时记入重复凭据。
         if (record.receipt !== undefined) {
           const owner = receiptOwners.get(record.receipt);
           if (owner !== undefined && owner !== record.instructionId) {

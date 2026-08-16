@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+// TestPairParsingAndQuoteArithmetic 验证货币对解析/序列化/反装,以及报价的
+// 中值与价差计算,含交叉价的拒绝。
 func TestPairParsingAndQuoteArithmetic(t *testing.T) {
 	pair := mustPair(t, "eur/usd")
 	requireEqual(t, pair, Pair{Base: "EUR", Counter: "USD"})
@@ -35,6 +37,8 @@ func TestPairParsingAndQuoteArithmetic(t *testing.T) {
 	}
 }
 
+// TestCanonicalAmountUsesCurrencyScaleWithoutFloatingPoint 验证金额文本到整数
+// 最小单位的解析:补零、去前导零、负数与非法表示(科学计数、千分位等)拒绝。
 func TestCanonicalAmountUsesCurrencyScaleWithoutFloatingPoint(t *testing.T) {
 	cases := []struct {
 		text       string
@@ -64,6 +68,8 @@ func TestCanonicalAmountUsesCurrencyScaleWithoutFloatingPoint(t *testing.T) {
 	}
 }
 
+// TestProviderBookRanksHealthyLocalCapacityFirst 验证候选排序:健康本地提供方
+// 优于故障跨区域提供方,重复注册与未知观测被拒绝。
 func TestProviderBookRanksHealthyLocalCapacityFirst(t *testing.T) {
 	clock := newManualClock()
 	pair := mustPair(t, "EUR/USD")
@@ -103,6 +109,8 @@ func TestProviderBookRanksHealthyLocalCapacityFirst(t *testing.T) {
 	}
 }
 
+// TestQuoteAggregatorTrimsOutliersAndReportsContributors 验证聚合裁剪两端极端
+// 报价后取中位数,贡献者列表与离散度正确,陈旧报价按策略被拒。
 func TestQuoteAggregatorTrimsOutliersAndReportsContributors(t *testing.T) {
 	clock := newManualClock()
 	quotes := []Quote{
@@ -134,6 +142,8 @@ func TestQuoteAggregatorTrimsOutliersAndReportsContributors(t *testing.T) {
 	requireErrorIs(t, err, ErrQuoteUnavailable)
 }
 
+// TestRiskNettingReconcilesGrossAndStressValues 验证轧差的毛额/净额汇总与压力
+// 测试的损失/流动性成本计算,重复来源被拒绝。
 func TestRiskNettingReconcilesGrossAndStressValues(t *testing.T) {
 	netting := RiskNetting{MaximumPositions: 20}
 	positions := []CurrencyPosition{
@@ -168,6 +178,8 @@ func TestRiskNettingReconcilesGrossAndStressValues(t *testing.T) {
 	}
 }
 
+// TestSessionCalendarHandlesWeekdaysHolidaysAndOvernightWindows 验证交易日历:
+// 工作日窗口、跨午夜时段、节假日闭市与 NextOpen 顺延搜索。
 func TestSessionCalendarHandlesWeekdaysHolidaysAndOvernightWindows(t *testing.T) {
 	pair := mustPair(t, "EUR/USD")
 	location := time.FixedZone("market", 2*60*60)
@@ -205,6 +217,8 @@ func TestSessionCalendarHandlesWeekdaysHolidaysAndOvernightWindows(t *testing.T)
 	requireEqual(t, next.In(location).Format("2006-01-02 15:04"), "2026-01-16 08:00")
 }
 
+// TestSettlementPlannerAppliesCutoffWeekendAndHoliday 验证结算规划:截止后顺延、
+// 跳过周末与节假日推算价值日,不支持的币种/目的国报错。
 func TestSettlementPlannerAppliesCutoffWeekendAndHoliday(t *testing.T) {
 	location := time.FixedZone("settlement", 60*60)
 	planner := SettlementWindowPlanner{Location: location, Rails: []SettlementRail{
@@ -237,6 +251,8 @@ func TestSettlementPlannerAppliesCutoffWeekendAndHoliday(t *testing.T) {
 	}
 }
 
+// TestQuotePathEncoderRoundTripsCanonicalRoutingPath 验证路由路径编码往返一致,
+// 未知查询参数破坏规范性时解码失败。
 func TestQuotePathEncoderRoundTripsCanonicalRoutingPath(t *testing.T) {
 	encoder := QuotePathEncoder{Prefix: "quotes", MaximumHops: 5}
 	path := QuotePath{
@@ -258,6 +274,8 @@ func TestQuotePathEncoderRoundTripsCanonicalRoutingPath(t *testing.T) {
 	}
 }
 
+// TestCircuitDrawingIsDeterministicAndParseable 验证熔断拓扑渲染/解析往返一致
+// 且按优先级排序,畸形行被拒绝。
 func TestCircuitDrawingIsDeterministicAndParseable(t *testing.T) {
 	drawing := CircuitDrawing{MaximumNodes: 10}
 	nodes := []CircuitNode{
@@ -279,6 +297,8 @@ func TestCircuitDrawingIsDeterministicAndParseable(t *testing.T) {
 	}
 }
 
+// TestMessageDigestDetectsEnvelopeAndPayloadChanges 验证摘要格式与校验,载荷
+// 变更被检出,密钥过短被拒绝。
 func TestMessageDigestDetectsEnvelopeAndPayloadChanges(t *testing.T) {
 	digest := MessageDigest{Namespace: "trade-events", Key: []byte("0123456789abcdef0123456789abcdef")}
 	message := DigestMessage{
@@ -301,6 +321,8 @@ func TestMessageDigestDetectsEnvelopeAndPayloadChanges(t *testing.T) {
 	}
 }
 
+// TestAuditSorterOrdersAndVerifiesEntries 验证审计排序与校验:乱序无法通过
+// Verify,重复 ID 被 Sort 拒绝。
 func TestAuditSorterOrdersAndVerifiesEntries(t *testing.T) {
 	clock := newManualClock()
 	sorter := AuditTrailSorter{MaximumEntries: 20, RequireAccount: true}
@@ -324,6 +346,8 @@ func TestAuditSorterOrdersAndVerifiesEntries(t *testing.T) {
 	}
 }
 
+// TestBatchWindowSizerBalancesLimits 验证批窗口在条数/字节/内存/延迟约束内
+// 取值,非有限写入频率被拒绝。
 func TestBatchWindowSizerBalancesLimits(t *testing.T) {
 	input := BatchWindowInput{
 		PendingRecords: 700, AverageRecordBytes: 400, WriterBytesPerSec: 200_000,
@@ -347,6 +371,8 @@ func TestBatchWindowSizerBalancesLimits(t *testing.T) {
 	}
 }
 
+// TestProviderFailureSupportsErrorsIsAndMetadata 验证 ProviderFailure 的错误链
+// 与展示文本包含提供方、原因与类别。
 func TestProviderFailureSupportsErrorsIsAndMetadata(t *testing.T) {
 	cause := errors.New("socket closed")
 	failure := ProviderFailure{Provider: "test-feed", Kind: "transport", Retryable: true, Cause: cause}

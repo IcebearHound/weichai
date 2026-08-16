@@ -1,3 +1,7 @@
+/**
+ * SpreadCurve 的单元测试:线性插值、重复期限合并、平坦/线性外推、分段
+ * 斜率、利差加价与拟合质量评估。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { SpreadCurve, type CurveKnot } from "../src/spread-curve.js";
@@ -19,6 +23,7 @@ test("interpolation is linear between neighboring tenors", () => {
 });
 
 test("duplicate tenors consolidate by confidence weight", () => {
+  // 同一期限的多个节点按置信度加权合并:10×0.25 + 30×0.75 = 25。
   const curve = new SpreadCurve();
   const value = curve.interpolate(
     [knot(7, 10, 0.25), knot(7, 30, 0.75), knot(30, 40)],
@@ -35,6 +40,7 @@ test("flat extrapolation uses the nearest observed endpoint", () => {
 });
 
 test("linear extrapolation follows the first and last segment", () => {
+  // 关闭平坦外推后,区间外按端部斜率线性外推。
   const curve = new SpreadCurve(false);
   const knots = [knot(10, 20), knot(20, 40), knot(30, 50)];
   assert.equal(curve.interpolate(knots, 5), 10);
@@ -56,6 +62,7 @@ test("fitSegments reports slopes and confidence floors", () => {
 });
 
 test("markup uses symmetric half-away rounding for bigint notionals", () => {
+  // (10+5) 基点 × 1000000 / 1e6 = 1500,负数对称取整。
   const curve = new SpreadCurve();
   assert.equal(curve.applyMarkup(10, 1_000_000n, 5), 1_500n);
   assert.equal(curve.applyMarkup(10, -1_000_000n, 5), -1_500n);
@@ -63,6 +70,7 @@ test("markup uses symmetric half-away rounding for bigint notionals", () => {
 });
 
 test("fit inspection parses day, week, month and year tenors", () => {
+  // 期限单位换算:1d/1w(7d)/1m(30d)/1y(365d),缺失的 2w 报 14d。
   const curve = new SpreadCurve();
   const fit = curve.evaluateFitPolicies({
     curveId: " major ",
@@ -98,6 +106,7 @@ test("invalid knot and rounding inputs fail explicitly", () => {
 });
 
 test("interpolation reproduces every knot in generated monotone curves", () => {
+  // 属性测试:任意单调曲线的节点插值必须精确重现节点值。
   const curve = new SpreadCurve();
   for (let width = 2; width <= 12; width += 1) {
     const knots = Array.from({ length: width }, (_, index) =>

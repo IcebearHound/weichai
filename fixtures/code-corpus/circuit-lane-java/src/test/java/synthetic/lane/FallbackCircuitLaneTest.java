@@ -16,10 +16,16 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
+/**
+ * FallbackCircuitLane 的行为测试(无 JUnit 依赖,手工驱动断言):
+ * 覆盖熔断状态机的主路径与并发边界——正常降级、熔断/冷却、半开探针、
+ * 探针成败对状态的影响、手动重置、非法配置与并发快照。
+ */
 final class FallbackCircuitLaneTest {
     private FallbackCircuitLaneTest() {
     }
 
+    /** 汇总入口:顺序执行全部用例,任一断言失败即抛异常终止。 */
     static void run() {
         returnsPrimaryWithoutCallingBackup();
         failsOverAndKeepsProviderStateIndependent();
@@ -33,6 +39,7 @@ final class FallbackCircuitLaneTest {
         toleratesConcurrentSnapshotReaders();
     }
 
+    /** 主提供方成功时不应调用备用提供方,状态保持 closed。 */
     private static void returnsPrimaryWithoutCallingBackup() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         FallbackCircuitLane lane = new FallbackCircuitLane(2, 5_000L, clock);
@@ -55,6 +62,7 @@ final class FallbackCircuitLaneTest {
         TestSupport.falsity(primaryView.probeInFlight(), "normal request should not be marked as probe");
     }
 
+    /** 主提供方连续失败达到阈值后熔断,备用提供方接管且状态互不影响。 */
     private static void failsOverAndKeepsProviderStateIndependent() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         FallbackCircuitLane lane = new FallbackCircuitLane(2, 5_000L, clock);
@@ -87,6 +95,7 @@ final class FallbackCircuitLaneTest {
         TestSupport.equal(2L, backupView.requestCount(), "reserve request count should be independent");
     }
 
+    /** 熔断冷却期内,主提供方应被跳过(不真正调用),由备用方承接。 */
     private static void skipsOpenPrimaryDuringCooldown() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         FallbackCircuitLane lane = new FallbackCircuitLane(1, 10_000L, clock);
@@ -117,6 +126,7 @@ final class FallbackCircuitLaneTest {
         TestSupport.falsity(view.probeInFlight(), "open state should not carry a probe marker");
     }
 
+    /** 半开状态下同一时刻只允许一个探针请求;并发请求应降级到备用方。 */
     private static void permitsExactlyOneConcurrentHalfOpenProbe() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         FallbackCircuitLane lane = new FallbackCircuitLane(2, 5_000L, clock);
@@ -176,6 +186,7 @@ final class FallbackCircuitLaneTest {
         TestSupport.equal(1L, recovered.successCount(), "recovery should record one primary success");
     }
 
+    /** 探针成功后熔断关闭、失败计数清零,后续请求正常走主提供方。 */
     private static void successfulProbeClosesCircuitAndClearsFailures() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         FallbackCircuitLane lane = new FallbackCircuitLane(1, 1_000L, clock);
@@ -214,6 +225,7 @@ final class FallbackCircuitLaneTest {
         TestSupport.equal(1, backup.calls(), "reserve should not run after primary recovery");
     }
 
+    /** 探针失败会重新打开熔断,且冷却期从头计起。 */
     private static void failedProbeRestartsCooldown() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         FallbackCircuitLane lane = new FallbackCircuitLane(1, 2_000L, clock);
@@ -248,6 +260,7 @@ final class FallbackCircuitLaneTest {
         TestSupport.equal(2, primary.calls(), "primary must not probe early after failed probe");
     }
 
+    /** reset 只对已注册的提供方生效,且重置后立即可用。 */
     private static void resetRecoversKnownProviderOnly() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         FallbackCircuitLane lane = new FallbackCircuitLane(1, 60_000L, clock);
@@ -270,6 +283,7 @@ final class FallbackCircuitLaneTest {
         );
     }
 
+    /** 非法配置与非法调用(空列表、非法名称、重复名等)应被拒绝。 */
     private static void rejectsInvalidConfigurationAndCalls() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         TestSupport.failure(
@@ -323,6 +337,7 @@ final class FallbackCircuitLaneTest {
         );
     }
 
+    /** 全部候选失败时,最终异常应以 suppressed 形式保留每个提供方的失败上下文。 */
     private static void aggregatesProviderFailuresWithContext() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         FallbackCircuitLane lane = new FallbackCircuitLane(5, 10_000L, clock);
@@ -349,6 +364,7 @@ final class FallbackCircuitLaneTest {
         TestSupport.equal("closed", lane.snapshot().get("second-feed").mode(), "subthreshold second should stay closed");
     }
 
+    /** 提供方调用进行中,并发执行 snapshot 不应死锁或读到不一致状态。 */
     private static void toleratesConcurrentSnapshotReaders() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         FallbackCircuitLane lane = new FallbackCircuitLane(2, 1_000L, clock);
@@ -402,6 +418,10 @@ final class FallbackCircuitLaneTest {
         }
     }
 
+    /**
+     * 脚本化测试替身:按预先编排的步骤依次返回 值/抛出异常/阻塞,
+     * 耗尽脚本后再被调用会直接失败,用于验证调用次数。
+     */
     private static final class SequenceSupplier implements Supplier<String> {
         private static final Object NULL = new Object();
         private final Queue<Object> steps = new ConcurrentLinkedQueue<>();
@@ -437,6 +457,10 @@ final class FallbackCircuitLaneTest {
         }
     }
 
+    /**
+     * 可阻塞的测试替身:通过两个 CountDownLatch 控制「开始」与「放行」,
+     * 用于构造并发场景(半开探针、并发快照)。
+     */
     private static final class BlockingValue {
         private final String value;
         private final CountDownLatch started = new CountDownLatch(1);

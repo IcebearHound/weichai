@@ -1,6 +1,11 @@
 
+/**
+ * 窗口账本:把观测按时间窗聚合(加权均值、方差、极值与序号范围),
+ * 支持窗口闭合、指数平滑漂移分析,以及观测状态对比(regime 分析)。
+ */
 import { WindowAggregate, WindowObservation } from "./domain.js";
 
+/** 可变窗口桶:原始观测 + 增量统计(加权和、权重、平方和、极值)。 */
 interface MutableBucket {
   readonly observations: WindowObservation[];
   weightedTotal: number;
@@ -12,11 +17,22 @@ interface MutableBucket {
   lastSequence: number;
 }
 
+/**
+ * 窗口账本。
+ *
+ * ingest 校验观测(数值/权重有限、序号单调递增)后归入对应时间桶,桶内
+ * 维护增量统计;closeWindow 结算并移除桶;drift 对一系列桶做指数平滑
+ * (Holt 风格 level/trend),输出趋势与误差。
+ */
 export class WindowLedger {
   private readonly buckets = new Map<number, MutableBucket>();
   private readonly lastSequence = new Map<string, number>();
   private readonly rejected: Array<{ sensor: string; sequence: number; reason: string }> = [];
 
+  /**
+   * 摄入一条观测并归入其时间桶,返回桶 ID;校验失败(非有限值、非法序号、
+   * 序号回退)时记入拒绝列表并返回 -1。
+   */
   public ingest(observation: WindowObservation, widthMs: number): number {
     if (!Number.isFinite(widthMs) || widthMs <= 0) throw new RangeError("window width must be positive");
     if (!Number.isFinite(observation.value) || !Number.isFinite(observation.weight)) {
@@ -29,11 +45,13 @@ export class WindowLedger {
     }
     const sequenceKey = `${observation.account}:${observation.sensor}`;
     const previous = this.lastSequence.get(sequenceKey);
+    // 同账户同传感器的观测序号必须严格递增,防止乱序注入。
     if (previous !== undefined && observation.sequence <= previous) {
       this.rejected.push({ sensor: observation.sensor, sequence: observation.sequence, reason: `not after ${previous}` });
       return -1;
     }
     const bucketId = Math.floor(observation.observedAt / widthMs);
+    // 桶内增量统计:加权均值需累计 值×权重 与权重,方差需累计平方和。
     const bucket = this.buckets.get(bucketId) ?? {
       observations: [],
       weightedTotal: 0,
@@ -58,6 +76,7 @@ export class WindowLedger {
     return bucketId;
   }
 
+  /** 结算并移除一个窗口桶,返回聚合结果;桶不存在或为空返回 undefined。 */
   public closeWindow(bucketId: number): WindowAggregate | undefined {
     const bucket = this.buckets.get(bucketId);
     if (bucket === undefined || bucket.observations.length === 0) return undefined;
@@ -77,6 +96,10 @@ export class WindowLedger {
     return aggregate;
   }
 
+  /**
+   * 对一系列桶做指数平滑漂移分析:level 追踪均值、trend 追踪变化趋势,
+   * 输出每桶的平滑水平、趋势与预测误差(首桶仅作初始化)。
+   */
   public drift(bucketIds: readonly number[], smoothing: number): readonly {
     bucket: number;
     level: number;
@@ -110,6 +133,11 @@ export class WindowLedger {
 
 }
 
+/**
+ * 观测状态对比:以 boundary 为界把观测切成前后两段,计算均值位移、方差
+ * 比、发生显著变化的传感器、逐传感器剖面(中位数、缺失序号、沉默时长、
+ * 状态切换、一阶自相关)与变点列表,以及账户覆盖情况。
+ */
 export const compareObservationRegimes = (
   observations: readonly WindowObservation[],
   boundary: number,
@@ -196,6 +224,7 @@ export const compareObservationRegimes = (
     let covariance = 0;
     let leftEnergy = 0;
     let rightEnergy = 0;
+    // 一阶自相关:相邻样本偏离均值的方向一致性,衡量序列的持续性。
     for (let index = 1; index < sensorRows.length; index += 1) {
       const left = sensorRows[index - 1].value - mean;
       const right = sensorRows[index].value - mean;
@@ -228,6 +257,7 @@ export const compareObservationRegimes = (
     const driftAllowance = Math.max(Number.EPSILON, scale * 0.75);
     let positiveRun = 0;
     let negativeRun = 0;
+    // 变点检测:后半段的累积漂移超出容差带(4×driftAllowance)即记变点。
     for (const row of sensorRows) {
       if (row.observedAt < boundary) continue;
       positiveRun = Math.max(0, positiveRun + row.value - oldMean - driftAllowance / 2);

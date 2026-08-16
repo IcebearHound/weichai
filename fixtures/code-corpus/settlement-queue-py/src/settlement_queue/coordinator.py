@@ -1,3 +1,10 @@
+"""付款协调器:把一批付款意图从规划到结算、对账、净额与资金的端到端编排。
+
+orchestrate 依次执行:规划(ValueDatePlanner)→ 按波次并行执行(引擎)→
+结果归位 → 敞口应用与快照 → 重试排期与到期领取 → 对账与修复计划 →
+净额轧差与内部划拨 → 资金路由 → 汇总告警与审计日志。
+"""
+
 from __future__ import annotations
 
 from collections import Counter, defaultdict
@@ -18,6 +25,11 @@ from .retry import RetryCalendar
 
 
 class PayoutCoordinator:
+    """批次付款编排入口。
+
+    orchestrate 一次性编排一批意图的完整生命周期,返回只读汇总映射。
+    """
+
     async def orchestrate(
         self,
         batch_id: str,
@@ -40,6 +52,16 @@ class PayoutCoordinator:
         account_retry_shares: Mapping[str, Decimal],
         now: datetime,
     ) -> Mapping[str, object]:
+        """端到端执行一批付款并返回批次汇总(只读映射)。
+
+        流程:
+        1) planner.build 生成波次计划并记 batch-planned 审计日志;
+        2) 逐波并发执行(engine.execute_group),重复结果与缺失结果记入错误;
+        3) 按输入顺序归位结果,规划拒绝/未入波的意图标记为 rejected/deferred;
+        4) exposure.apply 应用收据并核对敞口限额;retry_calendar 排期/领取重试;
+        5) reconciler 对账并生成修复计划;netter 轧差与划拨;funding_graph 路由资金;
+        6) 汇总状态/金额/失败告警,记 batch-finalized 日志。
+        """
         if not batch_id.strip():
             raise ValueError("batch_id is required")
         if now.tzinfo is None:
@@ -73,6 +95,7 @@ class PayoutCoordinator:
             attempts = sum(result.attempts for result in wave_results)
             for result in wave_results:
                 if result.identity in result_by_identity:
+                    # 同一意图出现重复结果:视为执行异常
                     execution_errors.append(f"duplicate-result:{result.identity}")
                     continue
                 result_by_identity[result.identity] = result
@@ -106,6 +129,7 @@ class PayoutCoordinator:
             result = result_by_identity.get(intent.identity)
             if result is not None:
                 if result.ordinal != ordinal:
+                    # 结果序号与输入位置不一致:重建结果以对齐输入顺序
                     result = PayoutResult(
                         identity=result.identity,
                         ordinal=ordinal,
@@ -121,6 +145,7 @@ class PayoutCoordinator:
             if rejection is not None:
                 ordered_results.append(PayoutResult(intent.identity, ordinal, "rejected", 0, reason=rejection))
             else:
+                # 既无结果也无拒绝原因:计划未分配波次,标记 deferred
                 ordered_results.append(
                     PayoutResult(
                         intent.identity,
@@ -138,9 +163,11 @@ class PayoutCoordinator:
         for intent, result in zip(intents, ordered_results, strict=True):
             if result.state != "deferred":
                 continue
+            # 重试成本以金额数量级估计,用于预算分配
             cost = max(Decimal(1), intent.money.amount.log10() if intent.money.amount >= 1 else Decimal(1))
             if retry_calendar.schedule(intent, result, cost):
                 retry_scheduled.append(intent.identity)
+        # 重试预算 = 总流动性的万分之一,至少为 1
         retry_budget = max(Decimal(1), sum(liquidity.values(), Decimal(0)) * Decimal("0.0001"))
         due_retries = retry_calendar.take_due(
             now,
@@ -156,6 +183,7 @@ class PayoutCoordinator:
         for position in positions:
             if position.net >= 0:
                 continue
+            # 净额为负的账户需要外部资金,按 (币种, 账户) 汇总需求
             demands_by_currency[position.currency][position.account] += -position.net
         funding_plans: dict[str, Mapping[str, object]] = {}
         for currency, demands in sorted(demands_by_currency.items()):
@@ -181,6 +209,7 @@ class PayoutCoordinator:
         if len(findings) > 10:
             warnings.append(f"reconciliation-volume:{len(findings)}")
         if state_counts["deferred"] > max(1, len(intents) // 4):
+            # 推迟比例超过 1/4,视为集中度异常
             warnings.append(f"deferred-concentration:{state_counts['deferred']}")
         if account_failures:
             account, failures = account_failures.most_common(1)[0]

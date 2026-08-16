@@ -18,11 +18,17 @@ import java.util.TreeMap;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
+/**
+ * 审计事件:不可变的单一审计记录,字段全部经过规范化与白名单校验
+ * (租户/分类/主体/币种有正则约束,金额有范围与精度约束,属性键有保留字保护)。
+ */
 public final class AuditEvent {
+    // 各文本字段的允许格式(白名单式校验,拒绝异常输入)
     private static final Pattern TENANT = Pattern.compile("[a-z][a-z0-9_-]{1,47}");
     private static final Pattern CATEGORY = Pattern.compile("[a-z][a-z0-9_.-]{1,63}");
     private static final Pattern CURRENCY = Pattern.compile("[A-Z]{3}");
     private static final Pattern SUBJECT = Pattern.compile("[A-Za-z0-9][A-Za-z0-9:/_.-]{0,127}");
+    // 属性键保留字:与链式哈希/签名相关的字段不允许出现在自定义属性中,防止歧义与伪造
     private static final Set<String> RESERVED = Set.of("signature", "previousHash", "ordinal");
     private static final int MAX_ATTRIBUTE_COUNT = 48;
     private static final int MAX_ATTRIBUTE_KEY = 64;
@@ -37,6 +43,7 @@ public final class AuditEvent {
     private final Severity severity;
     private final String currency;
     private final BigDecimal amount;
+    // 账户级递增序号:同 (租户, 主体) 流内必须严格递增,是顺序完整性的依据
     private final long accountSequence;
     private final Map<String, String> attributes;
 
@@ -68,6 +75,10 @@ public final class AuditEvent {
         this.attributes = normalizeAttributes(attributes);
     }
 
+    /**
+     * 事件主键:租户/分类/主体/账户序号/事件ID 拼接而成,用于哈希链与去重,
+     * 同一主键唯一确定一条事件。
+     */
     public String canonicalKey() {
         StringBuilder key = new StringBuilder(160);
         key.append(tenant).append('/');
@@ -78,6 +89,10 @@ public final class AuditEvent {
         return key.toString();
     }
 
+    /**
+     * 把所有字段编码为长度无歧义的字节序列:每个值以 | 结尾,
+     * 值内的 \ 与 | 加反斜杠转义,\n/\r 转为字面量转义序列。
+     */
     public byte[] encodeFields() {
         StringBuilder text = new StringBuilder(512);
         appendEscaped(text, eventId.toString());
@@ -98,6 +113,10 @@ public final class AuditEvent {
         return text.toString().getBytes(StandardCharsets.UTF_8);
     }
 
+    /**
+     * 从 Map 反序列化事件(支持宽松类型:字符串/数字/布尔均接受),
+     * 用于日志/配置等非类型化输入源。
+     */
     public static AuditEvent fromMap(Map<String, ?> values) {
         Objects.requireNonNull(values, "values");
         UUID id = readUuid(values, "eventId");
@@ -169,6 +188,7 @@ public final class AuditEvent {
         return attributes;
     }
 
+    /** 以新属性集替换原属性(其余字段不变),属性经同一套校验。 */
     AuditEvent withAttributes(Map<String, String> replacement) {
         return new AuditEvent(
                 eventId,
@@ -184,6 +204,7 @@ public final class AuditEvent {
                 replacement);
     }
 
+    /** 以新执行者替换原执行者。 */
     AuditEvent withActor(String replacement) {
         return new AuditEvent(
                 eventId,
@@ -199,6 +220,7 @@ public final class AuditEvent {
                 attributes);
     }
 
+    /** 以新金额替换原金额(币种字段不变)。 */
     AuditEvent withAmount(BigDecimal replacement) {
         return new AuditEvent(
                 eventId,
@@ -214,6 +236,7 @@ public final class AuditEvent {
                 attributes);
     }
 
+    /** 预估编码后字节数(含固定开销与每个属性的分隔符开销),用于批次容量规划。 */
     int estimatedBytes() {
         int bytes = 96;
         bytes += utf8Length(tenant);
@@ -230,6 +253,7 @@ public final class AuditEvent {
         return bytes;
     }
 
+    /** 全序比较:时间优先,其次账户序号,最后事件 ID(用于确定性排序)。 */
     boolean belongsBefore(AuditEvent other) {
         int time = occurredAt.compareTo(other.occurredAt);
         if (time != 0) {
@@ -242,6 +266,7 @@ public final class AuditEvent {
         return eventId.compareTo(other.eventId) < 0;
     }
 
+    /** 通用文本校验:去空白后必须整体匹配正则。 */
     static String validateText(String name, String value, Pattern pattern) {
         Objects.requireNonNull(value, name);
         String trimmed = value.trim();
@@ -251,6 +276,7 @@ public final class AuditEvent {
         return trimmed;
     }
 
+    /** 执行者规范化:去空白、拒绝控制字符、限长 128。 */
     static String normalizeActor(String actor) {
         Objects.requireNonNull(actor, "actor");
         String normalized = actor.trim();
@@ -265,6 +291,7 @@ public final class AuditEvent {
         return normalized;
     }
 
+    /** 币种规范化:币种与金额必须成对出现(同空或同非空),币种转大写三字母。 */
     static String normalizeCurrency(String currency, BigDecimal amount) {
         if (currency == null && amount == null) {
             return null;
@@ -279,6 +306,7 @@ public final class AuditEvent {
         return normalized;
     }
 
+    /** 金额规范化:与币种成对出现,超过 8 位小数时银行家舍入,并限幅。 */
     static BigDecimal normalizeAmount(BigDecimal amount, String currency) {
         if (amount == null && currency == null) {
             return null;
@@ -295,6 +323,7 @@ public final class AuditEvent {
         return amount;
     }
 
+    /** 属性规范化:排序、去空白、数量与键值限长、拒绝保留字。 */
     static Map<String, String> normalizeAttributes(Map<String, String> source) {
         if (source == null || source.isEmpty()) {
             return Map.of();
@@ -458,6 +487,7 @@ public final class AuditEvent {
         return converted;
     }
 
+    /** 把值按 | 结尾追加,并对 \ | \n \r 做转义,保证编码可逆。 */
     static void appendEscaped(StringBuilder target, String value) {
         for (int index = 0; index < value.length(); index++) {
             char current = value.charAt(index);
@@ -475,6 +505,7 @@ public final class AuditEvent {
         target.append('|');
     }
 
+    /** 计算字符串的 UTF-8 编码字节数(按码点区间累加,正确处理增补平面字符)。 */
     static int utf8Length(String value) {
         int length = 0;
         for (int index = 0; index < value.length(); index++) {

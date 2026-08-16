@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+// BatchWindowInput 描述批处理的输入状态:待处理记录数、平均记录大小、写入器
+// 吞吐与调用频率、最老记录滞留时长、最大延迟与容量上限、内存预算等。
 type BatchWindowInput struct {
 	PendingRecords      int
 	AverageRecordBytes  int
@@ -19,6 +21,9 @@ type BatchWindowInput struct {
 	MemoryBudgetBytes   int
 }
 
+// BatchWindow 是批处理窗口决策:Records/Bytes 为本次应处理的规模,
+// ExpectedWrite 预估写入耗时,Immediate 标记是否应立即落盘(等不及攒批),
+// CapacityReason 说明规模由哪个约束决定。
 type BatchWindow struct {
 	Records        int
 	Bytes          int
@@ -27,8 +32,12 @@ type BatchWindow struct {
 	CapacityReason string
 }
 
+// BatchWindowSizer 计算最合适的批处理规模(占位实现,方法为值接收者)。
 type BatchWindowSizer struct{}
 
+// Size 在多个约束(条数上限、字节上限、内存预算、延迟-吞吐)中取最小者作为
+// 本批规模,同时允许在吞吐允许时放大到接近写入器调用频率的规模以提升效率;
+// 最老记录已超最大延迟时标记立即执行。
 func (BatchWindowSizer) Size(input BatchWindowInput) (BatchWindow, error) {
 	if input.PendingRecords < 0 {
 		return BatchWindow{}, errors.New("pending records cannot be negative")
@@ -110,6 +119,8 @@ func (BatchWindowSizer) Size(input BatchWindowInput) (BatchWindow, error) {
 	}, nil
 }
 
+// Bounds 返回批规模的合理区间 [minimum, maximum],供调度器在区间内按实际
+// 水位弹性调整;无待处理记录时返回空区间。
 func (BatchWindowSizer) Bounds(input BatchWindowInput) (int, int, error) {
 	window, err := (BatchWindowSizer{}).Size(input)
 	if err != nil {

@@ -5,6 +5,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 无框架测试运行器主入口:依次运行各测试套件,汇总断言数与耗时并输出。
+ * 单套件失败会带堆栈中止并传播。
+ */
 public final class RepositoryTest {
     private RepositoryTest() {
     }
@@ -25,6 +29,7 @@ public final class RepositoryTest {
         }
     }
 
+    /** 运行单个套件并计时;异常时打印堆栈并重抛。 */
     private static SuiteResult runSuite(String name, Suite suite) throws Exception {
         Instant started = Instant.now();
         try {
@@ -43,11 +48,13 @@ public final class RepositoryTest {
         }
     }
 
+    /** 套件入口的函数式接口。 */
     @FunctionalInterface
     private interface Suite {
         int run() throws Exception;
     }
 
+    /** 套件执行结果:名称、断言数、耗时(毫秒)。 */
     private record SuiteResult(String name, int assertions, long milliseconds) {
     }
 }

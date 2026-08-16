@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// ledgerReceipt 构造测试回执:证据摘要固定为 64 个 'c',满足校验要求。
 func ledgerReceipt(identity string, currency Currency, minor int64, at time.Time) Receipt {
 	return Receipt{
 		ReceiptID:      "receipt-" + identity,
@@ -22,6 +23,8 @@ func ledgerReceipt(identity string, currency Currency, minor int64, at time.Time
 	}
 }
 
+// TestLedgerJournalAppliesBalancedReceiptPostings 验证回执生成的一对借贷分录
+// 使双方余额正确增减、修订号递增,且对账无问题。
 func TestLedgerJournalAppliesBalancedReceiptPostings(t *testing.T) {
 	receipt := ledgerReceipt("balanced", CurrencyUSD, 12_500, testEpoch)
 	journal, err := NewLedgerJournal([]AccountBalance{
@@ -58,6 +61,8 @@ func TestLedgerJournalAppliesBalancedReceiptPostings(t *testing.T) {
 	}
 }
 
+// TestLedgerJournalIsIdempotentForIdenticalPosting 验证同一条分录重复应用不会
+// 重复入账:余额与修订号保持不变,账户流水也只有一行。
 func TestLedgerJournalIsIdempotentForIdenticalPosting(t *testing.T) {
 	journal, err := NewLedgerJournal(nil)
 	if err != nil {
@@ -92,6 +97,8 @@ func TestLedgerJournalIsIdempotentForIdenticalPosting(t *testing.T) {
 	}
 }
 
+// TestLedgerJournalRejectsIdentityConflict 验证同一分录 ID 携带不同内容时被拒绝,
+// 且拒绝不会影响已入账的余额。
 func TestLedgerJournalRejectsIdentityConflict(t *testing.T) {
 	journal, _ := NewLedgerJournal(nil)
 	original := LedgerPosting{
@@ -119,6 +126,8 @@ func TestLedgerJournalRejectsIdentityConflict(t *testing.T) {
 	}
 }
 
+// TestLedgerJournalEnforcesSequencePerAccountCurrency 验证每个“账户+币种”流上
+// 序号必须严格递增:更小或相等的序号被拒绝,更大序号正常入账。
 func TestLedgerJournalEnforcesSequencePerAccountCurrency(t *testing.T) {
 	journal, _ := NewLedgerJournal(nil)
 	base := LedgerPosting{
@@ -156,6 +165,8 @@ func TestLedgerJournalEnforcesSequencePerAccountCurrency(t *testing.T) {
 	}
 }
 
+// TestLedgerRejectTombstonePreventsFutureApplication 验证拒绝墓碑(仅首次生效)
+// 能阻止同名分录后续入账,且被拒分录不产生余额。
 func TestLedgerRejectTombstonePreventsFutureApplication(t *testing.T) {
 	journal, _ := NewLedgerJournal(nil)
 	if !journal.Reject("posting-tombstone", "manual compliance hold") {
@@ -183,6 +194,7 @@ func TestLedgerRejectTombstonePreventsFutureApplication(t *testing.T) {
 	}
 }
 
+// TestLedgerStatementFiltersAndOrders 验证账户流水按时间窗过滤,并按时序排序。
 func TestLedgerStatementFiltersAndOrders(t *testing.T) {
 	journal, _ := NewLedgerJournal(nil)
 	account := "statement-account"
@@ -211,6 +223,8 @@ func TestLedgerStatementFiltersAndOrders(t *testing.T) {
 	}
 }
 
+// TestLedgerOpeningBalancesValidateUniqueness 验证期初余额:“账户+币种”组合
+// 必须唯一,空账户被拒绝。
 func TestLedgerOpeningBalancesValidateUniqueness(t *testing.T) {
 	opening := []AccountBalance{
 		{Account: "opening-a", Currency: CurrencyUSD, Available: 100},
@@ -234,6 +248,8 @@ func TestLedgerOpeningBalancesValidateUniqueness(t *testing.T) {
 	}
 }
 
+// TestLedgerReconciliationReportsMissingAndMismatchedPostings 验证对账能发现分录
+// 缺失、借贷不等、金额与回执不符等问题并逐一报告。
 func TestLedgerReconciliationReportsMissingAndMismatchedPostings(t *testing.T) {
 	receipt := ledgerReceipt("mismatch", CurrencyAUD, 1_500, testEpoch)
 	journal, _ := NewLedgerJournal(nil)
@@ -262,6 +278,7 @@ func TestLedgerReconciliationReportsMissingAndMismatchedPostings(t *testing.T) {
 	}
 }
 
+// TestPostingValidationFailures 用参数化用例覆盖分录校验的全部非法输入。
 func TestPostingValidationFailures(t *testing.T) {
 	base := LedgerPosting{
 		PostingID:    "posting-valid",

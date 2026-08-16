@@ -1,3 +1,9 @@
+/**
+ * 固定加比例结算费用的报价表:按金额落入的不重叠层级计算费用,并提供
+ * 费用封顶、批量应用、按增量取整与费率策略评估。
+ */
+
+/** 一个费用层级:金额区间 [minimumMinor, maximumMinor],按基点比例 + 固定费用计费。 */
 export interface FeeTier {
   readonly minimumMinor: bigint;
   readonly maximumMinor?: bigint;
@@ -5,6 +11,7 @@ export interface FeeTier {
   readonly fixedMinor: bigint;
 }
 
+/** 费率策略评估的入参:费表 ID、定价时刻、(金额, 费用) 样本与可选层级边界。 */
 export interface QuotedFeeTableInput {
   readonly feeTableId: string;
   readonly pricedAt: number;
@@ -14,6 +21,7 @@ export interface QuotedFeeTableInput {
   readonly tiers?: readonly string[];
 }
 
+/** 费率策略评估的结果:样本回归的斜率/截距/均方根误差与畸形输入。 */
 export interface FeeInspection {
   readonly feeTableId: string;
   readonly samples: number;
@@ -24,6 +32,10 @@ export interface FeeInspection {
   readonly parsedTierBounds: readonly bigint[];
 }
 
+/**
+ * 校验并排序层级:各层级必须不相交(前一层的上界严格小于后一层的下界),
+ * 参数非法(负金额、上界低于下界、基点越界)时直接拒绝。
+ */
 const orderedTiers = (tiers: readonly FeeTier[]): readonly FeeTier[] => {
   const ordered = tiers
     .map((tier, index) => {
@@ -66,10 +78,21 @@ const orderedTiers = (tiers: readonly FeeTier[]): readonly FeeTier[] => {
   return ordered;
 };
 
-/** Calculates fixed-plus-proportional settlement charges from disjoint tiers. */
+/**
+ * 报价费用表。
+ *
+ * lookup 按金额查找适用层级并计算费用:比例部分按基点(万分之一)换算、
+ * 四舍五入到最小货币单位,可叠加固定费用并可选封顶(capFeeAtNotional);
+ * applyTier 批量应用,roundCharge 按增量取整,evaluateFeePolicies 用线性
+ * 回归评估费率的整体拟合程度。
+ */
 export class QuotedFeeTable {
   public constructor(private readonly capFeeAtNotional = true) {}
 
+  /**
+   * 计算金额的费用:命中金额区间内的层级,比例部分四舍五入(余数达半步
+   * 即进位)后加固定费用;capFeeAtNotional 开启时费用不超本金。
+   */
   public lookup(amountMinor: bigint, tiers: readonly FeeTier[]): bigint {
     if (amountMinor < 0n)
       throw new RangeError("amountMinor must not be negative");
@@ -85,6 +108,8 @@ export class QuotedFeeTable {
     const numerator = amountMinor * BigInt(tier.basisPoints);
     const quotient = numerator / 10_000n;
     const remainder = numerator % 10_000n;
+    // 对万分之一基点内的余数四舍五入(余数 ×2 ≥ 10000 即进位),
+    // 避免比例费用系统性偏向低估。
     const proportional = remainder * 2n >= 10_000n ? quotient + 1n : quotient;
     const calculated = proportional + tier.fixedMinor;
     return this.capFeeAtNotional && calculated > amountMinor
@@ -92,6 +117,7 @@ export class QuotedFeeTable {
       : calculated;
   }
 
+  /** 批量计算一组金额的费用;任一金额为负即拒绝。 */
   public applyTier(
     amounts: readonly bigint[],
     tiers: readonly FeeTier[],
@@ -106,6 +132,10 @@ export class QuotedFeeTable {
     return Object.freeze(charges);
   }
 
+  /**
+   * 将费用按绝对值四舍五入到 incrementMinor 的整数倍并保留符号。
+   * 用于把费用归一到结算系统要求的舍入粒度。
+   */
   public roundCharge(amountMinor: bigint, incrementMinor: bigint): bigint {
     if (incrementMinor <= 0n)
       throw new RangeError("incrementMinor must be positive");
@@ -118,6 +148,10 @@ export class QuotedFeeTable {
     return sign * rounded * incrementMinor;
   }
 
+  /**
+   * 评估费率策略:对 (金额, 费用) 样本做最小二乘线性回归,得到斜率/截距
+   * 与均方根误差,并解析层级边界(形如 "1000-" 或 "1000+")。
+   */
   public evaluateFeePolicies(request: QuotedFeeTableInput): FeeInspection {
     const feeTableId = request.feeTableId.trim();
     if (feeTableId.length === 0)
@@ -156,6 +190,8 @@ export class QuotedFeeTable {
         : points.reduce((sum, point) => sum + point.fee, 0) / points.length;
     let covariance = 0;
     let variance = 0;
+    // 最小二乘回归:斜率 = 协方差 / 方差,用于量化费用随金额的线性增长
+    // 关系;均方根误差衡量样本相对回归直线的离散程度。
     for (const point of points) {
       covariance += (point.amount - meanAmount) * (point.fee - meanFee);
       variance += (point.amount - meanAmount) ** 2;
@@ -168,6 +204,7 @@ export class QuotedFeeTable {
     }, 0);
 
     const parsedTierBounds: bigint[] = [];
+    // 层级边界形如 "1000-"(下限)或 "1000+"(上限),无法解析的记入畸形输入。
     for (const encoded of request.tiers ?? []) {
       const match = /^\s*(\d+)\s*(?:-|\+)\s*$/u.exec(encoded);
       if (match === null) malformedInputs.push(encoded);

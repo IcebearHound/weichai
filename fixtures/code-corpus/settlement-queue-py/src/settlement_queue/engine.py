@@ -1,3 +1,11 @@
+"""排队付款引擎:并发执行一批付款意图,含幂等、租约与重试。
+
+每个意图先通过 ReceiptLedger 获取幂等租约(同键同时只允许一个执行者),
+租约到期前重试获取;拿到租约后按 RetryPolicy 尝试调用网关,成功则
+根据"键+引用+金额"生成确定性收据 ID 并提交;失败按可重试性选择
+继续重试(指数退避 + 确定性抖动)、拒绝或推迟。
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -11,11 +19,19 @@ from .ledger import ReceiptLedger
 from .model import DeliveryReceipt, GatewayReply, PayoutIntent, PayoutResult, RetryPolicy
 
 
+# 网关调用签名:接收意图、幂等键与尝试次数,返回应答
 Gateway = Callable[[PayoutIntent, str, int], Awaitable[GatewayReply]]
+# 幂等键工厂:由意图与序号生成唯一键
 IdentityFactory = Callable[[PayoutIntent, int], str]
 
 
 class QueuedPayoutEngine:
+    """并发排队付款引擎。
+
+    execute_group 以信号量限流并发执行一组意图;
+    内部 _execute_one 完成单意图的租约获取、网关重试与收据提交。
+    """
+
     def __init__(
         self,
         ledger: ReceiptLedger,
@@ -46,6 +62,11 @@ class QueuedPayoutEngine:
         identity: IdentityFactory,
         gateway: Gateway,
     ) -> list[PayoutResult]:
+        """并发执行一组意图,返回结果列表(与输入顺序一一对应)。
+
+        用 Semaphore 限制并发;单个任务失败(未捕获异常)时返回
+        state="deferred" 的结果,不中断其它任务。
+        """
         semaphore = asyncio.Semaphore(self._concurrency)
         tasks: list[asyncio.Task[PayoutResult]] = []
         for ordinal, item in enumerate(items):
@@ -94,6 +115,7 @@ class QueuedPayoutEngine:
             return PayoutResult(item.identity, ordinal, "rejected", 0, reason="currency must be a three-letter code")
         if not key:
             return PayoutResult(item.identity, ordinal, "rejected", 0, reason="idempotency key is required")
+        # 租约获取有期限:2 倍租约时长内抢不到即放弃(避免无限等待)
         owner = f"{uuid4().hex}:{ordinal}"
         acquisition_deadline = asyncio.get_running_loop().time() + self._lease_seconds * 2
         reservation = None
@@ -101,6 +123,7 @@ class QueuedPayoutEngine:
             now = self._clock()
             existing, observed, owned = await self._ledger.reserve(key, owner, now, self._lease_seconds)
             if existing is not None:
+                # 已存在收据:幂等命中,直接返回已结算
                 return PayoutResult(
                     identity=item.identity,
                     ordinal=ordinal,
@@ -111,6 +134,7 @@ class QueuedPayoutEngine:
             if owned and observed is not None:
                 reservation = observed
                 break
+            # 租约被他人持有:等到其过期或获取期限耗尽
             remaining = acquisition_deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 retry_after = observed.expires_at if observed is not None else now + timedelta(seconds=1)
@@ -139,6 +163,7 @@ class QueuedPayoutEngine:
                     except asyncio.CancelledError:
                         raise
                     except Exception as error:
+                        # 网关调用抛异常:转成拒绝应答,统一走重试判定
                         reply = GatewayReply(
                             accepted=False,
                             reference="",
@@ -149,6 +174,7 @@ class QueuedPayoutEngine:
                         )
                     last_reply = reply
                     if reply.accepted:
+                        # 收据 ID 由幂等键+引用+金额确定性生成:同键重放产生同一收据
                         seed = f"{key}|{reply.reference}|{item.money.currency}|{item.money.amount}"
                         receipt_id = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
                         receipt = DeliveryReceipt(
@@ -181,13 +207,16 @@ class QueuedPayoutEngine:
                     last_reason = f"{reply.code}: {reply.message}"
                     retryable = reply.code in self._retry_policy.retryable_codes or reply.code == "exception"
                     if not retryable:
+                        # 永久失败:立即拒绝
                         return PayoutResult(item.identity, ordinal, "rejected", attempt, reason=last_reason)
                     if attempt >= self._retry_policy.maximum_attempts:
                         break
+                    # 指数退避:base × 2^(attempt-1),封顶 maximum_delay
                     exponential = min(
                         self._retry_policy.maximum_delay_seconds,
                         self._retry_policy.base_delay_seconds * (2 ** (attempt - 1)),
                     )
+                    # 确定性抖动:由键+尝试次数导出 [0,1),再映射到 ±jitter_fraction
                     digest = hashlib.blake2s(f"{key}:{attempt}".encode("utf-8"), digest_size=4).digest()
                     unit = int.from_bytes(digest, "big") / 0xFFFFFFFF
                     jitter = exponential * self._retry_policy.jitter_fraction * (unit * 2 - 1)
@@ -204,4 +233,5 @@ class QueuedPayoutEngine:
                 retry_after=retry_at,
             )
         finally:
+            # 无论成败都释放租约,避免键被永久占用
             await self._ledger.release(reservation)

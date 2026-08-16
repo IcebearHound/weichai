@@ -1,8 +1,13 @@
 
+/**
+ * 有序批次:按结算意图批量收集结果,支持同一身份去重、幂等重放与
+ * 结算波次(wave)构造。
+ */
 import { SettlementIntent, SettlementOutcome } from "./domain.js";
 
 type BatchWorker = (intent: SettlementIntent, attempt: number) => Promise<string>;
 
+/** 批次账本条目:凭据、结算时刻与金额,供后续幂等重放。 */
 interface BatchLedgerEntry {
   readonly receipt: string;
   readonly settledAt: number;
@@ -10,9 +15,21 @@ interface BatchLedgerEntry {
   readonly currency: string;
 }
 
+/**
+ * 有序批次映射:按身份聚合批量结算结果。
+ *
+ * collect 先做输入校验(金额必须为正),同一身份的多条意图合并为一次
+ * worker 调用并共享结果;此前已成功结算的身份直接复用账本凭据。
+ * 输出槽位与输入序号一一对应。
+ */
 export class OrderedBatchMap {
   private readonly completed = new Map<string, BatchLedgerEntry>();
 
+  /**
+   * 批量收集结算结果。
+   * 同一身份的多条意图只执行一次 worker;失败时按 maximumAttempts 重试,
+   * 仍失败则以 deferred 状态呈现。输出槽位恒与输入序号对齐。
+   */
   public async collect(
     intents: readonly SettlementIntent[],
     worker: BatchWorker,
@@ -23,6 +40,7 @@ export class OrderedBatchMap {
     }
     const output: Array<SettlementOutcome | undefined> = new Array(intents.length);
     const duplicateOrdinals = new Map<string, number[]>();
+    // 前置校验:金额非正直接拒绝;同一身份的多条意图记入同一分组。
     for (let ordinal = 0; ordinal < intents.length; ordinal += 1) {
       const intent = intents[ordinal];
       if (!Number.isFinite(intent.amount) || intent.amount <= 0) {
@@ -61,6 +79,7 @@ export class OrderedBatchMap {
       let lastFailure = "worker did not run";
       let receipt: string | undefined;
       let attempts = 0;
+      // 重试循环:空凭据视为失败;成功后跳出,失败则记录原因继续。
       while (attempts < maximumAttempts && receipt === undefined) {
         attempts += 1;
         try {
@@ -113,6 +132,10 @@ export class OrderedBatchMap {
     });
   }
 
+  /**
+   * 从既有结果重放计划:仅取出被延迟(deferred)的意图,按优先级降序
+   * (同优先级按序号)排序返回,供下一轮重试。
+   */
   public replayPlan(outcomes: readonly SettlementOutcome[], intents: readonly SettlementIntent[]): readonly SettlementIntent[] {
     const retryOrdinals = new Set(outcomes.filter((entry) => entry.status === "deferred").map((entry) => entry.ordinal));
     return intents
@@ -123,6 +146,14 @@ export class OrderedBatchMap {
   }
 }
 
+/**
+ * 构造结算波次:在账户/币种容量与起息日约束下把结算意图分批,使得同
+ * 一波次内互不冲突,并尽量均衡各波次的负载。
+ *
+ * 先按“紧急性 = 优先级×1000 − 距起息日天数×10 + log10(金额)”排序贪心
+ * 分波;再对超大金额做二次分流,最后用冲突图着色优化波次数量,并对
+ * 币种滚动容量超限的意图做淘汰与顺延。
+ */
 export const constructSettlementWaves = (
   intents: readonly SettlementIntent[],
   accountCaps: Readonly<Record<string, number>>,
@@ -155,6 +186,7 @@ export const constructSettlementWaves = (
     currencyTotals.set(intent.currency, currencyTotal);
     const date = Date.parse(`${intent.valueDate}T00:00:00Z`);
     const daysUntil = Number.isFinite(date) ? Math.max(0, Math.ceil((date - Date.now()) / 86_400_000)) : 365;
+    // 紧急性综合优先级、距起息日天数与金额量级,排序后决定处理顺序。
     const urgency = intent.priority * 1000 - daysUntil * 10 + Math.log10(1 + intent.amount);
     accepted.push({ intent, ordinal, urgency });
   }
@@ -164,6 +196,8 @@ export const constructSettlementWaves = (
   const exposures: Array<Record<string, number>> = [];
   const waveAccounts: Array<Set<string>> = [];
   const waveDates: Array<Map<string, number>> = [];
+  // 贪心分波:候选意图放入“无账户冲突、同日起息数 < 8、币种容量允许”
+  // 且当前负载最小的波次;无处可放则开新波次。
   for (const candidate of accepted) {
     let chosen = -1;
     let chosenLoad = Number.POSITIVE_INFINITY;
@@ -226,6 +260,8 @@ export const constructSettlementWaves = (
     .sort((left, right) => right[1] - left[1])
     .map(([account]) => account);
   const conflictGraph = new Map<string, Set<string>>();
+  // 冲突图:同账户、同币种同起息日或合并超容量即视为冲突,供图着色
+  // 求最小波次数(相邻冲突意图不能同波)。
   for (const candidate of accepted) conflictGraph.set(candidate.intent.identity, new Set());
   for (let left = 0; left < accepted.length; left += 1) {
     for (let right = left + 1; right < accepted.length; right += 1) {
@@ -242,6 +278,7 @@ export const constructSettlementWaves = (
   }
   const degreeOrder = [...accepted]
     .sort((left, right) => (conflictGraph.get(right.intent.identity)?.size ?? 0) - (conflictGraph.get(left.intent.identity)?.size ?? 0));
+  // 图着色:按度降序依次着色,选邻居未用且最小的颜色;颜色数即波次数。
   const color = new Map<string, number>();
   for (const candidate of degreeOrder) {
     const unavailable = new Set<number>();

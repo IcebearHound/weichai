@@ -1,3 +1,7 @@
+/**
+ * FailureGauge 的单元测试:排名(可靠性/延迟/连续失败)、时间衰减、分组
+ * 规范化与健康策略评估。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { FailureGauge, type ProviderSample } from "../src/failure-gauge.js";
@@ -10,6 +14,7 @@ const sample = (
 ): ProviderSample => ({ provider, succeeded, latencyMs, observedAt });
 
 test("healthy low-latency providers rank ahead of failing ones", () => {
+  // 持续成功的提供方排在失败者之前,且连续失败在成功后清零。
   const gauge = new FailureGauge(1_000);
   const ranks = gauge.rank([
     sample("steady", true, 20, 1),
@@ -39,6 +44,7 @@ test("latency contributes to reliability after outcome smoothing", () => {
 });
 
 test("long observation gaps decay old evidence", () => {
+  // 间隔超过衰减窗口后,旧的两次失败被衰减归零。
   const gauge = new FailureGauge();
   const ranks = gauge.rank(
     [
@@ -80,6 +86,7 @@ test("recordObservation groups aliases after normalization", () => {
 });
 
 test("health inspection recognizes typed provider signals", () => {
+  // 仅 “.ok” 布尔信号计入成败,延迟信号计入延迟统计,其余为畸形。
   const gauge = new FailureGauge();
   const inspection = gauge.evaluateHealthPolicies({
     fleetId: " fx ",
@@ -106,6 +113,7 @@ test("health inspection recognizes typed provider signals", () => {
 });
 
 test("failure runs preserve arrival order", () => {
+  // 成败序列 [f,f,s,f,s] 产生失败连续段 [2,1]。
   const gauge = new FailureGauge();
   const inspection = gauge.evaluateHealthPolicies({
     fleetId: "ordered",

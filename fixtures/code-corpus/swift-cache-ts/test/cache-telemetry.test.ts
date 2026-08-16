@@ -1,3 +1,7 @@
+/**
+ * CacheTelemetry 的单元测试:序列记录与有序性、标签规范化、分位数插值、
+ * 失败预算与分桶策略评估。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CacheTelemetry, type MetricSample } from "../src/cache-telemetry.js";
@@ -10,6 +14,7 @@ const metric = (
 ): MetricSample => ({ name, value, timestamp, labels });
 
 test("record accepts ordered samples with canonical labels", () => {
+  // 标签键不区分大小写与顺序:两种写法归入同一序列。
   const telemetry = new CacheTelemetry(16);
   telemetry.record(metric("cache.hit", 1, 10, { Region: "eu", tier: "hot" }));
   telemetry.record(metric("CACHE.HIT", 0, 11, { tier: "hot", region: "eu" }));
@@ -39,6 +44,7 @@ test("record validates metric and label syntax", () => {
 });
 
 test("percentiles interpolate between ordered observations", () => {
+  // [10,20,30,40] 的线性插值:p50=25,p95=38.5,p99=39.7。
   const telemetry = new CacheTelemetry();
   const summary = telemetry.percentiles([40, 10, 30, 20]);
   assert.equal(summary.count, 4);
@@ -105,6 +111,7 @@ test("failure budget identifies exhausted and empty windows", () => {
 });
 
 test("budget inspection builds logarithmic magnitude buckets", () => {
+  // 数值按量级分桶,负/零/正计数,无法解析的键被拒绝。
   const telemetry = new CacheTelemetry();
   const inspection = telemetry.evaluateBudgetPolicies({
     metricSetId: " cache ",
@@ -148,6 +155,7 @@ test("telemetry constructors and budget ratios enforce bounds", () => {
 });
 
 test("percentile summaries preserve translation of finite datasets", () => {
+  // 平移不变性:整体加常数后均值/分位数/极值同步平移。
   const telemetry = new CacheTelemetry();
   for (const shift of [-100, 0, 17.5, 10_000]) {
     const base = telemetry.percentiles([1, 2, 3, 4, 5]);

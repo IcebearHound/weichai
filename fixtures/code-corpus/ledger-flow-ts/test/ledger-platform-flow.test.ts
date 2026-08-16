@@ -1,3 +1,8 @@
+/**
+ * 平台级端到端流程测试:把多个模块串成完整链路(批量结算 -> 账本、
+ * 轧差 -> 计费 -> 结算、消息投递 -> 遥测、路由/截止/审计名组合分区等),
+ * 验证跨模块组合行为与资金守恒。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AuditNameCodec } from "../src/audit-name-codec.js";
@@ -15,6 +20,7 @@ import { SettlementTelemetry } from "../src/settlement-telemetry.js";
 test("settled batch receipts form a recoverable ledger chain", async () => {
   const committer = new OrderedBatchCommitter(2, 0, async () => undefined);
   const journal = new LedgerJournal();
+  // 结算凭据写入账本哈希链后,应能完整恢复且凭据计数一致。
   const items = [
     { instructionId: "i-1", accountId: "a", amountMinor: 10n, currency: "EUR" },
     { instructionId: "i-2", accountId: "b", amountMinor: 20n, currency: "USD" },
@@ -45,6 +51,7 @@ test("netting instructions become fee-bearing settlement items", async () => {
   const planner = new NettingPlanner(true);
   const fees = new QuotedFeeTable();
   const committer = new OrderedBatchCommitter();
+  // 轧差指令叠加费用表后成为带费结算项:100000 本金 + 205 费用。
   const instructions = planner.plan([
     { account: "debtor", currency: "EUR", amountMinor: -100_000n, priority: 0 },
     {
@@ -112,6 +119,7 @@ test("receipt reconciliation confirms committed outcomes against an archive", as
 test("trade message dispatch records settlement telemetry only after processing", async () => {
   const pump = new OrderedMessagePump();
   const telemetry = new SettlementTelemetry();
+  // 遥测记录发生在 handler 内部,投递完成前不落遥测,时钟驱动验证时序。
   let clock = 100;
   await pump.dispatch(
     {
@@ -141,6 +149,7 @@ test("trade message dispatch records settlement telemetry only after processing"
 test("failed dispatch is absent from success telemetry and broker ack", async () => {
   const pump = new OrderedMessagePump();
   const telemetry = new SettlementTelemetry();
+  // 处理失败时不应执行 ack,但失败遥测仍应计入重试预算。
   let acknowledged = false;
   await assert.rejects(
     pump.dispatch(
@@ -187,6 +196,7 @@ test("route, cutoff and audit name compose a storage partition", () => {
 test("market memo caches route parsing without pretending to coalesce", async () => {
   const parser = new RouteCodeParser();
   const memo = new MarketMemo();
+  // 同一键(含大小写差异)只加载一次;memo 不做请求合并,此为其语义。
   let parses = 0;
   const first = await memo.read("ROUTE/LON-NYC", async () => {
     parses += 1;
@@ -204,6 +214,7 @@ test("market memo caches route parsing without pretending to coalesce", async ()
 test("partial settlement retry journals each receipt once", async () => {
   const committer = new OrderedBatchCommitter(1, 0, async () => undefined);
   const journal = new LedgerJournal();
+  // 首次提交部分失败,恢复后重试应只补记新凭据,不产生重复账本记录。
   let recover = false;
   const batch = [
     {
@@ -258,6 +269,7 @@ test("partial settlement retry journals each receipt once", async () => {
 test("multi-currency end-to-end scenario preserves financial balance", async () => {
   const planner = new NettingPlanner(true);
   const committer = new OrderedBatchCommitter();
+  // 多币种场景:轧差 -> 残差 -> 提交,残差之和应为 0(资金守恒)。
   const positions = [
     { account: "a", currency: "EUR", amountMinor: -100n, priority: 1 },
     { account: "b", currency: "EUR", amountMinor: 60n, priority: 0 },
@@ -291,6 +303,7 @@ test("multi-currency end-to-end scenario preserves financial balance", async () 
 
 test("independent daily keys produce independent receipt namespaces", async () => {
   const committer = new OrderedBatchCommitter();
+  // 不同幂等键(不同日期)即使指令相同也各自产生独立凭据。
   const batch = [
     { instructionId: "same", accountId: "a", amountMinor: 1n, currency: "EUR" },
   ];

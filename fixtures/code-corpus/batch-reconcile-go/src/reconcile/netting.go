@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// NetPosition 是净额轧差周期内,某一账户在某一币种下的轧差结果:IncomingMinor
+// 为该账户收到的全部金额,OutgoingMinor 为支出金额,NetMinor 为两者之差
+// (正为净收、负为净付);Earliest/Latest 记录相关支付的时间跨度。
 type NetPosition struct {
 	Account       string
 	Currency      Currency
@@ -19,6 +22,9 @@ type NetPosition struct {
 	Latest        time.Time
 }
 
+// LiquidityInstruction 是针对净付账户的流动性安排:先动用现有余额
+// (AvailableMinor),不足部分(ShortfallMinor)申请日内授信,并给出最晚到账
+// 时限 Deadline,Source 标记资金来源于“现有余额”还是“日内授信”。
 type LiquidityInstruction struct {
 	Account        string
 	Currency       Currency
@@ -29,6 +35,9 @@ type LiquidityInstruction struct {
 	Source         string
 }
 
+// NettingCycle 是一次净额轧差周期:在 OpenedAt 开启、ClosesAt 关闭,纳入该
+// 周期内的支付与轧差后的账户头寸。GrossMinor 为周期内支付总额,NetDebitMinor
+// 为所有净付账户的合计缺口,Balanced 表示轧差后收付平衡(可净额清算)。
 type NettingCycle struct {
 	CycleID       string
 	Currency      Currency
@@ -41,6 +50,9 @@ type NettingCycle struct {
 	Balanced      bool
 }
 
+// CalculateNetPositions 对一批支付按“账户 + 币种”聚合,计算出每个账户的
+// 收付金额、净额、支付笔数及最早/最晚时间。同一账户在多个币种下分别
+// 记账,返回结果按币种、账户排序以保证确定性。
 func CalculateNetPositions(payments []Payment) ([]NetPosition, error) {
 	type accumulator struct {
 		incoming int64
@@ -109,6 +121,9 @@ func CalculateNetPositions(payments []Payment) ([]NetPosition, error) {
 	return positions, nil
 }
 
+// BuildNettingCycles 把一批支付按币种分成多个轧差周期(周期时长为 window):
+// 每周期内按优先级、请求时间排序后计算净头寸,并汇总总额与净付缺口;
+// Balanced 反映该币种周期内收付是否恰好平衡。
 func BuildNettingCycles(payments []Payment, openedAt time.Time, window time.Duration) ([]NettingCycle, error) {
 	if openedAt.IsZero() {
 		return nil, errors.New("cycle opening time is required")
@@ -172,6 +187,8 @@ func BuildNettingCycles(payments []Payment, openedAt time.Time, window time.Dura
 	return cycles, nil
 }
 
+// PlanLiquidity 为所有净付账户生成流动性计划:按净付额从大到小排序(缺口
+// 越大的账户越优先安排资金),现有余额不足的部分记为需授信补足的缺口。
 func PlanLiquidity(positions []NetPosition, balances map[string]int64, deadline time.Time) []LiquidityInstruction {
 	result := make([]LiquidityInstruction, 0)
 	for _, position := range positions {
@@ -213,6 +230,9 @@ func PlanLiquidity(positions []NetPosition, balances map[string]int64, deadline 
 	return result
 }
 
+// SelectSettlingPayments 在账户限额(limits,按“账户+币种”键)约束下挑选
+// 本期可以清算的支付:未超限额的支付接受执行,一旦累计金额超过限额则
+// 剩余支付顺延到下一周期。
 func SelectSettlingPayments(cycle NettingCycle, limits map[string]int64) ([]Payment, []Payment) {
 	accepted := make([]Payment, 0, len(cycle.Payments))
 	deferred := make([]Payment, 0)

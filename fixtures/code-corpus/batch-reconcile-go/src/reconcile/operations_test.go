@@ -7,6 +7,9 @@ import (
 	"time"
 )
 
+// TestRankClearingRoutesCombinesReliabilityFeeAndLatency 验证路由评分在权重侧重
+// 不同时给出不同胜者(费用优先选便宜路由、延迟优先选快路由),且聚合统计
+// (观测数、成功率、中位/P95 延迟、平均费用)正确。
 func TestRankClearingRoutesCombinesReliabilityFeeAndLatency(t *testing.T) {
 	observations := []RouteObservation{
 		{Route: "fast-expensive", Currency: CurrencyUSD, FeeMinor: 20, Latency: 10 * time.Millisecond, Succeeded: true, ObservedAt: testEpoch, Provider: "provider-a"},
@@ -41,6 +44,8 @@ func TestRankClearingRoutesCombinesReliabilityFeeAndLatency(t *testing.T) {
 	}
 }
 
+// TestRankClearingRoutesSkipsMalformedObservations 验证空路由、坏币种、负费用/
+// 延迟等异常观测被跳过,不影响其余路由评分。
 func TestRankClearingRoutesSkipsMalformedObservations(t *testing.T) {
 	observations := []RouteObservation{
 		{Route: "", Currency: CurrencyUSD, FeeMinor: 1, Latency: time.Millisecond, Succeeded: true},
@@ -55,6 +60,8 @@ func TestRankClearingRoutesSkipsMalformedObservations(t *testing.T) {
 	}
 }
 
+// TestBucketOutstandingPaymentsUsesSortedUniqueBoundaries 验证边界清洗:负值与
+// 重复边界被剔除、自动排序,分桶结果(含“最老及以上”桶)与金额统计正确。
 func TestBucketOutstandingPaymentsUsesSortedUniqueBoundaries(t *testing.T) {
 	payments := []Payment{
 		testPayment("age-new", "s1", "t1", CurrencyUSD, 100, -10*time.Minute),
@@ -81,6 +88,8 @@ func TestBucketOutstandingPaymentsUsesSortedUniqueBoundaries(t *testing.T) {
 	}
 }
 
+// TestTraceReceiptLineageOrdersDepthAndFindsOrphans 验证血缘深度计算(祖先链
+// 最长深度)、父子关系列表,以及引用缺失父节点的孤儿标记与问题报告。
 func TestTraceReceiptLineageOrdersDepthAndFindsOrphans(t *testing.T) {
 	root := storedReceipt("lineage-root", "lineage-batch", 0)
 	childA := storedReceipt("lineage-a", "lineage-batch", time.Second)
@@ -115,6 +124,8 @@ func TestTraceReceiptLineageOrdersDepthAndFindsOrphans(t *testing.T) {
 	}
 }
 
+// TestTraceReceiptLineageReportsDuplicateAndCycle 验证血缘图能同时报告重复回执
+// 与回执间成环两种异常。
 func TestTraceReceiptLineageReportsDuplicateAndCycle(t *testing.T) {
 	first := storedReceipt("cycle-a", "cycle-batch", 0)
 	second := storedReceipt("cycle-b", "cycle-batch", time.Second)
@@ -132,6 +143,8 @@ func TestTraceReceiptLineageReportsDuplicateAndCycle(t *testing.T) {
 	}
 }
 
+// TestInspectIdempotencyKeysReportsPositionsPrefixesAndDigest 验证幂等键体检:
+// 空键位置、重复键出现位置、前缀(大小写不敏感)计数与确定性摘要。
 func TestInspectIdempotencyKeysReportsPositionsPrefixesAndDigest(t *testing.T) {
 	keys := []string{
 		"pay-eu-0001",
@@ -168,6 +181,8 @@ func TestInspectIdempotencyKeysReportsPositionsPrefixesAndDigest(t *testing.T) {
 	}
 }
 
+// TestQuoteSeriesSummarizeIgnoresNonFiniteValues 验证摘要过滤 NaN/Inf,空序列
+// 返回 "empty",正常序列返回数量、最小、中位、最大。
 func TestQuoteSeriesSummarizeIgnoresNonFiniteValues(t *testing.T) {
 	series := QuoteSeries{}
 	if got := series.Summarize(nil); got != "empty" {
@@ -182,6 +197,8 @@ func TestQuoteSeriesSummarizeIgnoresNonFiniteValues(t *testing.T) {
 	}
 }
 
+// TestProviderInvoiceRouterUsesLongestMatchingPrefix 验证发票路由:前缀匹配
+// 忽略大小写与首尾空白,最长前缀优先,无匹配落入默认队列。
 func TestProviderInvoiceRouterUsesLongestMatchingPrefix(t *testing.T) {
 	router := ProviderInvoiceRouter{
 		RegionPrefixes: map[string]string{
@@ -205,6 +222,8 @@ func TestProviderInvoiceRouterUsesLongestMatchingPrefix(t *testing.T) {
 	}
 }
 
+// TestTradeEventChartMaintainsRollingFiniteWindow 验证滚动窗口:超出容量丢弃最
+// 旧点,NaN/Inf 被忽略且不影响计数。
 func TestTradeEventChartMaintainsRollingFiniteWindow(t *testing.T) {
 	chart := TradeEventChart{Limit: 3}
 	if chart.Add(1.1) != 1 || chart.Add(2.2) != 2 || chart.Add(3.3) != 3 {
@@ -227,6 +246,8 @@ func TestTradeEventChartMaintainsRollingFiniteWindow(t *testing.T) {
 	}
 }
 
+// TestAuditFlushGraphNormalizesUniqueLabels 验证坐标轴标签去空、去重、按小写
+// 排序且不修改输入切片。
 func TestAuditFlushGraphNormalizesUniqueLabels(t *testing.T) {
 	graph := AuditFlushGraph{}
 	labels := []string{" zulu ", "Alpha", "alpha", "", "Beta", "Beta", "delta", "  "}

@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+// TestTimedSnapshotCachesFreshQuotesAndDefendsStoredValues 验证新鲜期内命中缓存
+// 不再回源,且返回的克隆副本可被调用方修改而不污染缓存。
 func TestTimedSnapshotCachesFreshQuotesAndDefendsStoredValues(t *testing.T) {
 	clock := newManualClock()
 	snapshot, err := NewTimedSnapshot(clock, snapshotPolicy())
@@ -45,6 +47,8 @@ func TestTimedSnapshotCachesFreshQuotesAndDefendsStoredValues(t *testing.T) {
 	requireEqual(t, numbers.Flights, 0)
 }
 
+// TestTimedSnapshotCoalescesConcurrentPairLoads 验证同键并发请求合并为单次回源:
+// 24 个调用方共享一次加载,指标中合并等待数正确。
 func TestTimedSnapshotCoalescesConcurrentPairLoads(t *testing.T) {
 	clock := newManualClock()
 	snapshot, err := NewTimedSnapshot(clock, snapshotPolicy())
@@ -124,6 +128,8 @@ func TestTimedSnapshotCoalescesConcurrentPairLoads(t *testing.T) {
 	requireEqual(t, numbers.Flights, 0)
 }
 
+// TestTimedSnapshotReturnsRetainedQuoteWhenRefreshFails 验证刷新失败时降级返回
+// 带 Stale 标记的旧报价;超过陈旧保留期后不再降级并返回不可用错误。
 func TestTimedSnapshotReturnsRetainedQuoteWhenRefreshFails(t *testing.T) {
 	clock := newManualClock()
 	snapshot, err := NewTimedSnapshot(clock, snapshotPolicy())
@@ -164,6 +170,8 @@ func TestTimedSnapshotReturnsRetainedQuoteWhenRefreshFails(t *testing.T) {
 	requireEqual(t, snapshot.Numbers().Entries, 0)
 }
 
+// TestTimedSnapshotHonorsLoadDeadline 验证回源超过 LoadTimeout 会被取消并计入
+// 超时指标,返回不可用错误。
 func TestTimedSnapshotHonorsLoadDeadline(t *testing.T) {
 	clock := newManualClock()
 	policy := snapshotPolicy()
@@ -187,6 +195,8 @@ func TestTimedSnapshotHonorsLoadDeadline(t *testing.T) {
 	requireEqual(t, snapshot.Numbers().Flights, 0)
 }
 
+// TestTimedSnapshotWaiterCanCancelWithoutCancelingSharedLoad 验证等待者取消不
+// 影响共享回源:发起者仍能完成并写入缓存,后续请求直接命中。
 func TestTimedSnapshotWaiterCanCancelWithoutCancelingSharedLoad(t *testing.T) {
 	clock := newManualClock()
 	snapshot, err := NewTimedSnapshot(clock, snapshotPolicy())
@@ -230,6 +240,8 @@ func TestTimedSnapshotWaiterCanCancelWithoutCancelingSharedLoad(t *testing.T) {
 	requireEqual(t, snapshot.Numbers().Loads, uint64(1))
 }
 
+// TestTimedSnapshotEvictsLeastUsedEntryAndSupportsInvalidation 验证容量淘汰(最
+// 少使用优先)与手动失效接口,非法货币对不接受失效。
 func TestTimedSnapshotEvictsLeastUsedEntryAndSupportsInvalidation(t *testing.T) {
 	clock := newManualClock()
 	policy := snapshotPolicy()
@@ -261,6 +273,7 @@ func TestTimedSnapshotEvictsLeastUsedEntryAndSupportsInvalidation(t *testing.T) 
 	}
 }
 
+// TestTimedSnapshotRejectsInvalidPolicies 验证策略参数越界与空时钟都被构造器拒绝。
 func TestTimedSnapshotRejectsInvalidPolicies(t *testing.T) {
 	clock := newManualClock()
 	cases := []struct {
@@ -291,6 +304,8 @@ func TestTimedSnapshotRejectsInvalidPolicies(t *testing.T) {
 	}
 }
 
+// TestTimedSnapshotRejectsMalformedLoaderResults 验证回源结果非法(货币对不符、
+// 空提供方、交叉价、已过期)时,加载被拒且不写入缓存。
 func TestTimedSnapshotRejectsMalformedLoaderResults(t *testing.T) {
 	clock := newManualClock()
 	cases := []struct {

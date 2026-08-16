@@ -1,3 +1,12 @@
+"""价值日规划器:校验意图、调整价值日并分波调度。
+
+build 依次:校验每个意图(身份/币种/金额/价值日/账户与币种限额),
+用业务日历调整价值日;按"紧急度"(优先级、距请求日天数、金额)排序;
+把存在冲突(同账户/同收款人同日/同通道币种/超币种限额)的意图用
+贪心图着色分到不同波次,并在波内施加账户互斥、同日饱和(每日期最多 8)
+与波大小上限;输出 BatchPlan(含拒绝原因、告警与汇总)。
+"""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -11,6 +20,11 @@ from .model import BatchPlan, Money, PayoutIntent
 
 
 class ValueDatePlanner:
+    """批次价值日与波次规划器。
+
+    build 把一批意图转化为可执行的 BatchPlan。
+    """
+
     def __init__(
         self,
         calendar: BusinessCalendar,
@@ -35,6 +49,16 @@ class ValueDatePlanner:
         blocked_dates: frozenset[date] = frozenset(),
         settlement_cycles: Mapping[str, int] | None = None,
     ) -> BatchPlan:
+        """规划一批付款意图,返回 BatchPlan。
+
+        1) 逐意图校验并调整价值日(modified-following + 结算周期),
+           同时按账户/币种限额做容量控制(超额即拒绝);
+        2) 按紧急度降序处理冲突图着色:冲突意图(同账户/同收款人同日/
+           同通道币种/合并超币种限额)不能同波;
+        3) 分波时额外遵守:同波无同账户、每价值日每波至多 8 条、
+           波大小 ≤ maximum_wave_size;被迫后移超过 2 波产生告警;
+        4) 波内按 (价值日, 优先级降序, 身份) 排序,并输出各类汇总与告警。
+        """
         cycles = {currency.upper(): days for currency, days in (settlement_cycles or {}).items()}
         rejected: dict[str, str] = {}
         warnings: list[str] = []
@@ -89,9 +113,12 @@ class ValueDatePlanner:
             currency_running[currency] = currency_total
             adjusted_dates[intent.identity] = adjusted
             days_from_requested = (adjusted - intent.value_date).days
+            # 紧急度:优先级越高越靠前,推迟天数越多越靠后,金额大者优先
             urgency = Decimal(intent.priority * 1000 - days_from_requested * 10) + intent.money.amount.ln()
             accepted.append((ordinal, intent, adjusted, urgency))
         accepted.sort(key=lambda row: (-row[3], row[2], row[0]))
+        # 冲突定义:同账户 / 同收款人且同价值日 / 同通道同币种 /
+        # 合并金额超过币种限额 —— 任一项成立即不能同波
         conflicts: dict[str, set[str]] = {intent.identity: set() for _, intent, _, _ in accepted}
         for left_index, (_left_ordinal, left, left_date, _left_urgency) in enumerate(accepted):
             for _right_ordinal, right, right_date, _right_urgency in accepted[left_index + 1 :]:
@@ -111,6 +138,7 @@ class ValueDatePlanner:
             accepted,
             key=lambda row: (-len(conflicts[row[1].identity]), -row[3], row[0]),
         )
+        # 贪心着色:冲突越多的意图越先着色,取最小可用颜色(波次号)
         colors: dict[str, int] = {}
         for _ordinal, intent, _adjusted, _urgency in ordered_for_coloring:
             unavailable = {colors[neighbor] for neighbor in conflicts[intent.identity] if neighbor in colors}
@@ -127,6 +155,7 @@ class ValueDatePlanner:
                 while len(waves) <= chosen:
                     waves.append([])
                     wave_dates.append(defaultdict(int))
+                # 波内约束:账户互斥 / 同一价值日每波至多 8 条 / 波大小上限
                 account_conflict = any(existing.account == intent.account for existing in waves[chosen])
                 date_saturation = wave_dates[chosen].get(adjusted, 0) >= 8
                 if not account_conflict and not date_saturation and len(waves[chosen]) < self._maximum_wave_size:
@@ -135,6 +164,7 @@ class ValueDatePlanner:
             waves[chosen].append(intent)
             wave_dates[chosen][adjusted] = wave_dates[chosen].get(adjusted, 0) + 1
             if chosen > preferred + 2:
+                # 被迫后移超过 2 波:记录告警
                 warnings.append(f"wave displacement:{intent.identity}:{preferred}->{chosen}")
             if ordinal != intents.index(intent):
                 warnings.append(f"identity position changed:{intent.identity}")

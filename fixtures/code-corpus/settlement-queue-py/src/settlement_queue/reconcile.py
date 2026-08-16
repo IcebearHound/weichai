@@ -1,3 +1,11 @@
+"""对账器:对比意图、收据与网关行,生成发现与修复计划。
+
+compare 做四类核对:意图唯一性、收据唯一性、网关行引用唯一性,以及
+每个意图与收据/网关行的金额、账户一致性;修复计划按发现类别映射到
+可执行动作(重放结算、查询网关、导入网关行、隔离行、人工复核等),
+并对异常规模生成 incident 告警。
+"""
+
 from __future__ import annotations
 
 from collections import Counter, defaultdict
@@ -9,12 +17,28 @@ from .model import DeliveryReceipt, PayoutIntent, ReconcileFinding
 
 
 class Reconciler:
+    """结算对账器。
+
+    compare 输出发现列表(按严重度/类别/身份排序);repair_plan 输出动作计划。
+    """
+
     def compare(
         self,
         intents: Sequence[PayoutIntent],
         receipts: Sequence[DeliveryReceipt],
         gateway_rows: Sequence[Mapping[str, str]],
     ) -> tuple[ReconcileFinding, ...]:
+        """对比意图、收据与网关行,返回排序后的对账发现。
+
+        核对项:
+        - 意图/收据/网关引用的唯一性(重复即 error);
+        - 每个意图:缺收据(missing-receipt)、多个来源收据、
+          金额/账户与收据不一致;
+        - 收据的网关引用:网关行缺失、金额/币种不一致;
+        - 网关行:未被任何收据引用(orphan)。
+
+        返回按 (error→warning→info, 类别, 身份) 排序。
+        """
         findings: list[ReconcileFinding] = []
         intent_by_identity: dict[str, PayoutIntent] = {}
         for intent in intents:
@@ -81,6 +105,7 @@ class Reconciler:
         for identity, intent in intent_by_identity.items():
             linked = receipts_by_source.get(identity, [])
             if not linked:
+                # 意图没有对应收据:可重放修复
                 findings.append(
                     ReconcileFinding(
                         identity=identity,
@@ -129,6 +154,7 @@ class Reconciler:
                 )
             gateway = gateway_by_reference.get(receipt.gateway_reference)
             if gateway is None:
+                # 收据引用了不存在的网关行:可查询修复
                 findings.append(
                     ReconcileFinding(
                         identity=identity,
@@ -171,6 +197,13 @@ class Reconciler:
         return tuple(sorted(findings, key=lambda item: (severity_rank[item.severity], item.category, item.identity)))
 
     def repair_plan(self, findings: Sequence[ReconcileFinding]) -> Mapping[str, tuple[str, ...]]:
+        """把对账发现映射为修复动作计划。
+
+        按类别映射:missing-receipt→重放结算,missing-gateway-row→查询网关,
+        orphan-gateway-row→导入网关行,gateway-reference→隔离行;
+        不可修复的进 manual-review;异常规模(缺收据 >10、网关重复)产生 incident。
+        返回 {动作: 目标列表}。
+        """
         actions: dict[str, list[str]] = defaultdict(list)
         counts = Counter(finding.category for finding in findings)
         for finding in findings:

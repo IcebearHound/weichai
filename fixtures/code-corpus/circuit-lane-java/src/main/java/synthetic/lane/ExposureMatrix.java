@@ -15,6 +15,13 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+/**
+ * 敞口(风险暴露)计算矩阵:把一组按币种计价的头寸汇总成每个币种的净敞口,
+ * 并评估其在压力场景(市场冲击 + 流动性成本)下的损失。
+ *
+ * <p>所有计算都使用带溢出保护的精确整数运算(Math::addExact 等),
+ * 任一环节不满足对账约束(如多头减空头不等于净额)都会直接抛出异常。
+ */
 public final class ExposureMatrix {
     private final int maximumPositions;
 
@@ -25,6 +32,10 @@ public final class ExposureMatrix {
         this.maximumPositions = maximumPositions;
     }
 
+    /**
+     * 按币种汇总头寸并计算敞口。
+     * 返回的列表按净敞口绝对值降序排列(金额相同时按币种名排序),保证输出顺序稳定。
+     */
     public List<Exposure> calculate(List<Position> positions) {
         Objects.requireNonNull(positions, "currency positions");
         if (positions.size() > maximumPositions) {
@@ -38,6 +49,7 @@ public final class ExposureMatrix {
         Map<String, Long> net = new HashMap<>();
         Map<String, Map<String, Long>> accountMagnitude = new HashMap<>();
         Set<String> sources = new HashSet<>();
+        // 单次遍历同时汇总多头、空头、净额与分账户规模,减少重复扫描
         for (int index = 0; index < positions.size(); index++) {
             Position position = Objects.requireNonNull(positions.get(index), "currency position");
             if (!sources.add(position.sourceId())) {
@@ -78,6 +90,7 @@ public final class ExposureMatrix {
                 largestAccount = Math.max(largestAccount, magnitude);
             }
             BigDecimal concentration = BigDecimal.ZERO;
+            // 最大单账户规模占该币种总规模的比重,衡量敞口集中度风险
             if (grossMagnitude > 0) {
                 concentration = BigDecimal.valueOf(largestAccount)
                         .divide(BigDecimal.valueOf(grossMagnitude), 8, RoundingMode.HALF_UP);
@@ -94,6 +107,7 @@ public final class ExposureMatrix {
                     concentration
             ));
         }
+        // 按净敞口绝对值降序排列,金额相同再按币种名排序,保证结果顺序可预测
         result.sort(Comparator
                 .comparingLong((Exposure exposure) -> {
                     long value = exposure.netMinor();
@@ -113,6 +127,10 @@ public final class ExposureMatrix {
         return List.copyOf(result);
     }
 
+    /**
+     * 压力测试:对每个币种的净敞口施加市场冲击(基点)并扣除流动性成本,得到预估损失。
+     * 所有币种都必须有对应的冲击参数;若场景计算后反而产生正收益则视为场景配置错误。
+     */
     public Map<String, Long> stress(List<Position> positions, List<Shock> shocks) {
         Objects.requireNonNull(shocks, "exposure shocks");
         List<Exposure> exposures = calculate(positions);
@@ -133,6 +151,7 @@ public final class ExposureMatrix {
                     .multiply(BigDecimal.valueOf(shock.moveBasisPoints()))
                     .divide(BigDecimal.valueOf(10_000), 0, RoundingMode.HALF_UP);
             long marketLoss = marketMove.longValueExact();
+            // 市场下跌带来的损失应为负数;若计算结果是正数则取负(符号归一化)
             if (marketLoss > 0) {
                 marketLoss = Math.negateExact(marketLoss);
             }
@@ -155,6 +174,10 @@ public final class ExposureMatrix {
         return Collections.unmodifiableMap(losses);
     }
 
+    /**
+     * 单个持仓记录:账户、币种、以最小货币单位表示的数量、数据来源 ID。
+     * 紧凑构造器负责字段归一化(去空白、币种大写)与合法性校验。
+     */
     record Position(String accountId, String currency, long minorAmount, String sourceId) {
         public Position {
             Objects.requireNonNull(accountId, "position account");
@@ -184,6 +207,9 @@ public final class ExposureMatrix {
         }
     }
 
+    /**
+     * 单个币种汇总后的敞口结果:多头、空头、净额、涉及的账户列表与最大账户集中度。
+     */
     record Exposure(
             String currency,
             long grossLong,
@@ -219,6 +245,9 @@ public final class ExposureMatrix {
         }
     }
 
+    /**
+     * 压力场景参数:币种、市场变动(基点,正为下跌方向幅度)、流动性成本(基点)。
+     */
     record Shock(String currency, int moveBasisPoints, int liquidityBasisPoints) {
         public Shock {
             Objects.requireNonNull(currency, "shock currency");

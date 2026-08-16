@@ -11,6 +11,7 @@ use buffered_journal_rs::{
 };
 use support::{descriptor, scheduler, TempWorkspace};
 
+/// 调度器先按退避延迟等待,到期后才把任务租出。
 #[test]
 fn scheduler_applies_backoff_then_leases_due_work() {
     let mut scheduler = scheduler();
@@ -31,6 +32,7 @@ fn scheduler_applies_backoff_then_leases_due_work() {
         SchedulerOutcome::Scheduled { ready_at_ms, .. } => ready_at_ms,
         _ => panic!("expected scheduled outcome"),
     };
+    // 未到期:不派发。
     let early = scheduler
         .advance(SchedulerCommand::Poll {
             now_ms: ready_at - 1,
@@ -40,6 +42,7 @@ fn scheduler_applies_backoff_then_leases_due_work() {
         })
         .unwrap();
     assert!(matches!(early, SchedulerOutcome::Dispatch(items) if items.is_empty()));
+    // 到期:派发为 Leased 票据。
     let due = scheduler
         .advance(SchedulerCommand::Poll {
             now_ms: ready_at,
@@ -59,6 +62,7 @@ fn scheduler_applies_backoff_then_leases_due_work() {
     }
 }
 
+/// Poll 按账户公平分配:每个账户最多取 maximum_per_account 条。
 #[test]
 fn scheduler_poll_is_fair_across_accounts() {
     let mut scheduler = scheduler();
@@ -95,6 +99,7 @@ fn scheduler_poll_is_fair_across_accounts() {
             .collect::<BTreeSet<_>>(),
         _ => panic!("expected dispatch"),
     };
+    // 账户 a 最多一条,因此 a-2 被推迟,只有 a 与 b 各一条。
     assert_eq!(accounts, BTreeSet::from(["a".to_owned(), "b".to_owned()]));
     assert_eq!(
         scheduler.entries.len(),
@@ -103,6 +108,7 @@ fn scheduler_poll_is_fair_across_accounts() {
     );
 }
 
+/// 租约超时的任务被回收,payload 不丢失并重新排队。
 #[test]
 fn expired_lease_is_reclaimed_without_losing_payload() {
     let mut scheduler = scheduler();
@@ -131,6 +137,7 @@ fn expired_lease_is_reclaimed_without_losing_payload() {
             lease_ms: 10,
         })
         .unwrap();
+    // 租期过后回收,条目回到 Waiting 且载荷完整。
     let reclaimed = scheduler
         .advance(SchedulerCommand::ReclaimExpired { now_ms: ready + 11 })
         .unwrap();
@@ -141,6 +148,7 @@ fn expired_lease_is_reclaimed_without_losing_payload() {
     ));
 }
 
+/// 检查点提交是原子且受 epoch 比较交换保护的。
 #[test]
 fn checkpoint_commit_is_atomic_and_compare_and_swap_protected() {
     let workspace = TempWorkspace::new("checkpoint");
@@ -165,6 +173,7 @@ fn checkpoint_commit_is_atomic_and_compare_and_swap_protected() {
         committed,
         CheckpointOutcome::Committed { epoch: 1, .. }
     ));
+    // 用过期 epoch 提交被拒绝(CAS 保护)。
     let stale = ledger.transact(CheckpointOperation::Commit {
         expected_epoch: Some(0),
         durable_sequence: 41,
@@ -189,6 +198,7 @@ fn checkpoint_commit_is_atomic_and_compare_and_swap_protected() {
     }
 }
 
+/// 稀疏索引可组合账户、时间与身份过滤定位读取锚点。
 #[test]
 fn sparse_index_combines_account_time_and_identity_filters() {
     let workspace = TempWorkspace::new("index");
@@ -208,6 +218,7 @@ fn sparse_index_combines_account_time_and_identity_filters() {
         SparseIndex::rebuild(&path, 1, 0, 10_000, 4, &rows).expect("rebuild sparse index");
     assert!(diagnostics.is_empty());
     assert!(path.exists());
+    // 组合过滤:偶数账户、序列 10..=30、时间范围、身份 identity-22。
     let anchors = index.seek(
         Some("even"),
         Some(10),
@@ -220,6 +231,7 @@ fn sparse_index_combines_account_time_and_identity_filters() {
     assert!(anchors.iter().all(|entry| entry.0 <= 22));
 }
 
+/// 相邻封存段可被分组为一个真正的合并规划。
 #[test]
 fn compaction_groups_adjacent_sealed_segments_for_real_reclaim() {
     let workspace = TempWorkspace::new("compaction");
@@ -228,6 +240,7 @@ fn compaction_groups_adjacent_sealed_segments_for_real_reclaim() {
         descriptor(workspace.path(), 2, 101, 200, 110_000),
         descriptor(workspace.path(), 3, 201, 300, 90_000),
     ];
+    // 制造死记录:段 1 有墓碑,段 2 有重复。
     segments[0].tombstone_records = 30;
     segments[1].duplicate_records = 20;
     let planner = CompactionPlanner {
@@ -252,6 +265,7 @@ fn compaction_groups_adjacent_sealed_segments_for_real_reclaim() {
     assert!(merge.accounts.len() >= 2);
 }
 
+/// 磁盘压力下,保留策略仍尊重读者租约与法律保留。
 #[test]
 fn retention_honors_reader_lease_and_legal_hold_under_pressure() {
     let workspace = TempWorkspace::new("retention");
@@ -281,6 +295,7 @@ fn retention_honors_reader_lease_and_legal_hold_under_pressure() {
         .collect::<BTreeMap<_, _>>();
     assert_eq!(by_id[&1], RetentionDecision::DelayForLegalHold);
     assert_eq!(by_id[&2], RetentionDecision::DelayForReader);
+    // 最新段即使在高压下也受保护。
     assert_ne!(
         by_id[&4],
         RetentionDecision::Delete,
@@ -288,6 +303,7 @@ fn retention_honors_reader_lease_and_legal_hold_under_pressure() {
     );
 }
 
+/// 格式化辅助函数仅做展示层转换,输出可预期。
 #[test]
 fn formatting_helpers_are_presentation_only_distractors() {
     assert_eq!(quote_frame_caption(" eur ", "usd", 1.25), "EUR/USD 1.25000");

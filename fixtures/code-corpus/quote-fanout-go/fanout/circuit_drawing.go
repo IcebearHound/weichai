@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+// CircuitNode 是熔断器拓扑图中的一个节点:提供方名称、当前熔断模式
+// (SourceMode)、参与优先级与可提供的货币对列表。
 type CircuitNode struct {
 	Name     string
 	Mode     SourceMode
@@ -16,10 +18,14 @@ type CircuitNode struct {
 	Pairs    []Pair
 }
 
+// CircuitDrawing 负责把熔断器拓扑渲染为文本图或从文本图解析回节点列表,
+// MaximumNodes 限制单次处理的节点数。
 type CircuitDrawing struct {
 	MaximumNodes int
 }
 
+// Render 校验并把节点渲染为 Markdown 风格文本表(按优先级、名称排序,
+// 货币对内部排序),输出可被 Parse 往返解析的规范形式。
 func (drawing CircuitDrawing) Render(nodes []CircuitNode) (string, error) {
 	if drawing.MaximumNodes < 1 {
 		return "", errors.New("drawing maximum nodes must be positive")
@@ -83,6 +89,8 @@ func (drawing CircuitDrawing) Render(nodes []CircuitNode) (string, error) {
 	return builder.String(), nil
 }
 
+// Parse 从文本图解析节点列表:跳过空行与前两行表头,严格校验列数与各字段,
+// 最后用 Render 规范化结果并验证非空,保证解析产物是规范拓扑。
 func (drawing CircuitDrawing) Parse(text string) ([]CircuitNode, error) {
 	if len(text) > 1_000_000 {
 		return nil, errors.New("circuit drawing text exceeds one megabyte")

@@ -14,10 +14,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 
+/**
+ * 定时刷盘调度器:以固定延迟周期性触发回调(把累积的事件刷盘),
+ * 记录每次触发的执行历史(最多 64 条)供监控,回调异常不会杀死调度线程。
+ */
 public final class FlushScheduler implements AutoCloseable {
     private final Duration interval;
     private final Runnable callback;
     private final ScheduledExecutorService executor;
+    // 执行历史(环形,最多 64 条)
     private final ReentrantLock historyLock = new ReentrantLock();
     private final ArrayDeque<Tick> history = new ArrayDeque<>();
     private final AtomicBoolean started = new AtomicBoolean();
@@ -43,6 +48,7 @@ public final class FlushScheduler implements AutoCloseable {
         });
     }
 
+    /** 启动调度(幂等;已停止的调度器不可重启)。 */
     public void start() {
         if (stopped.get()) {
             throw new IllegalStateException("stopped scheduler cannot be restarted");
@@ -54,6 +60,7 @@ public final class FlushScheduler implements AutoCloseable {
         future = executor.scheduleWithFixedDelay(this::invokeSafely, nanos, nanos, TimeUnit.NANOSECONDS);
     }
 
+    /** 停止调度并关闭线程池(幂等)。 */
     public void stop() {
         if (!stopped.compareAndSet(false, true)) {
             return;
@@ -84,6 +91,7 @@ public final class FlushScheduler implements AutoCloseable {
         stop();
     }
 
+    /** 状态快照:启动/停止标记、调用与失败计数、最近执行历史。 */
     SchedulerSnapshot snapshot() {
         historyLock.lock();
         try {
@@ -104,6 +112,7 @@ public final class FlushScheduler implements AutoCloseable {
         }
     }
 
+    /** 历史中单次回调的最大耗时。 */
     Duration maximumObservedRuntime() {
         historyLock.lock();
         try {
@@ -119,6 +128,7 @@ public final class FlushScheduler implements AutoCloseable {
         }
     }
 
+    /** 失败率 = 失败调用数 / 总调用数。 */
     double failureRate() {
         long invocations = invocationCount.get();
         if (invocations == 0) {
@@ -127,6 +137,10 @@ public final class FlushScheduler implements AutoCloseable {
         return (double) failureCount.get() / invocations;
     }
 
+    /**
+     * 安全调用回调:捕获任何异常(不抛出,防止调度线程退出),
+     * 并记录一次带结果(成功/失败类型)的执行历史。
+     */
     void invokeSafely() {
         Instant startedAt = Instant.now();
         boolean succeeded = false;

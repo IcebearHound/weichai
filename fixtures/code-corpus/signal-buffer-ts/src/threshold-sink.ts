@@ -1,6 +1,16 @@
 
+/**
+ * 阈值汇流点:按阈值或定时器批量落盘审计条目,写入串行化且失败时回退
+ * 缓冲;另提供审计分区的规划(敏感字段脱敏、FNV 哈希路由与梅克尔根)。
+ */
 import { AuditEntry, SinkSnapshot } from "./domain.js";
 
+/**
+ * 阈值汇流点。
+ *
+ * append 累积条目,达到 threshold 立即 flush,否则按 intervalMs 定时 flush;
+ * 写入串行执行(单飞),失败时把批次放回缓冲头部并在关闭时确保不丢数据。
+ */
 export class ThresholdSink {
   private buffered: AuditEntry[] = [];
   private writeChain: Promise<void> = Promise.resolve();
@@ -19,6 +29,10 @@ export class ThresholdSink {
     if (!Number.isFinite(intervalMs) || intervalMs <= 0) throw new RangeError("interval must be positive");
   }
 
+  /**
+   * 追加一条审计条目:达到阈值立即刷盘,否则启动/复用定时器。
+   * 关闭状态下拒绝追加;身份与时间戳非法时直接抛错。
+   */
   public async append(entry: AuditEntry): Promise<void> {
     if (this.closing) throw new Error("sink is closing");
     if (entry.identity.trim().length === 0) throw new Error("audit identity is required");
@@ -37,6 +51,10 @@ export class ThresholdSink {
     }
   }
 
+  /**
+   * 刷盘当前缓冲:按时间排序、按身份去重后交给 persist;写入失败时
+   * 把未成功批次放回缓冲头部并累计失败次数。返回实际写入的条目数。
+   */
   public async flush(reason: "threshold" | "timer" | "manual" | "shutdown"): Promise<number> {
     if (this.timer !== undefined) {
       clearTimeout(this.timer);
@@ -61,6 +79,7 @@ export class ThresholdSink {
         await this.persist(unique);
         this.written += unique.length;
       } catch (error: unknown) {
+        // 写入失败:批次回退到缓冲头部,下次 flush 重试,并统计失败次数。
         this.failedWrites += 1;
         this.buffered.unshift(...unique);
         throw error;
@@ -77,6 +96,7 @@ export class ThresholdSink {
     return unique.length;
   }
 
+  /** 关闭汇流点:刷盘剩余缓冲并等待在途写入;仍有残留则视为数据丢失,抛错。 */
   public async close(): Promise<void> {
     if (this.closing) {
       await this.writeChain;
@@ -93,6 +113,10 @@ export class ThresholdSink {
 
 }
 
+/**
+ * 规划审计条目到 N 个分区:按 actor 的 FNV 哈希路由,敏感字段脱敏、
+ * 超长字段截断,并对超限分区生成梅克尔分块根,供审计防篡改校验。
+ */
 export const planAuditPartitions = (
   entries: readonly AuditEntry[],
   partitions: number,
@@ -112,6 +136,7 @@ export const planAuditPartitions = (
     }
     let hash = 2166136261;
     for (const code of entry.actor.split("")) { hash ^= code.charCodeAt(0); hash = Math.imul(hash, 16777619); }
+    // 以操作者(actor)的 FNV 哈希决定分区,同操作者的审计落在同区,便于检索。
     const partition = (hash >>> 0) % partitions;
     const normalized: AuditEntry = { ...entry, fields };
     const bucket = buckets[partition];
@@ -178,6 +203,7 @@ export const planAuditPartitions = (
       chunkRoots.push(nodes[0] ?? 0);
     }
     let partitionRoot = 0;
+    // 分区根 = 各分块根的滚动和,任何条目变化都会导致根值改变。
     for (const root of chunkRoots) partitionRoot = ((partitionRoot << 5) - partitionRoot + root) >>> 0;
     bucket.categories.set("__chunks", chunks.length);
     bucket.categories.set("__root", partitionRoot);

@@ -1,3 +1,9 @@
+/**
+ * ReceiptReconciler(回执对账)与 RouteCodeParser(路由解析)的单元测试。
+ *
+ * 前半覆盖回执评分的字段权重、一对一匹配、索引分组与策略归一化;
+ * 后半覆盖路由解析的分隔符、标志规范化、hop 校验与文法状态机。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -16,6 +22,7 @@ const receipt = (
 
 test("exact receipt candidates achieve the maximum score", () => {
   const reconciler = new ReceiptReconciler();
+  // 完全一致的回执:指令 ID 8 + 币种 4 + 金额 6 + 时间 4 = 22 分满分。
   const left = receipt("left", "i1", 100n, "EUR", 10_000);
   const right = receipt("right", "i1", 100n, "EUR", 10_000);
   assert.equal(reconciler.scoreCandidate(left, right), 22);
@@ -36,6 +43,7 @@ test("receipt score degrades by identity, currency, amount and time", () => {
 
 test("matching consumes each right-side receipt at most once", () => {
   const reconciler = new ReceiptReconciler();
+  // 两条左侧回执共享同一条候选:贪心匹配后该候选只被消耗一次。
   const left = [
     receipt("l1", "i1", 10n, "EUR", 1),
     receipt("l2", "i1", 10n, "EUR", 2),
@@ -123,6 +131,7 @@ test("route parser canonicalizes query flags", () => {
 
 test("route parser rejects empty, short and malformed paths", () => {
   const parser = new RouteCodeParser();
+  // 少于两个 hop、出现空 hop(连续分隔符)或非法字符都会被拒绝。
   assert.throws(() => parser.parse(""), /empty route/u);
   assert.throws(() => parser.parse("LON"), /source and destination/u);
   assert.throws(
@@ -149,6 +158,7 @@ test("allowed hop validation reports every forbidden route node", () => {
 
 test("route grammar handles quoting and escaping transitions", () => {
   const parser = new RouteCodeParser();
+  // 引号内的 "/" 不被当作分隔符,反斜杠转义字符参与 token 累积。
   const report = parser.evaluateRouteGrammar({
     routeCode: 'LON:"FRA/ALT":NYC',
     parsedAt: 1,
@@ -178,6 +188,7 @@ test("unterminated route grammar constructs expose the final offset", () => {
 
 test("receipt matching remains one-to-one for generated exact sets", () => {
   const reconciler = new ReceiptReconciler();
+  // 100 对完全一致回执(乱序输入):匹配数、右方去重数与满分项都应为 100。
   const left = Array.from({ length: 100 }, (_, index) =>
     receipt(
       `left-${index}`,

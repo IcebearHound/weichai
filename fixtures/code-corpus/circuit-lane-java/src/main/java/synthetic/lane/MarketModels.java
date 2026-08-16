@@ -15,11 +15,19 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
+/**
+ * 领域模型与校验规则的集中地:以不可变 record 定义币种对、报价、结算、审计等领域对象,
+ * 每个 record 的紧凑构造器都执行严格的字段归一化与合法性校验,
+ * 保证非法数据在进入业务逻辑之前就被拒绝。
+ */
 public final class MarketModels {
     private MarketModels() {
         throw new AssertionError("market models cannot be instantiated");
     }
 
+    /**
+     * 解析形如 {@code USD/EUR} 的币种对文本,并做规范化与保留字检查。
+     */
     public static CurrencyPair parsePair(String text) {
         Objects.requireNonNull(text, "currency pair text");
         String normalized = text.strip().toUpperCase(Locale.ROOT);
@@ -48,6 +56,10 @@ public final class MarketModels {
         return new CurrencyPair(base, counter);
     }
 
+    /**
+     * 校验报价的有效性:观察时间不能过早/过晚、报价未过期、买卖价差在合理区间内。
+     * 通过校验后原样返回(校验不产生新对象)。
+     */
     public static QuoteEnvelope validateQuote(QuoteEnvelope quote, Instant now, Duration maximumAge) {
         Objects.requireNonNull(quote, "quote");
         Objects.requireNonNull(now, "validation time");
@@ -72,6 +84,7 @@ public final class MarketModels {
         if (midpoint <= 0) {
             throw new IllegalArgumentException("quote midpoint is not positive");
         }
+        // 把绝对价差换算成相对中点的基点(万分之一)数,用于跨报价可比
         double basisPoints = (double) spread / (double) midpoint * 10_000.0;
         if (!Double.isFinite(basisPoints) || basisPoints > 10_000.0) {
             throw new IllegalArgumentException("quote spread is outside the supported range");
@@ -79,6 +92,9 @@ public final class MarketModels {
         return quote;
     }
 
+    /**
+     * 币种对:基准币(base)与计价币(counter),如 USD/EUR。
+     */
     record CurrencyPair(String base, String counter) {
         public CurrencyPair {
             Objects.requireNonNull(base, "base currency");
@@ -105,6 +121,9 @@ public final class MarketModels {
         }
     }
 
+    /**
+     * 报价请求:币种对、以最小货币单位计的数量、请求时间、关联 ID 与区域。
+     */
     record QuoteRequest(
             CurrencyPair pair,
             long amountMinor,
@@ -157,6 +176,10 @@ public final class MarketModels {
         }
     }
 
+    /**
+     * 报价响应:买/卖价(以微分为单位)、报价方、观察与过期时间及附加标签。
+     * 构造器会把标签按大小写折叠去重,防止出现仅大小写不同的键。
+     */
     record QuoteEnvelope(
             CurrencyPair pair,
             long bidMicros,
@@ -222,6 +245,9 @@ public final class MarketModels {
         }
     }
 
+    /**
+     * 熔断状态的只读视图,供外部观测;附带一致性校验。
+     */
     record ProviderStateView(
             String provider,
             String mode,
@@ -266,6 +292,9 @@ public final class MarketModels {
         }
     }
 
+    /**
+     * 结算指令:指令 ID、币种对、金额、目的国(两位国家码)、请求日期与提交时间。
+     */
     record SettlementInstruction(
             String instructionId,
             CurrencyPair pair,
@@ -309,6 +338,9 @@ public final class MarketModels {
         }
     }
 
+    /**
+     * 结算结果:结算通道、起息日、是否晚于截止时间、搜索天数与备选通道。
+     */
     record SettlementResult(
             String instructionId,
             String rail,
@@ -344,6 +376,10 @@ public final class MarketModels {
         }
     }
 
+    /**
+     * 审计条目:主键 entryId 之外,还带账户、类型、发生时间、关联 ID 和自定义字段。
+     * 字段会被按键名排序存储,保证后续哈希/序列化的确定性。
+     */
     record AuditEntry(
             String entryId,
             String accountId,

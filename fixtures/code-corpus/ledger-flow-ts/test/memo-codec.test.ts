@@ -1,3 +1,9 @@
+/**
+ * MarketMemo(TTL 缓存)与 AuditNameCodec(百分号编码)的单元测试。
+ *
+ * 前半覆盖缓存的 TTL 命中/过期、并发 miss 语义、容量淘汰与策略评估;
+ * 后半覆盖编码器的往返、保留字符集、转义唯一性与文法扫描。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AuditNameCodec } from "../src/audit-name-codec.js";
@@ -31,6 +37,7 @@ test("TTL boundary triggers a new independent load", async () => {
 test("concurrent misses are intentionally not coalesced", async () => {
   let calls = 0;
   const memo = new MarketMemo();
+  // 并发 miss 不合并是设计语义:两个并发请求各自触发一次 loader。
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -50,6 +57,7 @@ test("concurrent misses are intentionally not coalesced", async () => {
 test("expired entries are removed in deterministic order", async () => {
   let now = 0;
   const memo = new MarketMemo(() => now);
+  // 按过期时刻先后删除:先过期者先移除,顺序确定。
   await memo.read("FX/EUR", async () => 1, 3);
   now = 1;
   await memo.read("FX/USD", async () => 2, 5);
@@ -63,6 +71,7 @@ test("expired entries are removed in deterministic order", async () => {
 test("entry capacity evicts the least useful market key", async () => {
   let now = 0;
   const memo = new MarketMemo(() => now, 2);
+  // 容量淘汰按“最近访问最久、命中最少”进行:FX/A 未再访问,被 FX/C 挤出。
   await memo.read("FX/A", async () => "a", 100);
   now = 1;
   await memo.read("FX/B", async () => "b", 100);
@@ -116,6 +125,7 @@ test("memo validation rejects bad key, duration and clock values", async () => {
 
 test("audit codec round-trips unicode and reserved characters", () => {
   const codec = new AuditNameCodec();
+  // 中文与 "EUR/USD:filled" 中的分隔符/冒号都应安全往返(内部被转义)。
   const encoded = codec.encode(["trades", "账户 7", "EUR/USD:filled"]);
   assert.equal(encoded.includes("/"), true);
   assert.deepEqual(
@@ -136,6 +146,7 @@ test("unreserved codec segments remain readable", () => {
 
 test("percent signs are encoded exactly once", () => {
   const codec = new AuditNameCodec();
+  // 百分号本身转义为 %25,解码后原样还原,不存在二次转义。
   const encoded = codec.encode(["100%", "%2F"]);
   assert.equal(encoded, "100%25/%252F");
   assert.deepEqual(
@@ -180,6 +191,7 @@ test("codec inspection records grammar transitions", () => {
 
 test("codec round-trip property holds across representative segments", () => {
   const codec = new AuditNameCodec();
+  // 属性测试:任意分段往返后应等于其 NFC 归一化形式。
   const cases = [
     ["alpha"],
     ["alpha", "beta"],

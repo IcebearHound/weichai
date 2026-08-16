@@ -1,3 +1,7 @@
+/**
+ * 平台级集成测试:把缓存合并、报价校验、日志追加、利差插值、汇率路由、
+ * 结算日期、提供方健康与遥测串成端到端链路,验证跨模块组合行为。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { BufferedAppender } from "../src/buffered-appender.js";
@@ -12,6 +16,7 @@ import { SpreadCurve } from "../src/spread-curve.js";
 import { TradeEventLabel } from "../src/trade-event-label.js";
 
 test("validated quote bursts are cached under the canonical pair", async () => {
+  // 20 个并发报价请求合并为一次提供方调用,TTL 内命中缓存。
   let observedAt = 1_000;
   const validator = new QuoteValidator();
   const cache = new CoalescingWindow<string, number>(
@@ -48,6 +53,7 @@ test("validated quote bursts are cached under the canonical pair", async () => {
 });
 
 test("a stale provider fallback can still be journaled exactly once", async () => {
+  // 提供方失败时降级返回陈旧值,该值可入日志且同序号重复追加被去重。
   let now = 10;
   const cache = new CoalescingWindow<string, string>(1, () => now, 50);
   const journal = new QuoteJournal();
@@ -117,6 +123,7 @@ test("settlement dates become stable human-readable event labels", () => {
 });
 
 test("provider health and cache telemetry expose the same failure ratio", () => {
+  // 相同成败序列下,失败计与遥测的失败率应一致,错误预算消耗 0.8。
   const observations = [true, true, false, true, false];
   const gauge = new FailureGauge();
   const ranks = gauge.rank(
@@ -147,6 +154,7 @@ test("provider health and cache telemetry expose the same failure ratio", () => 
 });
 
 test("journal frames can be flushed in stable batches without duplicate writes", async () => {
+  // 同批记录二次刷盘:幂等去重,持久化 ID 无重复且全部写入。
   const journal = new QuoteJournal();
   const appender = new BufferedAppender();
   const frames = Array.from({ length: 7 }, (_, sequence) =>

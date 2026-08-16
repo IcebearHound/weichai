@@ -8,11 +8,15 @@ import (
 	"time"
 )
 
+// AuditTrailSorter 对审计日志条目做确定性排序与校验:MaximumEntries 限制单次
+// 处理的条目数,RequireAccount 要求每条记录必须归属账户。
 type AuditTrailSorter struct {
 	MaximumEntries int
 	RequireAccount bool
 }
 
+// Sort 校验并排序审计条目(时间、关联 ID、账户、类别、ID 逐级排序),
+// 返回深拷贝以避免调用方后续修改污染输入;同时校验 ID 唯一、时间单调。
 func (sorter AuditTrailSorter) Sort(entries []JournalEntry) ([]JournalEntry, error) {
 	if sorter.MaximumEntries < 1 {
 		return nil, errors.New("audit sorter maximum entries must be positive")
@@ -65,6 +69,8 @@ func (sorter AuditTrailSorter) Sort(entries []JournalEntry) ([]JournalEntry, err
 	return ordered, nil
 }
 
+// Verify 校验既有的审计序列:容量、ID 唯一性、时间单调不降,同时间段的
+// 关联/账户顺序不降,且同一关联 ID 的事件随时间只进不退。
 func (sorter AuditTrailSorter) Verify(entries []JournalEntry) error {
 	if len(entries) > sorter.MaximumEntries {
 		return errors.New("audit trail exceeds sorter capacity")

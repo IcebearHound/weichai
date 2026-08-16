@@ -11,10 +11,15 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * 市场模型与路由行为的测试:币种对/报价模型校验、报价校验时效性、
+ * 提供方目录排序、报价簿选优/排除/保留策略与并发读写。
+ */
 final class MarketAndRoutingTest {
     private MarketAndRoutingTest() {
     }
 
+    /** 汇总入口:顺序执行全部用例。 */
     static void run() {
         currencyPairParsingNormalizesAndRejectsReservedValues();
         quoteRequestEnforcesSafeEnvelope();
@@ -29,6 +34,7 @@ final class MarketAndRoutingTest {
         quoteBookHandlesConcurrentPublishAndRead();
     }
 
+    /** 币种对解析应规范化大小写/空白,并拒绝保留字与非法格式。 */
     private static void currencyPairParsingNormalizesAndRejectsReservedValues() {
         MarketModels.CurrencyPair pair = MarketModels.parsePair(" eur/usd ");
         TestSupport.equal("EUR", pair.base(), "pair base should normalize to uppercase");
@@ -63,6 +69,7 @@ final class MarketAndRoutingTest {
         );
     }
 
+    /** 报价请求应强制安全信封:金额、关联 ID 与区域均有合法性约束。 */
     private static void quoteRequestEnforcesSafeEnvelope() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         MarketModels.QuoteRequest request = TestSupport.request(clock, "GBP/USD", "request-safe");
@@ -115,6 +122,7 @@ final class MarketAndRoutingTest {
         );
     }
 
+    /** 报价信封应防御性拷贝标签,并校验买/卖价与标签键的大小写折叠冲突。 */
     private static void quoteEnvelopeDefendsTagsAndMarketInvariants() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         Map<String, String> mutableTags = new LinkedHashMap<>();
@@ -180,6 +188,7 @@ final class MarketAndRoutingTest {
         );
     }
 
+    /** 报价校验按调用时刻的时效与过期时间判定有效性。 */
     private static void quoteValidationUsesAgeAndExpiryAtCallTime() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         MarketModels.QuoteEnvelope quote = TestSupport.quote(clock, "USD/JPY", "tokyo-feed", 149_220_000L);
@@ -227,6 +236,7 @@ final class MarketAndRoutingTest {
         );
     }
 
+    /** 排序应把健康的本区域提供方排最前,重度失败者排最后,无关币种对被排除。 */
     private static void providerCatalogRanksHealthyLocalProviderFirst() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         MarketModels.CurrencyPair pair = TestSupport.pair("EUR/USD");
@@ -262,6 +272,7 @@ final class MarketAndRoutingTest {
         TestSupport.equal("local-failing", ordered.get(2).name(), "failing provider should rank last");
     }
 
+    /** 重复注册、非法定义、未知观测提供方与容量上限应被拒绝。 */
     private static void providerCatalogValidatesRegistrationsAndObservations() {
         MarketModels.CurrencyPair pair = TestSupport.pair("EUR/USD");
         ProviderCatalog catalog = new ProviderCatalog(2);
@@ -334,6 +345,7 @@ final class MarketAndRoutingTest {
         );
     }
 
+    /** 报价簿选优应取价差最紧且未过期的报价。 */
     private static void quoteBookSelectsTightFreshQuote() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         QuoteBook book = new QuoteBook(10, Duration.ofMinutes(30));
@@ -376,6 +388,7 @@ final class MarketAndRoutingTest {
         TestSupport.equal(1_080_400L, selected.askMicros(), "selected ask should come from tight provider");
     }
 
+    /** 排除提供方后应退回备用;历史全部过期或无历史时应报错。 */
     private static void quoteBookExcludesProvidersAndRejectsExpiredHistory() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         QuoteBook book = new QuoteBook(10, Duration.ofHours(1));
@@ -428,6 +441,7 @@ final class MarketAndRoutingTest {
         );
     }
 
+    /** 报价簿应按容量上限保留最新报价,且历史保持时间序。 */
     private static void quoteBookRetainsCapacityAndChronologicalHistory() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         QuoteBook book = new QuoteBook(3, Duration.ofHours(1));
@@ -458,6 +472,7 @@ final class MarketAndRoutingTest {
         );
     }
 
+    /** 同提供方同观察时间但价格不同的报价应被拒绝,完全重复的发布幂等。 */
     private static void quoteBookRejectsTimestampPriceConflict() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         QuoteBook book = new QuoteBook(5, Duration.ofMinutes(30));
@@ -482,6 +497,7 @@ final class MarketAndRoutingTest {
         TestSupport.equal(1, book.history(first.pair(), Instant.EPOCH).size(), "conflict should not alter history");
     }
 
+    /** 多写者并发发布/读取不应丢数据,历史仍保持时间序。 */
     private static void quoteBookHandlesConcurrentPublishAndRead() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         QuoteBook book = new QuoteBook(200, Duration.ofHours(1));

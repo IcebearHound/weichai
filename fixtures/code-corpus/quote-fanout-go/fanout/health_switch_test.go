@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+// TestHealthSwitchReturnsPrimaryQuoteWithoutTouchingBackup 验证高优先级提供方
+// 正常时返回其报价,备份提供方不被调用,状态视图正确。
 func TestHealthSwitchReturnsPrimaryQuoteWithoutTouchingBackup(t *testing.T) {
 	clock := newManualClock()
 	pair := mustPair(t, "EUR/USD")
@@ -35,6 +37,8 @@ func TestHealthSwitchReturnsPrimaryQuoteWithoutTouchingBackup(t *testing.T) {
 	requireEqual(t, views[1].RequestCount, uint64(0))
 }
 
+// TestHealthSwitchFailsOverAndKeepsProviderFailureStateIndependent 验证主提供方
+// 连续失败熔断后自动切换到备份,且各提供方的熔断状态互不影响。
 func TestHealthSwitchFailsOverAndKeepsProviderFailureStateIndependent(t *testing.T) {
 	clock := newManualClock()
 	pair := mustPair(t, "GBP/USD")
@@ -85,6 +89,8 @@ func TestHealthSwitchFailsOverAndKeepsProviderFailureStateIndependent(t *testing
 	requireEqual(t, backup.CallCount(), 3)
 }
 
+// TestHealthSwitchAllowsExactlyOneConcurrentHalfOpenProbe 验证冷却期满后只放行
+// 单个探针调用(其余请求走备份),探针成功即恢复为 closed 并清零计数。
 func TestHealthSwitchAllowsExactlyOneConcurrentHalfOpenProbe(t *testing.T) {
 	clock := newManualClock()
 	pair := mustPair(t, "USD/JPY")
@@ -150,6 +156,8 @@ func TestHealthSwitchAllowsExactlyOneConcurrentHalfOpenProbe(t *testing.T) {
 	requireEqual(t, recovered.ConsecutiveFailures, 0)
 }
 
+// TestHealthSwitchFailedProbeReopensOnlyThatProvider 验证半开探针失败会重新
+// 熔断该提供方(冷却重新计时),而不影响备份提供方。
 func TestHealthSwitchFailedProbeReopensOnlyThatProvider(t *testing.T) {
 	clock := newManualClock()
 	pair := mustPair(t, "AUD/USD")
@@ -194,6 +202,8 @@ func TestHealthSwitchFailedProbeReopensOnlyThatProvider(t *testing.T) {
 	requireEqual(t, backupView.SuccessCount, uint64(3))
 }
 
+// TestHealthSwitchWeightsPermanentProviderFailures 验证不可重试失败按配置权重
+// 计分:一次授权失败即触发熔断,错误原因在视图中保留。
 func TestHealthSwitchWeightsPermanentProviderFailures(t *testing.T) {
 	clock := newManualClock()
 	pair := mustPair(t, "EUR/CHF")
@@ -224,6 +234,8 @@ func TestHealthSwitchWeightsPermanentProviderFailures(t *testing.T) {
 	}
 }
 
+// TestHealthSwitchTimesOutProviderAndTriesReserve 验证超时的提供方被放弃并尝试
+// 备份,超时受 RequestTimeout 控制。
 func TestHealthSwitchTimesOutProviderAndTriesReserve(t *testing.T) {
 	clock := newManualClock()
 	pair := mustPair(t, "NZD/USD")
@@ -244,6 +256,8 @@ func TestHealthSwitchTimesOutProviderAndTriesReserve(t *testing.T) {
 	requireEqual(t, backup.CallCount(), 1)
 }
 
+// TestHealthSwitchReturnsJoinedFailuresWhenEveryProviderFails 验证全部提供方失败
+// 时,返回包装了各失败原因的不可用错误。
 func TestHealthSwitchReturnsJoinedFailuresWhenEveryProviderFails(t *testing.T) {
 	clock := newManualClock()
 	pair := mustPair(t, "CAD/JPY")
@@ -264,6 +278,8 @@ func TestHealthSwitchReturnsJoinedFailuresWhenEveryProviderFails(t *testing.T) {
 	}
 }
 
+// TestHealthSwitchRejectsUnsupportedPairAndHonorsReset 验证不支持的货币对直接
+// 不可用,Reset 能复位指定提供方(未知提供方返回 false)。
 func TestHealthSwitchRejectsUnsupportedPairAndHonorsReset(t *testing.T) {
 	clock := newManualClock()
 	euroDollar := mustPair(t, "EUR/USD")
@@ -289,6 +305,8 @@ func TestHealthSwitchRejectsUnsupportedPairAndHonorsReset(t *testing.T) {
 	requireEqual(t, view.LastError, "")
 }
 
+// TestHealthSwitchValidatesPolicyAndRegistrations 验证构造期对策略参数、重复
+// 名称与无可回退重叠货币对的校验。
 func TestHealthSwitchValidatesPolicyAndRegistrations(t *testing.T) {
 	clock := newManualClock()
 	pair := mustPair(t, "EUR/USD")
@@ -335,6 +353,8 @@ func TestHealthSwitchValidatesPolicyAndRegistrations(t *testing.T) {
 	}
 }
 
+// TestHealthSwitchSerializesSnapshotReadsDuringConcurrentCalls 验证调用在途时,
+// 30 个并发 Snapshot 读取安全且一致,无数据竞争。
 func TestHealthSwitchSerializesSnapshotReadsDuringConcurrentCalls(t *testing.T) {
 	clock := newManualClock()
 	pair := mustPair(t, "EUR/GBP")

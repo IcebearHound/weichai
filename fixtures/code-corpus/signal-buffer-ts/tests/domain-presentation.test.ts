@@ -1,3 +1,10 @@
+/**
+ * 领域校验(validateMarketScenario)与展示层(PresentationLabels、
+ * composeOperationsNarrative)的单元测试。
+ *
+ * 前半覆盖币种/货币对与市场场景校验的错误/警告分类;后半覆盖标签渲染
+ * 与叙事报告的排序、换行、数值格式与边界处理。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -45,6 +52,7 @@ test("pair identity is directed and prevents self conversion", () => {
 });
 
 test("a coherent market scenario reports only explainable warnings", () => {
+  // 完整匹配的账本/交易/审计组合:错误数应为 0,审计覆盖率为 1。
   const audits = [
     ...settlementBook.map((intent, index) => audit(`as-${index}`, intent.identity, intent.account, 3_000 + index)),
     ...tradeStream.map((signal, index) => audit(`at-${index}`, signal.messageId, signal.account, 4_000 + index, "trade")),
@@ -63,6 +71,7 @@ test("a coherent market scenario reports only explainable warnings", () => {
 });
 
 test("crossed and non-positive quotes are independently diagnosed", () => {
+  // 倒挂(买价>卖价)与非法报价分别归类为不同错误,便于独立处理。
   const quotes = [
     quote(1, "bad", 1_000, 1.2, 1.1),
     quote(2, "bad", 1_020, -1, 0),
@@ -99,6 +108,7 @@ test("duplicated quote versions and settlement identities are rejected", () => {
 });
 
 test("sequence gaps are grouped per account", () => {
+  // 序号缺口按账户聚合:lane-a 缺失 2、3、5,lane-b 无缺口。
   const signals = [
     trade("lane-a", 4, 104),
     trade("lane-b", 1, 100),
@@ -111,6 +121,7 @@ test("sequence gaps are grouped per account", () => {
 });
 
 test("audit coverage considers settlements and trades", () => {
+  // 3 个应审计主体中仅 1 个有审计记录,覆盖率 = 1/3。
   const intents = [settlement("settled-a"), settlement("settled-b")];
   const signals = [trade("acct-z", 1)];
   const validation = validateMarketScenario(
@@ -176,6 +187,7 @@ test("presentation labels retain provider order and trade direction", () => {
 });
 
 test("operations narrative orders critical sections first", () => {
+  // 严重级别排序:critical 段必然排在 warning 与 info 之前。
   const output = composeOperationsNarrative("daily status", [
     { heading: "Routine", severity: "info", facts: { healthy: true } },
     { heading: "Capacity", severity: "warning", facts: { free: 12 } },
@@ -221,6 +233,7 @@ test("operations narrative wraps long words within width", () => {
 });
 
 test("operations narrative distinguishes repeated headings", () => {
+  // 重复标题附加序号;不一致的事实跨段落汇总列出。
   const output = composeOperationsNarrative("repeat", [
     { heading: "Provider", severity: "warning", facts: { state: "open" } },
     { heading: "Provider", severity: "info", facts: { state: "closed" } },

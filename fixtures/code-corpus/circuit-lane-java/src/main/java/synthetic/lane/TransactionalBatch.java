@@ -18,10 +18,21 @@ import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 
+/**
+ * 事务批处理器:以幂等键为粒度提交一批指令,对单条失败指令自动重试,
+ * 并记录「指令 -> 回执」映射以保证相同幂等键的重复提交直接返回历史结果。
+ *
+ * <p>幂等语义:同一幂等键必须对应完全相同的指令集合(以指纹校验),
+ * 否则视为冲突并拒绝;回执也不允许被两条不同指令复用。
+ */
 public final class TransactionalBatch {
+    // 幂等键 -> 已提交指令对应的回执列表
     private final Map<String, List<String>> completed = new ConcurrentHashMap<>();
+    // 幂等键 -> 指令集合的 SHA-256 指纹(用于重复键一致性校验)
     private final Map<String, String> fingerprints = new ConcurrentHashMap<>();
+    // 单条指令的最大尝试次数
     private final int attempts;
+    // 单批次最大指令数
     private final int maximumBatch;
 
     public TransactionalBatch(int attempts) {
@@ -39,6 +50,10 @@ public final class TransactionalBatch {
         this.maximumBatch = maximumBatch;
     }
 
+    /**
+     * 应用一个批次:先校验输入并计算指纹,若幂等键已有结果则直接返回;
+     * 否则逐条执行操作(带重试),汇总每条指令的回执后缓存结果。
+     */
     public synchronized List<String> apply(
             String idempotencyKey,
             List<String> instructions,
@@ -95,6 +110,7 @@ public final class TransactionalBatch {
         String fingerprint;
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            // 指纹按「长度前缀 + 内容」编码每条指令,消除拼接歧义
             for (String instruction : normalized) {
                 byte[] bytes = instruction.getBytes(StandardCharsets.UTF_8);
                 digest.update((byte) ((bytes.length >>> 24) & 0xff));
@@ -113,18 +129,21 @@ public final class TransactionalBatch {
         }
         List<String> known = completed.get(key);
         if (known != null) {
+            // 幂等键复用:指令集合必须与历史完全一致,否则视为冲突
             String knownFingerprint = fingerprints.get(key);
             if (!fingerprint.equals(knownFingerprint)) {
                 throw new IllegalStateException("idempotency key was reused for different instructions");
             }
             return known;
         }
+        // 预分配结果槽位,保证输出顺序与输入指令顺序一致
         List<String> ordered = new ArrayList<>(Collections.nCopies(normalized.size(), null));
         Map<String, Integer> receiptOwners = new HashMap<>();
         for (int index = 0; index < normalized.size(); index++) {
             String instruction = normalized.get(index);
             RuntimeException finalFailure = null;
             String receipt = null;
+            // 单条指令最多重试 attempts 次,成功后记录回执并跳出
             for (int attempt = 1; attempt <= attempts; attempt++) {
                 try {
                     String rawReceipt = operation.apply(instruction, attempt);
@@ -140,6 +159,7 @@ public final class TransactionalBatch {
                     }
                     Integer owner = receiptOwners.putIfAbsent(receipt, index);
                     if (owner != null && owner != index) {
+                        // 同一回执被两条不同指令复用:说明操作方实现有误,拒绝整个批次
                         throw new IllegalStateException(
                                 "operation reused one receipt for instructions " + owner + " and " + index
                         );
@@ -154,6 +174,7 @@ public final class TransactionalBatch {
             if (finalFailure == null) {
                 ordered.set(index, receipt);
             } else {
+                // 重试全部失败:以 FAILED:异常类型:详情 占位,保证结果列表元素非空
                 String type = finalFailure.getClass().getSimpleName();
                 String detail = String.valueOf(finalFailure.getMessage())
                         .replace('\r', ' ')
@@ -176,6 +197,9 @@ public final class TransactionalBatch {
         return immutable;
     }
 
+    /**
+     * 返回所有已完成的幂等键集合,并校验两个缓存(结果/指纹)的键集合一致。
+     */
     public Set<String> completedKeys() {
         TreeSet<String> keys = new TreeSet<>(completed.keySet());
         if (!keys.equals(new TreeSet<>(fingerprints.keySet()))) {
@@ -184,6 +208,11 @@ public final class TransactionalBatch {
         return Collections.unmodifiableSet(keys);
     }
 
+    /**
+     * 忘记某个幂等键的历史结果(例如手动重放时清理)。
+     *
+     * @return 该键原本存在时为 true
+     */
     public synchronized boolean forget(String idempotencyKey) {
         Objects.requireNonNull(idempotencyKey, "idempotency key");
         String key = idempotencyKey.strip();
@@ -198,6 +227,10 @@ public final class TransactionalBatch {
         return removedResult != null;
     }
 
+    /**
+     * 只读校验一组指令,返回违规列表(不执行任何操作),用于提交前的预检。
+     * 返回空列表表示全部通过。
+     */
     public List<String> validateInstructions(List<String> instructions) {
         Objects.requireNonNull(instructions, "batch instructions");
         List<String> violations = new ArrayList<>();

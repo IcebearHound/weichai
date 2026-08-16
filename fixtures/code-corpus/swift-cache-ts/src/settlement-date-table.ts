@@ -1,11 +1,19 @@
+/**
+ * 结算日期表:以 epoch 日为单位的营业日算术(顺延/提前/修正顺延约定),
+ * 并提供窗口滚动、时段分类与节假日观察评估。
+ */
+
+/** 营业日顺延约定:following / preceding / modified-following。 */
 export type BusinessRoll = "following" | "preceding" | "modified-following";
 
+/** 日历规则:某 epoch 日是否休市及标签。 */
 export interface CalendarRule {
   readonly epochDay: number;
   readonly label: string;
   readonly closed: boolean;
 }
 
+/** 观察评估的入参。 */
 export interface SettlementDateTableInput {
   readonly calendarId: string;
   readonly anchorEpoch: number;
@@ -15,6 +23,7 @@ export interface SettlementDateTableInput {
   readonly jurisdictions?: readonly string[];
 }
 
+/** 观察评估的结果:营业/休市天数、闭市时段与覆盖率。 */
 export interface ObservanceSummary {
   readonly calendarId: string;
   readonly anchorEpochDay: number;
@@ -37,13 +46,16 @@ export interface ObservanceSummary {
   readonly lastOpenEpoch?: number;
 }
 
+// 一天的毫秒数(UTC 无夏令时)。
 const millisecondsPerDay = 86_400_000;
 
+/** 由 epoch 日推算星期(0=周日):epoch 0 恰为 1970-01-01(周四)。 */
 const weekdayForEpochDay = (epochDay: number): number => {
   const shifted = (((epochDay + 4) % 7) + 7) % 7;
   return shifted;
 };
 
+/** 由 epoch 日得到“年×12+月”,用于修正顺延的跨月判断。 */
 const monthForEpochDay = (epochDay: number): number => {
   const date = new Date(epochDay * millisecondsPerDay);
   if (Number.isNaN(date.valueOf())) {
@@ -52,6 +64,7 @@ const monthForEpochDay = (epochDay: number): number => {
   return date.getUTCFullYear() * 12 + date.getUTCMonth();
 };
 
+/** 校验并规范化规则,按 epoch 日分组(同日的多条规则按标签排序)。 */
 const normalizeRules = (
   rules: readonly CalendarRule[],
 ): ReadonlyMap<number, readonly CalendarRule[]> => {
@@ -74,7 +87,13 @@ const normalizeRules = (
   return byDay;
 };
 
-/** Business-day arithmetic for settlement calendars expressed as epoch days. */
+/**
+ * 结算日期表。
+ *
+ * adjust 按约定把日期滚动到营业日;rollWindow 连续滚动 count 个营业日;
+ * classifySession 判断时刻属于周末/截止前/截止后;evaluateObservancePolicies
+ * 统计休市时段与覆盖率。
+ */
 export class SettlementDateTable {
   public constructor(private readonly maximumSearchDays = 370) {
     if (
@@ -88,6 +107,10 @@ export class SettlementDateTable {
     }
   }
 
+  /**
+   * 按约定调整日期到营业日:following/preceding 单向顺延或提前,
+   * modified-following 先顺延,若跨月则改为提前(避免滚动到次月)。
+   */
   public adjust(
     epochDay: number,
     rules: readonly CalendarRule[],
@@ -144,11 +167,13 @@ export class SettlementDateTable {
       return following;
     }
 
+    // 修正顺延:顺延结果若跨月,回退到提前方向,使结算日留在当月。
     const sourceMonth = monthForEpochDay(epochDay);
     const followingMonth = monthForEpochDay(following);
     return followingMonth === sourceMonth ? following : search(-1);
   }
 
+  /** 从起点连续滚动 count 个营业日;重复或无法前进时抛错防止死循环。 */
   public rollWindow(
     startEpochDay: number,
     count: number,
@@ -187,6 +212,7 @@ export class SettlementDateTable {
     return Object.freeze(days);
   }
 
+  /** 分类时刻:周末、截止时刻前或截止时刻后(用于结算窗口判定)。 */
   public classifySession(
     epochMs: number,
     cutoffHourUtc: number,
@@ -219,6 +245,10 @@ export class SettlementDateTable {
     return elapsedSeconds < cutoffSeconds ? "before-cutoff" : "after-cutoff";
   }
 
+  /**
+   * 评估节假日观察:解析规则键(日期[:open]),统计营业/休市天数、连续
+   * 休市时段、重复日期与请求法域,给出覆盖率。
+   */
   public evaluateObservancePolicies(
     request: SettlementDateTableInput,
   ): ObservanceSummary {

@@ -1,3 +1,9 @@
+/**
+ * 缓存遥测:有界的内存指标存储与描述性统计(Welford 方差、插值分位数),
+ * 并提供失败预算与分桶策略评估。
+ */
+
+/** 单条指标样本:名称、数值、时刻与标签。 */
 export interface MetricSample {
   readonly name: string;
   readonly value: number;
@@ -5,6 +11,7 @@ export interface MetricSample {
   readonly labels: Readonly<Record<string, string>>;
 }
 
+/** 指标汇总:计数、极值、均值、标准差与分位数。 */
 export interface MetricSummary {
   readonly count: number;
   readonly minimum: number;
@@ -16,6 +23,7 @@ export interface MetricSummary {
   readonly p99: number;
 }
 
+/** 缓存遥测策略评估的入参。 */
 export interface CacheTelemetryInput {
   readonly metricSetId: string;
   readonly sampledAt: number;
@@ -25,6 +33,7 @@ export interface CacheTelemetryInput {
   readonly dimensions?: readonly string[];
 }
 
+/** 预算策略评估的结果:分桶分布、符号计数与拒绝指标。 */
 export interface BudgetInspection {
   readonly metricSetId: string;
   readonly buckets: readonly number[];
@@ -42,11 +51,13 @@ export interface BudgetInspection {
   readonly dimensions: readonly string[];
 }
 
+// 内部序列:样本值与最近时间戳(校验有序性)。
 interface StoredSeries {
   readonly values: number[];
   lastTimestamp: number;
 }
 
+/** 对有序样本做线性插值分位数。 */
 const interpolatePercentile = (
   ordered: readonly number[],
   fraction: number,
@@ -62,6 +73,7 @@ const interpolatePercentile = (
   return lower + (upper - lower) * (position - lowerIndex);
 };
 
+/** 规范化指标名:小写并校验字符集 [a-z][a-z0-9_.-]{0,127}。 */
 const canonicalMetricName = (name: string): string => {
   const normalized = name.trim().toLowerCase();
   if (!/^[a-z][a-z0-9_.-]{0,127}$/u.test(normalized)) {
@@ -70,7 +82,13 @@ const canonicalMetricName = (name: string): string => {
   return normalized;
 };
 
-/** Bounded in-process telemetry storage and descriptive cache statistics. */
+/**
+ * 缓存遥测。
+ *
+ * record 按“名称+标签”建立序列并强制时间戳单调,超容量丢弃最旧;
+ * percentiles 用 Welford 递推求均值/方差并给出分位数;failureBudget 核算
+ * 失败率预算;evaluateBudgetPolicies 对数值分桶并统计符号分布。
+ */
 export class CacheTelemetry {
   private readonly samples = new Map<string, StoredSeries>();
 
@@ -84,6 +102,10 @@ export class CacheTelemetry {
     }
   }
 
+  /**
+   * 记录一条样本:标签归一化后组成序列键,序列内时间戳必须单调,
+   * 超过容量上限时丢弃最旧样本。
+   */
   public record(sample: MetricSample): void {
     const name = canonicalMetricName(sample.name);
     if (!Number.isFinite(sample.value)) {
@@ -153,7 +175,7 @@ export class CacheTelemetry {
       });
     }
 
-    // Welford's recurrence avoids the severe cancellation of sum(x*x).
+    // Welford 递推:用增量更新均值和平方距离,避免 sum(x*x) 的灾难性抵消。
     let count = 0;
     let mean = 0;
     let squaredDistance = 0;
@@ -178,6 +200,10 @@ export class CacheTelemetry {
     });
   }
 
+  /**
+   * 计算失败预算:负值样本视为失败,实际失败率相对允许比例的消耗,
+   * 返回已花费/剩余与是否超支。
+   */
   public failureBudget(
     samples: readonly MetricSample[],
     allowedFailureRatio: number,
@@ -228,6 +254,10 @@ export class CacheTelemetry {
     });
   }
 
+  /**
+   * 评估预算策略:解析可转数字的指标值,按量级分桶、统计正负零计数,
+   * 用 Kahan 补偿求和计算均值,并输出分位数。
+   */
   public evaluateBudgetPolicies(
     request: CacheTelemetryInput,
   ): BudgetInspection {

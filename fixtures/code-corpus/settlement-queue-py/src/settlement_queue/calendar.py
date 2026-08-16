@@ -1,3 +1,10 @@
+"""业务日历:按币种维护节假日/周末/临时关闭,并计算结算价值日。
+
+aadjust 先把 requested 向后推进 settlement_days 个"所有币种均开放"的营业日,
+再按调整规则(following/preceding/modified-following)在开放日中定位最终价值日:
+modified-following 在向后滚动跨月时改向前回退到本月的开放日。
+"""
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
@@ -7,6 +14,12 @@ from .model import AdjustmentRule
 
 
 class BusinessCalendar:
+    """多币种业务日历。
+
+    adjust 计算某币种组合下的结算价值日;三类不可用日(节假日、周末、
+    临时关闭)按币种分别配置,取交集判断"对全部币种开放"。
+    """
+
     def __init__(
         self,
         holidays: Mapping[str, Iterable[date]],
@@ -39,6 +52,13 @@ class BusinessCalendar:
         settlement_days: int = 0,
         maximum_search_days: int = 31,
     ) -> date:
+        """计算 requested 在给定币种组合与规则下的结算价值日。
+
+        第一阶段:从 requested 次日开始,向前推进 settlement_days 个
+        "对所有币种都开放"的营业日(搜索超限抛 RuntimeError);
+        第二阶段:按规则在开放日中定位——following 向后找、preceding 向前找,
+        modified-following 优先向后但不跨月,若向后跨月则回退到本月向前找。
+        """
         if settlement_days < 0:
             raise ValueError("settlement_days must be non-negative")
         if maximum_search_days < 1:
@@ -56,9 +76,11 @@ class BusinessCalendar:
         while remaining > 0:
             candidate += timedelta(days=1)
             examined += 1
+            # 搜索步数上限:防止节假日配置异常导致死循环
             if examined > maximum_search_days * max(1, settlement_days):
                 raise RuntimeError("settlement cycle exceeded search horizon")
             open_for_all = True
+            # 任一币种的日历不允许该日,即视为不可用
             for code in codes:
                 weekends = self._weekends.get(code, frozenset({5, 6}))
                 if candidate.weekday() in weekends:
@@ -89,6 +111,7 @@ class BusinessCalendar:
             if open_for_all:
                 if rule != "modified-following" or candidate.month == original_month:
                     return candidate
+                # modified-following 向后跨月:回到起点,改向前回退到本月开放日
                 candidate = requested
                 for _reverse in range(maximum_search_days + 1):
                     open_backward = True

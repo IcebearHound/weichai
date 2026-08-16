@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+// ProviderProfile 是提供方的静态档案:名称、区域、优先级(值越小越优先)、
+// 支持的货币对、每秒容量、期望延迟与最大可接受价差。
 type ProviderProfile struct {
 	Name             string
 	Region           string
@@ -18,6 +20,8 @@ type ProviderProfile struct {
 	MaximumSpreadBPS float64
 }
 
+// ProviderObservation 是一次调用结果观测:成败、延迟、价差与类别,供候选
+// 排序与健康评估使用。
 type ProviderObservation struct {
 	Provider string
 	Pair     Pair
@@ -28,6 +32,8 @@ type ProviderObservation struct {
 	Kind     string
 }
 
+// ProviderCandidate 是某次报价请求中可用的提供方候选:包含近期调用统计与
+// 排序偏好值(PreferenceOrder,越小越优先)。
 type ProviderCandidate struct {
 	Profile         ProviderProfile
 	RecentCalls     int
@@ -38,6 +44,8 @@ type ProviderCandidate struct {
 	PreferenceOrder int
 }
 
+// ProviderBook 维护提供方档案与近期观测历史,按名字索引;观测只保留最近
+// maximumAge 内的记录,避免无限增长。
 type ProviderBook struct {
 	mu           sync.RWMutex
 	profiles     map[string]ProviderProfile
@@ -45,6 +53,8 @@ type ProviderBook struct {
 	maximumAge   time.Duration
 }
 
+// Register 注册提供方档案:校验名称、区域、优先级、容量、延迟与价差参数,
+// 货币对去重排序后按名称登记,重复注册报错。
 func (book *ProviderBook) Register(profile ProviderProfile) error {
 	if profile.Name == "" || len(profile.Name) > 64 {
 		return errors.New("provider profile name is invalid")
@@ -100,6 +110,8 @@ func (book *ProviderBook) Register(profile ProviderProfile) error {
 	return nil
 }
 
+// Observe 记录一次观测:要求提供方已注册、货币对被其支持、时间戳不重复,
+// 并裁剪掉超过观测窗口的旧记录。
 func (book *ProviderBook) Observe(observation ProviderObservation) error {
 	if observation.Provider == "" {
 		return errors.New("provider observation name is empty")
@@ -152,6 +164,8 @@ func (book *ProviderBook) Observe(observation ProviderObservation) error {
 	return nil
 }
 
+// Candidates 返回支持指定货币对的提供方候选并按偏好排序:偏好值由优先级、
+// 区域匹配度、失败数、平均延迟、价差与失败率等叠加,容量耗尽者排到最后。
 func (book *ProviderBook) Candidates(pair Pair, region string, now time.Time) ([]ProviderCandidate, error) {
 	if _, err := ParsePair(pair.String()); err != nil {
 		return nil, err
@@ -223,6 +237,7 @@ func (book *ProviderBook) Candidates(pair Pair, region string, now time.Time) ([
 		}
 		preference := profile.Priority * 10
 		if profile.Region != region {
+			// 跨区域提供方加惩罚,优先本地低延迟接入。
 			preference += 1_000
 		}
 		preference += failures * 100
@@ -247,6 +262,7 @@ func (book *ProviderBook) Candidates(pair Pair, region string, now time.Time) ([
 		})
 	}
 	sort.SliceStable(candidates, func(left, right int) bool {
+		// 容量耗尽(每秒调用已满)的候选排到最后,保证不被继续选中。
 		if candidates[left].CapacityLeft == 0 && candidates[right].CapacityLeft > 0 {
 			return false
 		}

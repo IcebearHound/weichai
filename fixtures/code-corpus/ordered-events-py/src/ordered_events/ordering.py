@@ -1,3 +1,10 @@
+"""事件顺序分析:检测序列异常并为多账户并行消费规划交错顺序。
+
+SequenceAnalyzer.analyze 对一批事件做全量体检(重复、跨账户 ID、序列空洞、
+回退、时间偏斜、账户集中度);interleave 则把多个账户的有序事件流按时间
+交错成不超过 maximum_parallel 的并行波次。
+"""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -8,11 +15,26 @@ from .model import TradeEvent
 
 
 class SequenceAnalyzer:
+    """事件流顺序分析器(纯函数式,无状态)。
+
+    analyze 用于审计/质检,interleave 用于构造并行消费调度。
+    """
+
     def analyze(
         self,
         events: Sequence[TradeEvent],
         checkpoints: Mapping[str, int],
     ) -> Mapping[str, object]:
+        """分析事件序列健康度,返回结构化报告。
+
+        对每个账户泳道:
+        - 按到达顺序检测"到达回退"(后到消息序列号更小);
+        - 按序列号排序后检测重复序号、低于检查点的事件,以及期望序号之间的空洞;
+        - skew_seconds 为该账户事件时间戳的最大跨度;
+        - account_concentration 为最大账户事件数占比,衡量单账户热点程度。
+
+        重复消息与跨账户复用同一 message_id 的情况会单独汇总。
+        """
         lanes: dict[str, list[TradeEvent]] = defaultdict(list)
         message_accounts: dict[str, str] = {}
         duplicates: list[str] = []
@@ -20,6 +42,7 @@ class SequenceAnalyzer:
         for event in events:
             previous_account = message_accounts.get(event.message_id)
             if previous_account is not None:
+                # message_id 再次出现:全局判重;账户不同则记为跨账户复用
                 duplicates.append(event.message_id)
                 if previous_account != event.account:
                     cross_account_ids.append(event.message_id)
@@ -33,6 +56,7 @@ class SequenceAnalyzer:
         for account, lane in lanes.items():
             arrival_order = list(lane)
             sequence_order = sorted(lane, key=lambda event: (event.sequence, event.occurred_at, event.message_id))
+            # 期望序号从检查点 +1 开始;无检查点时从 0 开始
             expected = checkpoints.get(account, -1) + 1
             missing: list[int] = []
             seen: set[int] = set()
@@ -51,6 +75,7 @@ class SequenceAnalyzer:
                     lane_regressions.append(f"checkpoint:{event.message_id}:{event.sequence}<{expected}")
                     continue
                 if event.sequence > expected:
+                    # 期望与当前之间的序号全部记为空洞
                     missing.extend(range(expected, event.sequence))
                 expected = event.sequence + 1
             timestamps = [event.occurred_at.timestamp() for event in lane]
@@ -81,6 +106,12 @@ class SequenceAnalyzer:
         maximum_parallel: int,
         blocked_accounts: frozenset[str] = frozenset(),
     ) -> tuple[tuple[TradeEvent, ...], ...]:
+        """把各账户的有序事件交错成并行波次,每波至多 maximum_parallel 条。
+
+        每个账户内部保持原序,波内按 (occurred_at, account, sequence) 取最靠前
+        的事件;blocked_accounts 中的账户被排除(如已被其它消费者接管)。
+        返回的波次序列保证:同一波内不同账户、同一账户内顺序严格单调。
+        """
         if maximum_parallel < 1:
             raise ValueError("maximum_parallel must be positive")
         ordered_lanes = {

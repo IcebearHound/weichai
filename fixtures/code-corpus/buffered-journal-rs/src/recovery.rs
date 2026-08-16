@@ -6,15 +6,25 @@ use crate::codec::JournalCodec;
 use crate::domain::{Durability, SegmentDescriptor, SegmentState};
 use crate::segment::SegmentFile;
 
+/// 恢复扫描器:启动/维护时扫描日志目录,识别、修复或隔离段文件。
+///
+/// 职责:识别 `segment-{id}-g{N}.bjseg` 文件并处理同名多代、
+/// 隔离陈旧临时文件与无法识别的文件、打开每个段并检查其完整性。
 pub struct RecoveryScanner {
     pub codec: JournalCodec,
     pub durability: Durability,
     pub maximum_segment_bytes: u64,
+    /// 临时文件在此年龄内被视为“进行中”而保留。
     pub temporary_file_grace: Duration,
+    /// 可接受的段代际范围(超代文件视为无法识别)。
     pub accept_generation: std::ops::RangeInclusive<u32>,
 }
 
 impl RecoveryScanner {
+    /// 扫描目录并返回(段描述列表, 诊断信息)。
+    ///
+    /// `repair=true` 时会对陈旧临时文件与未知文件执行隔离(移入 quarantine 子目录),
+    /// 并尝试修复可读但尾部损坏的段;`repair=false` 仅报告。
     pub fn scan(
         &self,
         directory: &Path,
@@ -56,6 +66,7 @@ impl RecoveryScanner {
             let file_type = entry
                 .file_type()
                 .map_err(|error| format!("inspect {}: {error}", path.display()))?;
+            // 跳过已知子目录(quarantine/indexes),其余目录仅告警。
             if file_type.is_dir() {
                 if entry.file_name() != "quarantine" && entry.file_name() != "indexes" {
                     diagnostics.push(format!("ignored subdirectory {}", path.display()));
@@ -67,6 +78,7 @@ impl RecoveryScanner {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().into_owned();
+            // 压缩/写入中的临时文件:留待后续按年龄处理。
             if name.ends_with(".compacting")
                 || name.ends_with(".writing")
                 || name.ends_with(".previous")
@@ -75,10 +87,12 @@ impl RecoveryScanner {
                 temporary_paths.push(path);
                 continue;
             }
+            // 非 `segment-*.bjseg` 命名:无法识别。
             if !name.ends_with(".bjseg") || !name.starts_with("segment-") {
                 unrecognized_paths.push(path);
                 continue;
             }
+            // 从文件名解析段 id 与代际:segment-{id}-g{generation}.bjseg。
             let stem = name.trim_end_matches(".bjseg");
             let rest = stem.trim_start_matches("segment-");
             let Some((id_text, generation_text)) = rest.rsplit_once("-g") else {
@@ -117,6 +131,7 @@ impl RecoveryScanner {
                 unrecognized_paths.push(path);
                 continue;
             }
+            // 同 id 多代并存:保留代际最新者,旧者转无法识别。
             if let Some(previous) = segment_paths.insert(segment_id, (generation, path.clone())) {
                 let keep_new = generation > previous.0;
                 if keep_new {
@@ -135,6 +150,7 @@ impl RecoveryScanner {
                 }
             }
         }
+        // 临时文件处理:宽限期内保留;过期后 repair 模式隔离,否则仅报告。
         let now = SystemTime::now();
         for path in temporary_paths {
             let age = path
@@ -159,6 +175,7 @@ impl RecoveryScanner {
                         quarantine.display()
                     )
                 })?;
+                // 目标名冲突时追加后缀,避免覆盖。
                 let filename = path
                     .file_name()
                     .ok_or_else(|| format!("temporary path {} has no filename", path.display()))?;
@@ -184,6 +201,7 @@ impl RecoveryScanner {
                 ));
             }
         }
+        // 无法识别文件:repair 模式下全部移入 quarantine。
         if repair && !unrecognized_paths.is_empty() {
             let quarantine = directory.join("quarantine");
             std::fs::create_dir_all(&quarantine).map_err(|error| {
@@ -217,6 +235,7 @@ impl RecoveryScanner {
                 diagnostics.push(format!("unrecognized journal file {}", path.display()));
             }
         }
+        // 逐个打开段并做完整性检查。
         let mut descriptors = Vec::new();
         for (segment_id, (generation, path)) in segment_paths {
             let segment = match SegmentFile::open(
@@ -230,6 +249,7 @@ impl RecoveryScanner {
                 Ok(segment) => segment,
                 Err(error) => {
                     diagnostics.push(format!("could not open segment {segment_id}: {error}"));
+                    // 打不开的段在 repair 模式下隔离,避免反复报错。
                     if repair {
                         let quarantine = directory.join("quarantine");
                         std::fs::create_dir_all(&quarantine).map_err(|directory_error| {
@@ -267,6 +287,7 @@ impl RecoveryScanner {
                 }
             }
         }
+        // 按序列起点排序,便于后续检查段间衔接。
         descriptors.sort_by_key(|descriptor| {
             (
                 descriptor.first_sequence,
@@ -283,6 +304,7 @@ impl RecoveryScanner {
             if descriptor.state == SegmentState::Active {
                 active_segments.push(descriptor.segment_id);
             }
+            // 有记录却从序列 0 开始的段必然是坏的,标记隔离。
             if descriptor.first_sequence == 0 && descriptor.live_records > 0 {
                 descriptor.state = SegmentState::Quarantined;
                 diagnostics.push(format!(
@@ -290,6 +312,7 @@ impl RecoveryScanner {
                     descriptor.segment_id
                 ));
             }
+            // 段间序列衔接检查:间隙或重叠都记录。
             if let Some(previous) = prior_last {
                 if descriptor.first_sequence > previous.saturating_add(1) {
                     diagnostics.push(format!(
@@ -306,6 +329,7 @@ impl RecoveryScanner {
                 }
             }
             prior_last = Some(prior_last.unwrap_or(0).max(descriptor.last_sequence));
+            // 账户级序列重叠检查。
             for (account, range) in &descriptor.account_ranges {
                 if let Some(previous) = account_last_sequences.get(account) {
                     if range.0 <= *previous {
@@ -321,6 +345,7 @@ impl RecoveryScanner {
                     .or_insert(range.1);
             }
         }
+        // 多个 Active 段(异常情况):只保留 id 最大者,其余降级为 Sealed。
         if active_segments.len() > 1 {
             active_segments.sort_unstable();
             let retained = *active_segments.last().unwrap_or(&0);

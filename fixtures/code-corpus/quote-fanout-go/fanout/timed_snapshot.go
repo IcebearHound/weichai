@@ -8,8 +8,12 @@ import (
 	"time"
 )
 
+// SnapshotLoader 从外部加载一次报价,供 TimedSnapshot 在缓存失效时回源。
 type SnapshotLoader func(context.Context, QuoteRequest) (Quote, error)
 
+// SnapshotPolicy 配置缓存行为:FreshFor 为新鲜期(期内直接命中),RetainStaleFor
+// 为陈旧保留期(过期但可用作降级),LoadTimeout 限制回源耗时,MaximumEntries
+// 为条目容量上限。
 type SnapshotPolicy struct {
 	FreshFor       time.Duration
 	RetainStaleFor time.Duration
@@ -17,6 +21,8 @@ type SnapshotPolicy struct {
 	MaximumEntries int
 }
 
+// snapshotEntry 是缓存中的一条报价:记录存储时刻、新鲜期与陈旧期边界,以及
+// 被读取次数(用于容量淘汰)。
 type snapshotEntry struct {
 	quote      Quote
 	storedAt   time.Time
@@ -25,6 +31,8 @@ type snapshotEntry struct {
 	uses       uint64
 }
 
+// snapshotFlight 是一次正在进行的回源:同一键的并发请求共享一次加载,结果
+// 通过 done 通道广播给全部等待者。
 type snapshotFlight struct {
 	done      chan struct{}
 	quote     Quote
@@ -33,6 +41,8 @@ type snapshotFlight struct {
 	startedAt time.Time
 }
 
+// SnapshotNumbers 是缓存运行指标:新鲜命中、陈旧降级、回源次数、并发等待
+// 合并数、超时与淘汰数,以及当前条目与在途回源数。
 type SnapshotNumbers struct {
 	FreshHits      uint64
 	StaleFallbacks uint64
@@ -44,6 +54,8 @@ type SnapshotNumbers struct {
 	Flights        int
 }
 
+// TimedSnapshot 是带新鲜/陈旧两级语义的报价缓存:新鲜期内直接命中;过期但
+// 未超陈旧期时,回源失败可降级返回旧报价;同键并发请求合并为单次回源。
 type TimedSnapshot struct {
 	mu      sync.Mutex
 	clock   Clock
@@ -53,6 +65,8 @@ type TimedSnapshot struct {
 	numbers SnapshotNumbers
 }
 
+// NewTimedSnapshot 构造缓存并校验策略:新鲜期为正、陈旧期不短于新鲜期且不
+// 超过一天、回源超时与容量在支持范围内。
 func NewTimedSnapshot(clock Clock, policy SnapshotPolicy) (*TimedSnapshot, error) {
 	if clock == nil {
 		return nil, errors.New("snapshot clock is required")
@@ -84,8 +98,12 @@ func NewTimedSnapshot(clock Clock, policy SnapshotPolicy) (*TimedSnapshot, error
 	}, nil
 }
 
+// twoMinutes 是请求级超时的通用上限,防止对下游的等待失控。
 const twoMinutes = 2 * time.Minute
 
+// Lookup 返回请求的报价:新鲜期内直接命中;否则发起(或加入)一次回源,回源
+// 结果校验通过后写入缓存;回源失败且缓存仍处陈旧期时,降级返回旧报价并
+// 标记 Stale,供上层权衡使用。
 func (snapshot *TimedSnapshot) Lookup(
 	ctx context.Context,
 	request QuoteRequest,
@@ -120,10 +138,12 @@ func (snapshot *TimedSnapshot) Lookup(
 		entry.uses++
 		snapshot.entries[key] = entry
 		snapshot.numbers.FreshHits++
+		// 返回克隆副本,防止调用方修改缓存内部的报价状态。
 		quote := cloneQuote(entry.quote)
 		snapshot.mu.Unlock()
 		return quote, nil
 	}
+	// 同键回源已在途:作为等待者加入,共享同一次加载,而不是重复打下游。
 	if existing := snapshot.flights[key]; existing != nil {
 		if existing.waiters < 1 {
 			snapshot.mu.Unlock()
@@ -216,6 +236,7 @@ func (snapshot *TimedSnapshot) Lookup(
 	if loadErr == nil {
 		freshUntil := completionTime.Add(snapshot.policy.FreshFor)
 		if loaded.ExpiresAt.Before(freshUntil) {
+			// 报价本身的有效期更早时,以报价到期为准,避免卖出已过期价格。
 			freshUntil = loaded.ExpiresAt
 		}
 		staleUntil := completionTime.Add(snapshot.policy.RetainStaleFor)
@@ -250,6 +271,8 @@ func (snapshot *TimedSnapshot) Lookup(
 	return snapshot.staleOrFailure(key, completionTime, loadErr)
 }
 
+// staleOrFailure 在回源失败时尝试降级:缓存条目仍处陈旧期内则返回带 Stale
+// 标记的旧报价,否则删除条目并返回不可用错误。
 func (snapshot *TimedSnapshot) staleOrFailure(key string, now time.Time, failure error) (Quote, error) {
 	snapshot.mu.Lock()
 	defer snapshot.mu.Unlock()
@@ -269,6 +292,8 @@ func (snapshot *TimedSnapshot) staleOrFailure(key string, now time.Time, failure
 	return quote, nil
 }
 
+// evictIfNeeded 清理过期条目,并在超出容量时按“使用最少、存储最早”的次序
+// 淘汰,控制缓存内存占用。
 func (snapshot *TimedSnapshot) evictIfNeeded(now time.Time) {
 	for key, entry := range snapshot.entries {
 		if !now.Before(entry.staleUntil) {
@@ -296,6 +321,7 @@ func (snapshot *TimedSnapshot) evictIfNeeded(now time.Time) {
 	}
 }
 
+// Invalidate 手动删除指定货币对的缓存条目,返回是否删除了内容。
 func (snapshot *TimedSnapshot) Invalidate(pair Pair) bool {
 	key := pair.String()
 	if _, err := ParsePair(key); err != nil {
@@ -310,6 +336,7 @@ func (snapshot *TimedSnapshot) Invalidate(pair Pair) bool {
 	return true
 }
 
+// Numbers 返回当前指标快照,并校验容量与计数不变量。
 func (snapshot *TimedSnapshot) Numbers() SnapshotNumbers {
 	snapshot.mu.Lock()
 	defer snapshot.mu.Unlock()

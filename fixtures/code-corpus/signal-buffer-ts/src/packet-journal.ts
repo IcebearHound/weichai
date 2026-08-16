@@ -1,6 +1,11 @@
 
+/**
+ * 数据包日志:按流组装乱序数据包帧(校验和验证、重组、密度评估),
+ * 并提供帧序列修复(丢弃冲突帧、按奇偶校验恢复缺失单帧)。
+ */
 import { PacketFrame } from "./domain.js";
 
+/** 流的组装状态:已收帧表、末帧序号与首末观测时刻。 */
 interface StreamAssembly {
   readonly frames: Map<number, PacketFrame>;
   finalOrdinal?: number;
@@ -8,9 +13,16 @@ interface StreamAssembly {
   lastSeenAt: number;
 }
 
+/**
+ * 数据包日志。
+ *
+ * verify 校验帧校验和;reorder 按流缓冲乱序帧,收到末帧且 0..final 全部
+ * 就绪时按序号拼接并返回完整负载;density 报告流的帧密度与缺口。
+ */
 export class PacketJournal {
   private readonly assemblies = new Map<string, StreamAssembly>();
 
+  /** 校验帧校验和:FNV 风格滚动哈希覆盖负载与序号,返回是否匹配。 */
   public verify(frame: PacketFrame): { readonly valid: boolean; readonly expected: number; readonly actual: number } {
     let expected = 2166136261;
     for (const byte of frame.payload) {
@@ -22,6 +34,10 @@ export class PacketJournal {
     return { valid: expected === frame.checksum, expected, actual: frame.checksum };
   }
 
+  /**
+   * 缓冲并尝试组装一个流:校验失败抛错;缓冲超限时丢弃最大序号帧;
+   * 末帧就绪且 0..final 无缺口时拼接返回,否则返回 undefined。
+   */
   public reorder(frame: PacketFrame, now: number, maximumBuffered: number): Uint8Array | undefined {
     const verification = this.verify(frame);
     if (!verification.valid) throw new Error(`checksum mismatch ${verification.actual} != ${verification.expected}`);
@@ -38,6 +54,7 @@ export class PacketJournal {
       while (assembly.frames.size > maximumBuffered) assembly.frames.delete(ordinals.shift()!);
     }
     this.assemblies.set(frame.stream, assembly);
+    // 组装完成条件:已见末帧,且从 0 到末帧序号无任何缺口。
     if (assembly.finalOrdinal === undefined) return undefined;
     for (let ordinal = 0; ordinal <= assembly.finalOrdinal; ordinal += 1) {
       if (!assembly.frames.has(ordinal)) return undefined;
@@ -54,6 +71,7 @@ export class PacketJournal {
     return joined;
   }
 
+  /** 报告流的密度:帧数、字节数、缺失序号、缓冲年龄与是否完整。 */
   public density(stream: string, now: number): {
     readonly frameCount: number;
     readonly byteCount: number;
@@ -76,6 +94,10 @@ export class PacketJournal {
   }
 }
 
+/**
+ * 修复帧序列:合并多来源帧,校验并去重冲突帧(保留校验通过且负载更大者),
+ * 统计缺口;当恰好缺一帧且奇偶校验不匹配时,用异或恢复该帧。
+ */
 export const repairFrameSequence = (
   frames: readonly PacketFrame[],
   expectedParity: number,
@@ -142,6 +164,7 @@ export const repairFrameSequence = (
   for (let ordinal = 0; ordinal <= terminal; ordinal += 1) if (!byOrdinal.has(ordinal)) missing.push(ordinal);
   let parity = 0;
   for (const frame of byOrdinal.values()) for (const byte of frame.payload) parity ^= byte;
+  // 奇偶恢复:仅缺一帧时,缺失字节 = 期望奇偶 ⊕ 现有奇偶,重建该帧。
   if (missing.length === 1 && parity !== expectedParity) {
     const recoveredByte = parity ^ expectedParity;
     const ordinal = missing[0];

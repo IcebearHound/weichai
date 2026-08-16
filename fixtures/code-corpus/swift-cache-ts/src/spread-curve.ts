@@ -1,9 +1,16 @@
+/**
+ * 利差曲线:报价利差的期限结构插值与诊断(合并重复期限、线性插值/外推、
+ * 分段斜率、利差加价与拟合质量评估)。
+ */
+
+/** 曲线节点:期限(天)、利差(基点)与置信度 [0,1]。 */
 export interface CurveKnot {
   readonly tenorDays: number;
   readonly spreadBps: number;
   readonly confidence: number;
 }
 
+/** 曲线段:两节点间的每日斜率、年化变化与置信度下限。 */
 export interface CurveSegment {
   readonly start: CurveKnot;
   readonly end: CurveKnot;
@@ -12,6 +19,7 @@ export interface CurveSegment {
   readonly confidenceFloor: number;
 }
 
+/** 拟合评估的入参。 */
 export interface SpreadCurveInput {
   readonly curveId: string;
   readonly fittedAt: number;
@@ -21,6 +29,7 @@ export interface SpreadCurveInput {
   readonly tenors?: readonly string[];
 }
 
+/** 拟合评估的结果:回归参数、误差指标与单调性变化计数。 */
 export interface CurveFitInspection {
   readonly curveId: string;
   readonly slope: number;
@@ -37,6 +46,7 @@ export interface CurveFitInspection {
   readonly missingRequestedTenors: readonly string[];
 }
 
+/** 解析期限字符串:支持数字加 d/w/m/y 单位(月按 30 天、年按 365 天)。 */
 const parseTenorDays = (value: string): number | undefined => {
   const match = /^\s*(\d+(?:\.\d+)?)\s*([dDwWmMyY]?)\s*$/u.exec(value);
   if (match === null) {
@@ -50,6 +60,10 @@ const parseTenorDays = (value: string): number | undefined => {
   return Number.isFinite(days) && days >= 0 ? days : undefined;
 };
 
+/**
+ * 合并重复期限节点:按置信度加权平均利差(单观测直接取原值),
+ * 置信度取最大,并按键升序排序。
+ */
 const consolidatedKnots = (knots: readonly CurveKnot[]): CurveKnot[] => {
   const buckets = new Map<
     number,
@@ -107,10 +121,20 @@ const consolidatedKnots = (knots: readonly CurveKnot[]): CurveKnot[] => {
     .sort((left, right) => left.tenorDays - right.tenorDays);
 };
 
-/** Interpolation and diagnostics for a term structure of quote spreads. */
+/**
+ * 利差曲线。
+ *
+ * interpolate 做分段线性插值,区间外默认平坦外推(allowFlatExtrapolation
+ * 关闭时按端部斜率线性外推);fitSegments 计算相邻节点斜率;applyMarkup
+ * 按基点加价计算名义金额费用;evaluateFitPolicies 评估拟合质量。
+ */
 export class SpreadCurve {
   public constructor(private readonly allowFlatExtrapolation = true) {}
 
+  /**
+   * 在期限处插值利差:命中节点直接返回,否则二分定位相邻节点线性插值;
+   * 超出两端时按平坦或线性外推策略处理。
+   */
   public interpolate(knots: readonly CurveKnot[], tenorDays: number): number {
     if (!Number.isFinite(tenorDays) || tenorDays < 0) {
       throw new RangeError("tenorDays must be finite and non-negative");
@@ -163,6 +187,7 @@ export class SpreadCurve {
     return left.spreadBps + (right.spreadBps - left.spreadBps) * fraction;
   }
 
+  /** 计算相邻节点间曲线段:每日斜率、年化变化与置信度下限。 */
   public fitSegments(knots: readonly CurveKnot[]): readonly CurveSegment[] {
     const ordered = consolidatedKnots(knots);
     if (ordered.length < 2) {
@@ -191,6 +216,10 @@ export class SpreadCurve {
     return Object.freeze(segments);
   }
 
+  /**
+   * 按利差加价计算名义金额的费用:(利差+加价) 以百分之一基点计,
+   * 乘名义金额后按 1e6 取整(余数达半步进位),保留符号。
+   */
   public applyMarkup(
     spreadBps: number,
     notionalMinor: bigint,
@@ -217,6 +246,10 @@ export class SpreadCurve {
     return sign * rounded;
   }
 
+  /**
+   * 评估拟合质量:解析期限/利差样本做最小二乘回归,输出斜率/截距、
+   * RMSE/MAE/R²、单调性变化次数与缺失请求期限。
+   */
   public evaluateFitPolicies(request: SpreadCurveInput): CurveFitInspection {
     const curveId = request.curveId.trim();
     if (curveId.length === 0) {

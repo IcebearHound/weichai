@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// ReceiptStore 是回执的持久化抽象。实现需要保证:同一 PaymentID 至多保存
+// 一条回执;Save 对内容一致的重放返回已存在结果;FindByPayment 能查询任意
+// 历史回执,便于对账与幂等恢复。
 type ReceiptStore interface {
 	FindByPayment(paymentID string) (Receipt, bool, error)
 	Save(receipt Receipt) (Receipt, bool, error)
@@ -15,6 +18,8 @@ type ReceiptStore interface {
 	Count() int
 }
 
+// MemoryReceiptStore 是 ReceiptStore 的内存实现,供测试与单机演示使用。
+// failures 表支持按操作注入故障,用于验证调用方对存储异常的重试与降级行为。
 type MemoryReceiptStore struct {
 	mu        sync.RWMutex
 	byPayment map[string]Receipt
@@ -22,6 +27,7 @@ type MemoryReceiptStore struct {
 	failures  map[string]error
 }
 
+// NewMemoryReceiptStore 构造空的回执存储。
 func NewMemoryReceiptStore() *MemoryReceiptStore {
 	return &MemoryReceiptStore{
 		byPayment: make(map[string]Receipt),
@@ -30,6 +36,7 @@ func NewMemoryReceiptStore() *MemoryReceiptStore {
 	}
 }
 
+// FindByPayment 按支付 ID 查询回执;返回的 bool 表示是否存在。
 func (store *MemoryReceiptStore) FindByPayment(paymentID string) (Receipt, bool, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
@@ -40,6 +47,9 @@ func (store *MemoryReceiptStore) FindByPayment(paymentID string) (Receipt, bool,
 	return receipt, exists, nil
 }
 
+// Save 保存回执。同一 PaymentID 重复保存时,若新老回执的关键内容一致则返回
+// 已存在的旧回执且不重复入库(幂等);内容不一致则报错,防止同一支付被
+// 不同批次改写成不同结果。
 func (store *MemoryReceiptStore) Save(receipt Receipt) (Receipt, bool, error) {
 	if err := receipt.Validate(); err != nil {
 		return Receipt{}, false, err
@@ -60,6 +70,8 @@ func (store *MemoryReceiptStore) Save(receipt Receipt) (Receipt, bool, error) {
 	return receipt, true, nil
 }
 
+// ListByBatch 按批次键列出该批的全部回执,结果按提交时间(同时间按回执 ID)
+// 稳定排序,保证多次查询顺序一致。
 func (store *MemoryReceiptStore) ListByBatch(batchKey string) ([]Receipt, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
@@ -82,12 +94,15 @@ func (store *MemoryReceiptStore) ListByBatch(batchKey string) ([]Receipt, error)
 	return result, nil
 }
 
+// Count 返回已保存的回执总数,用于健康检查与容量告警。
 func (store *MemoryReceiptStore) Count() int {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 	return len(store.byPayment)
 }
 
+// InjectFailure 向存储注入或清除故障:设置后,对应的 find/save/list 操作会
+// 返回该错误。专用于测试故障注入,生产代码不应调用。
 func (store *MemoryReceiptStore) InjectFailure(operation, identity string, failure error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -99,11 +114,15 @@ func (store *MemoryReceiptStore) InjectFailure(operation, identity string, failu
 	}
 }
 
+// BatchArchive 按幂等键归档批次,保存键与指纹的对应关系及每笔结果,用于
+// 冲突检测与事后审计。
 type BatchArchive struct {
 	mu      sync.RWMutex
 	records map[string]ArchivedBatch
 }
 
+// ArchivedBatch 是归档后的批次快照:包含结果条目、时间范围与修订号
+// (Revision,当前恒为 1,为未来多版本留位)。
 type ArchivedBatch struct {
 	Key         string
 	Fingerprint string
@@ -113,10 +132,13 @@ type ArchivedBatch struct {
 	Revision    uint64
 }
 
+// NewBatchArchive 构造空归档。
 func NewBatchArchive() *BatchArchive {
 	return &BatchArchive{records: make(map[string]ArchivedBatch)}
 }
 
+// Put 归档一个批次。若键已存在且指纹一致,视为重复提交,返回已归档的旧
+// 批次而不覆盖;指纹不一致则返回 BatchConflictError,提示调用方键被误用。
 func (archive *BatchArchive) Put(batch ArchivedBatch) (ArchivedBatch, error) {
 	if batch.Key == "" || batch.Fingerprint == "" {
 		return ArchivedBatch{}, errors.New("archive key and fingerprint are required")
@@ -139,6 +161,7 @@ func (archive *BatchArchive) Put(batch ArchivedBatch) (ArchivedBatch, error) {
 	return cloneArchivedBatch(batch), nil
 }
 
+// Get 按键取回归档批次,不存在时返回 false。
 func (archive *BatchArchive) Get(key string) (ArchivedBatch, bool) {
 	archive.mu.RLock()
 	defer archive.mu.RUnlock()
@@ -146,6 +169,7 @@ func (archive *BatchArchive) Get(key string) (ArchivedBatch, bool) {
 	return cloneArchivedBatch(batch), exists
 }
 
+// Summaries 返回全部已归档批次的汇总;按键排序输出,保证报表顺序稳定。
 func (archive *BatchArchive) Summaries() []BatchSummary {
 	archive.mu.RLock()
 	defer archive.mu.RUnlock()
@@ -162,6 +186,8 @@ func (archive *BatchArchive) Summaries() []BatchSummary {
 	return result
 }
 
+// cloneEntries 深拷贝条目切片:回执与失败信息均为指针,需逐字段复制以避免
+// 归档内部状态被调用方意外改动,以及调用方持有的副本被归档后续修改污染。
 func cloneEntries(entries []BatchEntry) []BatchEntry {
 	copyEntries := make([]BatchEntry, len(entries))
 	for index, entry := range entries {
@@ -178,6 +204,7 @@ func cloneEntries(entries []BatchEntry) []BatchEntry {
 	return copyEntries
 }
 
+// cloneArchivedBatch 返回批次的深拷贝副本。
 func cloneArchivedBatch(batch ArchivedBatch) ArchivedBatch {
 	batch.Entries = cloneEntries(batch.Entries)
 	return batch

@@ -1,4 +1,8 @@
 
+/**
+ * 运维工作台:整合场景校验、结算波次、熔断时间线、审计分区与重试预算,
+ * 生成可执行的运维计划(资金安排、提供方探测、风险汇总)。
+ */
 import {
   type AuditEntry,
   type MarketQuote,
@@ -14,6 +18,7 @@ import { simulateCircuitTimeline } from "./health-channel.js";
 import { planAuditPartitions } from "./threshold-sink.js";
 import { optimizeRetryBudget } from "./retry-wheel.js";
 
+/** 提供方遥测事件:通道、时刻、结果与延迟(熔断时间线输入)。 */
 export interface ProviderTelemetryEvent {
   readonly channel: string;
   readonly at: number;
@@ -21,6 +26,7 @@ export interface ProviderTelemetryEvent {
   readonly latencyMs?: number;
 }
 
+/** 运维规划输入:市场数据、结算/交易/审计、提供方事件与各类限额。 */
 export interface OperationsPlanningInput {
   readonly pairs: readonly CurrencyPair[];
   readonly quotes: readonly MarketQuote[];
@@ -37,6 +43,7 @@ export interface OperationsPlanningInput {
   readonly now: number;
 }
 
+/** 单币种资金计划:需求/可用/缺口与关联账户、紧急意图、起息日。 */
 export interface CurrencyFundingPlan {
   readonly currency: string;
   readonly grossRequired: number;
@@ -47,6 +54,7 @@ export interface CurrencyFundingPlan {
   readonly valueDates: readonly string[];
 }
 
+/** 提供方探测计划:最早/截止时刻、触发原因与受保护货币对。 */
 export interface ProviderProbePlan {
   readonly provider: string;
   readonly earliestAt: number;
@@ -55,6 +63,7 @@ export interface ProviderProbePlan {
   readonly protectedPairs: readonly string[];
 }
 
+/** 运维计划:接受的结算波次、资金/探测/重试/审计分区安排与风险汇总。 */
 export interface OperationsPlan {
   readonly generatedAt: number;
   readonly acceptedSettlementWaves: readonly (readonly string[])[];
@@ -69,6 +78,13 @@ export interface OperationsPlan {
   readonly errors: readonly string[];
 }
 
+/**
+ * 运维工作台。
+ *
+ * buildPlan 组合多个子模块产出整体计划;rebalanceLiquidity 评估币种资金
+ * 缺口;sequenceProviderProbes 规划提供方探测(熔断恢复/延迟/覆盖);
+ * summarizeAccountRisk 按账户聚合风险评分。
+ */
 export class OperationsWorkbench {
   public constructor(
     private readonly settlementParallelism: number,
@@ -84,6 +100,10 @@ export class OperationsWorkbench {
     if (!Number.isFinite(recoveryDelayMs) || recoveryDelayMs <= 0) throw new RangeError("recoveryDelayMs must be positive");
   }
 
+  /**
+   * 构建运维计划:依次执行场景校验、结算波次、熔断模拟、审计分区与重试
+   * 优化,再把各子结果合并为单一计划(含警告与错误汇总)。
+   */
   public buildPlan(input: OperationsPlanningInput): OperationsPlan {
     if (!Number.isFinite(input.now)) throw new RangeError("planning clock must be finite");
     const validation = validateMarketScenario(input.pairs, input.quotes, input.settlements, input.trades, input.audits);
@@ -154,6 +174,10 @@ export class OperationsWorkbench {
     };
   }
 
+  /**
+   * 评估各币种资金缺口:按优先级与起息日排序意图,在额度内模拟可用资金
+   * 扣减,识别资金不足的币种与受影响的高优先级意图。
+   */
   public rebalanceLiquidity(
     intents: readonly SettlementIntent[],
     currencyLimits: Readonly<Record<string, number>>,
@@ -194,6 +218,10 @@ export class OperationsWorkbench {
     return output.sort((left, right) => right.netShortfall - left.netShortfall || left.currency.localeCompare(right.currency));
   }
 
+  /**
+   * 规划提供方探测:依据熔断状态(恢复)、延迟(>1s)、覆盖缺口(缺失货币对)
+   * 或例行轮换确定探测时机与原因,并给出最晚执行截止时刻。
+   */
   public sequenceProviderProbes(
     providerOrder: readonly string[],
     pairs: readonly CurrencyPair[],
@@ -243,6 +271,10 @@ export class OperationsWorkbench {
     return plans.sort((left, right) => left.earliestAt - right.earliestAt || providerOrder.indexOf(left.provider) - providerOrder.indexOf(right.provider));
   }
 
+  /**
+   * 按账户汇总风险评分:结算金额与优先级、交易数量与序号缺口、审计缺失
+   * 均折算为风险分,按总分降序返回。
+   */
   public summarizeAccountRisk(
     settlements: readonly SettlementIntent[],
     trades: readonly TradeSignal[],

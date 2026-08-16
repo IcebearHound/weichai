@@ -14,9 +14,16 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 
+/**
+ * 结算日历:结合结算通道(rail)能力与节假日日历,为结算指令规划起息日(value date)。
+ *
+ * <p>起息日规则:选择优先级最高的可用通道;若提交时间晚于通道截止时间(cutoff),
+ * 则结算顺延一个营业日;再按通道要求的营业日数在目标币种日历上向前推进。
+ */
 public final class SettlementCalendar {
     private final ZoneId zone;
     private final HolidayIndex holidays;
+    // 已按 优先级/名称 排序的通道列表
     private final List<Rail> rails;
 
     public SettlementCalendar(ZoneId zone, HolidayIndex holidays, List<Rail> rails) {
@@ -39,6 +46,10 @@ public final class SettlementCalendar {
         this.rails = List.copyOf(copied);
     }
 
+    /**
+     * 为结算指令选择通道并计算起息日。
+     * 候选通道须满足:计价币匹配、目的国支持、金额不超上限;按优先级选最优。
+     */
     public MarketModels.SettlementResult plan(MarketModels.SettlementInstruction instruction) {
         Objects.requireNonNull(instruction, "settlement instruction");
         List<Rail> candidates = new ArrayList<>();
@@ -64,6 +75,7 @@ public final class SettlementCalendar {
                 .thenComparing(Rail::name));
         Rail chosen = candidates.get(0);
         ZonedDateTime submission = instruction.submittedAt().atZone(zone);
+        // 提交时间晚于截止时间 -> 当日已无法处理,额外加一个营业日
         boolean afterCutoff = !submission.toLocalTime().isBefore(chosen.cutoff());
         int requiredBusinessDays = chosen.businessDays() + (afterCutoff ? 1 : 0);
         LocalDate requested = instruction.requestedDate();
@@ -100,6 +112,9 @@ public final class SettlementCalendar {
         );
     }
 
+    /**
+     * 结算通道定义:通道名、计价币、支持的国家、截止时间、所需营业日数、金额上限与优先级。
+     */
     record Rail(
             String name,
             String currency,

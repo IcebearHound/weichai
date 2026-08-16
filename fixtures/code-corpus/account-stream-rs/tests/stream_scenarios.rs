@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// 端到端场景中使用的账户投影:维护余额、币种与已消费序列。
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct AccountProjection {
     balance_minor: i64,
@@ -15,6 +16,7 @@ struct AccountProjection {
     events: Vec<String>,
 }
 
+/// 构造一条账户余额变更消息(场景测试专用)。
 fn scenario_message(
     identity: &str,
     account: &str,
@@ -36,6 +38,7 @@ fn scenario_message(
     }
 }
 
+/// 把一条消息应用到投影:校验币种一致与序列严格 +1,再累加余额。
 fn apply_projection(
     projections: &Mutex<BTreeMap<String, AccountProjection>>,
     message: &StreamMessage,
@@ -60,6 +63,7 @@ fn apply_projection(
             last_sequence: 0,
             events: Vec::new(),
         });
+    // 币种变化或序列跳跃说明数据流错乱,拒绝应用。
     if projection.currency != currency {
         return Err("projection currency changed".to_owned());
     }
@@ -79,6 +83,7 @@ fn apply_projection(
     Ok(())
 }
 
+/// 多账户投影管道:即使消息并发乱序提交,每个账户的投影仍严格按序、并行安全地建立。
 #[test]
 fn multi_account_projection_pipeline_is_ordered_and_parallel_safe() {
     let inbox = Arc::new(PartitionedInbox::new(Duration::from_secs(3), 10_000).unwrap());
@@ -96,6 +101,7 @@ fn multi_account_projection_pipeline_is_ordered_and_parallel_safe() {
     ];
     let mut workers = Vec::new();
     for (account, currency, deltas) in accounts {
+        // 逆序提交,让收件箱的序列等待逻辑接受真实乱序考验。
         for (offset, delta) in deltas.into_iter().enumerate().rev() {
             let worker_inbox = inbox.clone();
             let worker_projections = projections.clone();
@@ -139,6 +145,7 @@ fn multi_account_projection_pipeline_is_ordered_and_parallel_safe() {
     assert_eq!(snapshot.lane_count, 4);
 }
 
+/// 投影失败时消息不确认、不推进;修正数据后同一序列可重放成功。
 #[test]
 fn failed_projection_does_not_ack_or_advance_then_corrected_copy_succeeds() {
     let inbox = PartitionedInbox::new(Duration::from_secs(1), 100).unwrap();
@@ -149,6 +156,7 @@ fn failed_projection_does_not_ack_or_advance_then_corrected_copy_succeeds() {
         invalid,
         |message| {
             {
+                // 预置一个币种不一致的投影,让处理器失败。
                 let mut guard = projections.lock().unwrap();
                 guard.insert(
                     message.account.clone(),
@@ -192,6 +200,7 @@ fn failed_projection_does_not_ack_or_advance_then_corrected_copy_succeeds() {
     assert_eq!(inbox.snapshot().unwrap().lanes[0].expected_sequence, 2);
 }
 
+/// 端到端演练:回执编码为帧,缓冲进停机账本,关闭时解码并持久化。
 #[test]
 fn receipt_frames_can_be_buffered_then_drained_on_shutdown() {
     let codec = ReceiptCodec::new(5, 64 * 1024).unwrap();
@@ -243,6 +252,7 @@ fn receipt_frames_can_be_buffered_then_drained_on_shutdown() {
     assert_eq!(ledger.snapshot().unwrap().persisted, 12);
 }
 
+/// 小工具 trait:把 `push` 包装到 Mutex<Vec<T>> 上,简化测试断言。
 trait MutexVecPush<T> {
     fn push(&self, value: T);
 }
@@ -253,6 +263,7 @@ impl<T> MutexVecPush<T> for Mutex<Vec<T>> {
     }
 }
 
+/// 审计账本与收件箱进度逐账户一致:收件箱完成序 = 审计账本连续序。
 #[test]
 fn sequence_audit_matches_inbox_progress_for_each_account() {
     let inbox = PartitionedInbox::new(Duration::from_millis(200), 100).unwrap();
@@ -290,6 +301,7 @@ fn sequence_audit_matches_inbox_progress_for_each_account() {
     }
 }
 
+/// 分片结果稳定:重放同一批账户得到完全相同的分组,消息路由不漂移。
 #[test]
 fn partition_assignment_is_stable_for_replayed_account_messages() {
     let partitioner = AccountPartitioner::new(16, 0x55aa).unwrap();
@@ -315,6 +327,7 @@ fn partition_assignment_is_stable_for_replayed_account_messages() {
     }
 }
 
+/// 重试计划有界:所有延迟不超过上限,预算与逐项求和一致,预算内次数在预期区间。
 #[test]
 fn retry_schedule_produces_bounded_redelivery_plan() {
     let schedule = RetrySchedule {
@@ -327,6 +340,7 @@ fn retry_schedule_produces_bounded_redelivery_plan() {
     let delays = schedule.sequence(12).unwrap();
     assert_eq!(delays.len(), 12);
     assert!(delays.iter().all(|delay| *delay <= Duration::from_secs(2)));
+    // 抖动幅度 ≤15%,基数 25ms 时下限不会低于 20ms。
     assert!(delays
         .iter()
         .all(|delay| *delay >= Duration::from_millis(20)));

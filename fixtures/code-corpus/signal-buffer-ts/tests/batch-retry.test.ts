@@ -1,3 +1,8 @@
+/**
+ * OrderedBatchMap / RetryWheel / constructSettlementWaves / optimizeRetryBudget
+ * 的单元测试:覆盖批次的顺序与幂等、重试、结算波次的隔离与限额、重试轮
+ * 的调度/预算与重试优化。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -28,6 +33,7 @@ test("batch collection preserves input order despite completion order", async ()
 
 test("duplicate identities share one receipt", async () => {
   const batch = new OrderedBatchMap();
+  // 同一身份的两条意图共享一次 worker 调用与同一凭据。
   let calls = 0;
   const intentions = [
     settlement("same", "a", 100),
@@ -74,6 +80,7 @@ test("transient worker failures retry only the affected item", async () => {
 
 test("permanent worker failure is deferred with final reason", async () => {
   const batch = new OrderedBatchMap();
+  // 全部尝试失败后以 deferred 呈现,携带最后一次失败原因。
   const outcomes = await batch.collect([settlement("offline")], async (_intent, attempt) => {
     throw new Error(`failure-${attempt}`);
   }, 4);
@@ -93,6 +100,7 @@ test("empty receipt is treated as a failed attempt", async () => {
 
 test("invalid amounts are rejected without calling the worker", async () => {
   const batch = new OrderedBatchMap();
+  // 金额非正/非有限的意图在调用 worker 之前即被拒绝。
   let called = false;
   const outcomes = await batch.collect([
     settlement("zero", "a", 0),
@@ -129,6 +137,7 @@ test("replay plan contains deferred entries in priority order", () => {
 });
 
 test("settlement waves isolate the same account", () => {
+  // 同账户意图必须分到不同波次,避免同一账户被并发结算。
   const intents = [
     settlement("a1", "account-a", 10),
     settlement("a2", "account-a", 20),
@@ -196,6 +205,7 @@ test("retry wheel rounds schedules into quantum slots", () => {
 
 test("retry wheel replaces an identity with a stronger attempt", () => {
   const wheel = new RetryWheel();
+  // 更晚到期但尝试数相同的调度被拒;更早到期且尝试数更高的调度生效。
   assert.equal(wheel.schedule(retry("same", "a", 1_000, 2, 1), 100), true);
   assert.equal(wheel.schedule(retry("same", "a", 1_100, 2, 1), 100), false);
   assert.equal(wheel.schedule(retry("same", "a", 900, 2, 2), 100), true);
@@ -230,6 +240,7 @@ test("retry wheel validates schedule and budget inputs", () => {
 });
 
 test("retry optimization selects value within account quotas", () => {
+  // 账户配额下选出总价值最高的票据组合,且各账户花费不超其份额。
   const tickets = [
     retry("a1", "a", 900, 4, 4, 1_100),
     retry("a2", "a", 900, 4, 1, 2_000),
@@ -258,6 +269,7 @@ test("retry optimization records invalid and duplicate tickets", () => {
 });
 
 test("dispatch order serializes tickets within an account", () => {
+  // 同账户的票据派发必须串行:后一张的起始不早于前一张的结束。
   const plan = optimizeRetryBudget([
     retry("first", "same", 1_000, 2, 2, 1_100),
     retry("second", "same", 1_000, 3, 1, 1_200),

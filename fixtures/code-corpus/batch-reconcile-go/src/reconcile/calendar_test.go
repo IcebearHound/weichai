@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// weekdayFlags 把若干星期几转换为窗口配置所需的布尔映射。
 func weekdayFlags(days ...time.Weekday) map[time.Weekday]bool {
 	flags := make(map[time.Weekday]bool)
 	for _, day := range days {
@@ -14,6 +15,8 @@ func weekdayFlags(days ...time.Weekday) map[time.Weekday]bool {
 	return flags
 }
 
+// londonUSDWindow 构造一个典型的测试窗口:伦敦时区(UTC+1 合成时区)的工作日
+// 9:15 开盘、16:30 截止、10 分钟宽限,含两个节假日。
 func londonUSDWindow() ClearingWindow {
 	location := time.FixedZone("Europe-London-Synthetic", 3600)
 	return ClearingWindow{
@@ -30,6 +33,9 @@ func londonUSDWindow() ClearingWindow {
 	}
 }
 
+// TestClearingWindowValidationMatrix 用参数化用例逐项验证 Validate 的各类非法
+// 配置(空名称、坏币种、缺时区、无工作日、时间越界、截止不晚于开盘、宽限
+// 越界),并断言错误信息包含对应的关键词。
 func TestClearingWindowValidationMatrix(t *testing.T) {
 	valid := londonUSDWindow()
 	if err := valid.Validate(); err != nil {
@@ -65,6 +71,8 @@ func TestClearingWindowValidationMatrix(t *testing.T) {
 	}
 }
 
+// TestClearingBoundsRespectLocationWeekdayAndHoliday 验证 BoundsFor 按时区给出
+// 开盘/截止时刻,并排除周六与已登记节假日。
 func TestClearingBoundsRespectLocationWeekdayAndHoliday(t *testing.T) {
 	window := londonUSDWindow()
 	mondayUTC := time.Date(2028, 4, 17, 7, 0, 0, 0, time.UTC)
@@ -85,6 +93,8 @@ func TestClearingBoundsRespectLocationWeekdayAndHoliday(t *testing.T) {
 	}
 }
 
+// TestNextWindowUsesCurrentOrFutureBusinessDay 验证:开盘前查询返回当日窗口,
+// 截止+宽限后查询顺延到次日,周五盘后查询跳过周末直达下周一。
 func TestNextWindowUsesCurrentOrFutureBusinessDay(t *testing.T) {
 	window := londonUSDWindow()
 	beforeOpen := time.Date(2028, 4, 17, 7, 30, 0, 0, time.UTC)
@@ -113,6 +123,8 @@ func TestNextWindowUsesCurrentOrFutureBusinessDay(t *testing.T) {
 	}
 }
 
+// TestNextWindowValidatesSearchHorizon 验证搜索天数越界报错,且搜索范围内无
+// 可用窗口时返回“no clearing window”错误。
 func TestNextWindowValidatesSearchHorizon(t *testing.T) {
 	window := londonUSDWindow()
 	for _, days := range []int{-1, 0, 371, 1_000} {
@@ -128,6 +140,9 @@ func TestNextWindowValidatesSearchHorizon(t *testing.T) {
 	}
 }
 
+// TestAssignClearingWindowsGroupsCurrenciesAndPriority 验证分配逻辑:USD 支付
+// 就近落入截止更早的窗口;不支持币种(CHF)留在 unassigned;批内按优先级
+// 降序排列并正确汇总金额与紧急笔数。
 func TestAssignClearingWindowsGroupsCurrenciesAndPriority(t *testing.T) {
 	usdEarly := londonUSDWindow()
 	usdEarly.Name = "USD Early"
@@ -174,6 +189,8 @@ func TestAssignClearingWindowsGroupsCurrenciesAndPriority(t *testing.T) {
 	}
 }
 
+// TestAssignClearingWindowsRejectsInvalidConfiguration 验证配置非法的窗口会在
+// 分配前被拒绝,返回错误而非部分结果。
 func TestAssignClearingWindowsRejectsInvalidConfiguration(t *testing.T) {
 	payment := testPayment("assignment", "source", "target", CurrencyUSD, 100, 0)
 	bad := londonUSDWindow()
@@ -183,6 +200,8 @@ func TestAssignClearingWindowsRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+// TestBusinessDaysBetweenExcludesWeekendsAndHolidays 验证工作日计数剔除周末与
+// 节假日,反向区间返回 0。
 func TestBusinessDaysBetweenExcludesWeekendsAndHolidays(t *testing.T) {
 	window := londonUSDWindow()
 	start := time.Date(2028, 4, 28, 8, 0, 0, 0, time.UTC)

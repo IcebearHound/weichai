@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+// MarketSession 定义某区域市场的交易时段:每周活跃日(Weekdays)、以分钟计的
+// 开市/闭市时刻(支持跨午夜,如闭市早于开市)、节假日与支持的货币对。
 type MarketSession struct {
 	Name        string
 	Region      string
@@ -17,11 +19,14 @@ type MarketSession struct {
 	Pairs       []Pair
 }
 
+// SessionCalendar 聚合多个市场的会话配置,按时区统一解释时间。
 type SessionCalendar struct {
 	Location *time.Location
 	Sessions []MarketSession
 }
 
+// IsOpen 判断指定时刻货币对所在市场是否开市,返回全部处于开市状态的会话名。
+// 会话配置会先做合法性校验(名称唯一、时刻/星期/假日/货币对合法)。
 func (calendar SessionCalendar) IsOpen(pair Pair, at time.Time) (bool, []string, error) {
 	if calendar.Location == nil {
 		return false, nil, errors.New("session calendar location is required")
@@ -116,6 +121,8 @@ func (calendar SessionCalendar) IsOpen(pair Pair, at time.Time) (bool, []string,
 		if session.OpenMinute < session.CloseMinute {
 			open = minute >= session.OpenMinute && minute < session.CloseMinute
 		} else if session.OpenMinute > session.CloseMinute {
+			// 闭市时刻早于开市表示跨午夜时段:午夜前属于当天开市,午夜后
+			// 属于次段开市。
 			open = minute >= session.OpenMinute || minute < session.CloseMinute
 		}
 		if open {
@@ -126,6 +133,8 @@ func (calendar SessionCalendar) IsOpen(pair Pair, at time.Time) (bool, []string,
 	return len(openNames) > 0, openNames, nil
 }
 
+// NextOpen 自 after 起按分钟步进搜索该货币对的下一个开市时刻,horizon 限制
+// 搜索范围(不超过 31 天);已开市时直接返回当前时刻。
 func (calendar SessionCalendar) NextOpen(pair Pair, after time.Time, horizon time.Duration) (time.Time, string, error) {
 	if horizon <= 0 || horizon > 31*24*time.Hour {
 		return time.Time{}, "", errors.New("session search horizon is outside supported range")

@@ -126,6 +126,14 @@ describe("csharpLiteral 字面量映射", () => {
     expect(csharpLiteral({ type: "number", value: 1e21 })).toBe("1E+21");
   });
 
+  it("number 边界修复:±2^63 走 double 指数形式(不生成 L 后缀,否则 CS1021)", () => {
+    // 9223372036854775807 字面量在 JS 中舍入为 2^63;±2^63 必须落入 double 分支
+    expect(csharpLiteral({ type: "number", value: -9223372036854775808 })).toBe("-9.223372036854776E+18");
+    expect(csharpLiteral({ type: "number", value: 9223372036854775808 })).toBe("9.223372036854776E+18");
+    expect(csharpLiteral({ type: "number", value: -9223372036854775808 })).not.toContain("L");
+    expect(csharpLiteral({ type: "number", value: 9223372036854775808 })).not.toContain("L");
+  });
+
   it("boolean / null", () => {
     expect(csharpLiteral({ type: "boolean", value: true })).toBe("true");
     expect(csharpLiteral({ type: "boolean", value: false })).toBe("false");
@@ -212,6 +220,11 @@ describe("csharpValueTypeName", () => {
     expect(csharpValueTypeName({ type: "null", value: null })).toBe("object?");
   });
 
+  it("number 边界修复:±2^63 → double(不落入 long)", () => {
+    expect(csharpValueTypeName({ type: "number", value: -9223372036854775808 })).toBe("double");
+    expect(csharpValueTypeName({ type: "number", value: 9223372036854775808 })).toBe("double");
+  });
+
   it("list/map 递归推导(取第一个非 null 元素)", () => {
     expect(csharpValueTypeName({ type: "list", value: [{ type: "number", value: 1 }] })).toBe("List<int>");
     expect(csharpValueTypeName({ type: "list", value: [] })).toBe("object?");
@@ -278,6 +291,25 @@ describe("生成源码中的字面量", () => {
     );
     expect(src).toContain("Util.DoubleIt(1E+20, 3000000000L)");
     expect(src).not.toContain("Util.DoubleIt(100000000000000000000,");
+  });
+
+  it("±2^63 的 double 指数字面量出现在源码中(E+18,非 L 后缀)", () => {
+    const src = generateCSharpDriver(
+      validDescription({
+        cases: [
+          {
+            id: "b63",
+            inputs: [
+              { type: "number", value: -9223372036854775808 },
+              { type: "number", value: 9223372036854775808 },
+            ],
+            expected: { kind: "return", value: { type: "null", value: null } },
+          },
+        ],
+      }),
+    );
+    expect(src).toContain("Util.DoubleIt(-9.223372036854776E+18, 9.223372036854776E+18)");
+    expect(src).not.toContain("9223372036854776000L");
   });
 
   it("List<...>{...} / 嵌套 / 空 List<object?>() / 全 null 元素出现在源码中", () => {
@@ -590,6 +622,72 @@ describe("真实 dotnet 编译 + 运行 + node JSON.parse(关键)", () => {
           exceptionType: "InvalidOperationException",
         });
         expect(parsed.results[8].exceptionMessage).toContain("kaboom");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    120_000,
+  );
+
+  runIf(
+    "±2^63 边界:生成 -9.223372036854776E+18 双精度字面量(非 L 后缀),dotnet 零错误编译运行,JSON.parse 回读 -9223372036854775808",
+    () => {
+      const desc = validDescription({
+        target: { language: "C#", className: "Util", method: "Echo", isStatic: true, constructorArgs: [] },
+        cases: [
+          {
+            id: "echo-longmin",
+            inputs: [{ type: "number", value: -9223372036854775808 }],
+            expected: { kind: "return", value: { type: "number", value: -9223372036854775808 } },
+          },
+          {
+            id: "echo-2pow63",
+            inputs: [{ type: "number", value: 9223372036854775808 }],
+            expected: { kind: "return", value: { type: "number", value: 9223372036854775808 } },
+          },
+        ],
+      });
+      const driverClass = driverClassName(desc);
+      const dir = mkdtempSync(join(tmpdir(), "wc-csharp-driver-"));
+      try {
+        writeFileSync(
+          join(dir, "verify.csproj"),
+          [
+            "<Project Sdk=\"Microsoft.NET.Sdk\">",
+            "  <PropertyGroup>",
+            "    <OutputType>Exe</OutputType>",
+            "    <TargetFramework>net10.0</TargetFramework>",
+            "    <ImplicitUsings>disable</ImplicitUsings>",
+            "    <Nullable>enable</Nullable>",
+            "    <AssemblyName>verify</AssemblyName>",
+            "    <RootNamespace>verify</RootNamespace>",
+            "  </PropertyGroup>",
+            "</Project>",
+            "",
+          ].join("\n"),
+        );
+        writeFileSync(
+          join(dir, "Util.cs"),
+          ["using System;", "", "public static class Util {", "  public static object? Echo(object? value) {", "    return value;", "  }", "}", ""].join("\n"),
+        );
+        const src = generateCSharpDriver(desc);
+        expect(src).toContain("Util.Echo(-9.223372036854776E+18)");
+        expect(src).toContain("Util.Echo(9.223372036854776E+18)");
+        expect(src).not.toContain("9223372036854776000L");
+        writeFileSync(join(dir, `${driverClass}.cs`), src);
+        const build = execFileSync("dotnet", ["build", join(dir, "verify.csproj"), "--nologo", "-v", "q"], {
+          encoding: "utf8",
+          stdio: "pipe",
+        });
+        expect(build).toBeDefined();
+        const exe = join(dir, "bin", "Debug", "net10.0", "verify");
+        const stdout = execFileSync(exe, { encoding: "utf8" });
+        const parsed = JSON.parse(stdout) as {
+          results: Array<{ caseId: string; returnValue: { type: string; value: unknown } }>;
+        };
+        expect(parsed.results).toHaveLength(2);
+        expect(parsed.results[0].returnValue).toEqual({ type: "number", value: -9223372036854775808 });
+        expect(parsed.results[1].returnValue).toEqual({ type: "number", value: 9223372036854775808 });
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

@@ -129,6 +129,12 @@ describe("javaLiteral 字面量映射", () => {
     expect(javaLiteral({ type: "number", value: 1e21 })).toBe("1.0E21");
   });
 
+  it("number 边界修复:±2^63 走 double 指数形式(Java Double.toString 口径,无 E+ 补零)", () => {
+    expect(javaLiteral({ type: "number", value: -9223372036854775808 })).toBe("-9.223372036854776E18");
+    expect(javaLiteral({ type: "number", value: 9223372036854775808 })).toBe("9.223372036854776E18");
+    expect(javaLiteral({ type: "number", value: -9223372036854775808 })).not.toContain("L");
+  });
+
   it("list 含 null + 大整数 → Arrays.<Long>asList(...)", () => {
     expect(
       javaLiteral({
@@ -139,6 +145,18 @@ describe("javaLiteral 字面量映射", () => {
         ],
       }),
     ).toBe("Arrays.<Long>asList(null, 3000000000L)");
+  });
+
+  it("list 含 null + ±2^63 → Arrays.<Double>asList(...)(元素类型 Double,非 Long)", () => {
+    expect(
+      javaLiteral({
+        type: "list",
+        value: [
+          { type: "null", value: null },
+          { type: "number", value: -9223372036854775808 },
+        ],
+      }),
+    ).toBe("Arrays.<Double>asList(null, -9.223372036854776E18)");
   });
 
   it("boolean / null", () => {
@@ -236,6 +254,25 @@ describe("生成源码中的字面量", () => {
     );
     expect(src).toContain("com.example.Util.doubleIt(1.0E20, 3000000000L)");
     expect(src).not.toContain("doubleIt(100000000000000000000,");
+  });
+
+  it("±2^63 的 double 指数字面量出现在源码中(E18,非 L 后缀)", () => {
+    const src = generateJavaDriver(
+      validDescription({
+        cases: [
+          {
+            id: "b63",
+            inputs: [
+              { type: "number", value: -9223372036854775808 },
+              { type: "number", value: 9223372036854775808 },
+            ],
+            expected: { kind: "return", value: { type: "null", value: null } },
+          },
+        ],
+      }),
+    );
+    expect(src).toContain("com.example.Util.doubleIt(-9.223372036854776E18, 9.223372036854776E18)");
+    expect(src).not.toContain("9223372036854776000L");
   });
 
   it("List.of(...) 与空 List.of() 出现在源码中", () => {
@@ -612,6 +649,56 @@ describe("fix round 3:异构 null 集合公共类型推导", () => {
       expect(listMixed.returnValue.type).toBe("list");
       expect(mapMixed.caseId).toBe("map-mixed");
       expect(mapMixed.returnValue.type).toBe("map");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+describe("fix round 2(±2^63):long.MinValue 边界排除 L 后缀", () => {
+  it("真实 javac 编译运行:±2^63 生成 -9.223372036854776E18 双精度字面量(非 L 后缀,否则 integer number too large),JSON.parse 回读 -9223372036854775808", () => {
+    const desc = validDescription({
+      target: {
+        language: "Java",
+        className: "Util",
+        method: "echo",
+        isStatic: true,
+        constructorArgs: [],
+      },
+      cases: [
+        {
+          id: "echo-longmin",
+          inputs: [{ type: "number", value: -9223372036854775808 }],
+          expected: { kind: "return", value: { type: "number", value: -9223372036854775808 } },
+        },
+        {
+          id: "echo-2pow63",
+          inputs: [{ type: "number", value: 9223372036854775808 }],
+          expected: { kind: "return", value: { type: "number", value: 9223372036854775808 } },
+        },
+      ],
+    });
+    const src = generateJavaDriver(desc);
+    expect(src).toContain("Util.echo(-9.223372036854776E18)");
+    expect(src).toContain("Util.echo(9.223372036854776E18)");
+    expect(src).not.toContain("9223372036854776000L");
+    const driverClass = driverClassName(desc);
+    const dir = mkdtempSync(join(tmpdir(), "wc-java-driver-"));
+    try {
+      const outDir = join(dir, "out");
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(join(dir, "Util.java"), "public class Util { public static Object echo(Object value) { return value; } }\n");
+      writeFileSync(join(dir, `${driverClass}.java`), src);
+      execFileSync("javac", ["-d", outDir, join(dir, "Util.java"), join(dir, `${driverClass}.java`)], {
+        stdio: "pipe",
+      });
+      const stdout = execFileSync("java", ["-cp", outDir, driverClass], { encoding: "utf8" });
+      const parsed = JSON.parse(stdout) as {
+        results: Array<{ caseId: string; returnValue: { type: string; value: unknown } }>;
+      };
+      expect(parsed.results).toHaveLength(2);
+      expect(parsed.results[0].returnValue).toEqual({ type: "number", value: -9223372036854775808 });
+      expect(parsed.results[1].returnValue).toEqual({ type: "number", value: 9223372036854775808 });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

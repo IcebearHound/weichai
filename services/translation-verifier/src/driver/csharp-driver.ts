@@ -221,7 +221,9 @@ function csharpNumberLiteral(value: number): string {
   if (value === Infinity) return "double.PositiveInfinity";
   if (value === -Infinity) return "double.NegativeInfinity";
   if (Number.isInteger(value) && Math.abs(value) <= 2147483647) return String(value);
-  if (Number.isInteger(value) && Math.abs(value) <= 9223372036854775807) return `${String(value)}L`;
+  // 注意:long.MaxValue(9223372036854775807)在 JS 中舍入为 2^63,故用 < 而非 <=;否则 ±2^63 会生成
+  // 9223372036854775808L(超出 long 范围,CS1021)。±2^63 落入下方 double 指数分支。
+  if (Number.isInteger(value) && Math.abs(value) < 9223372036854775807) return `${String(value)}L`;
   // 其余(超出 long 的整数与浮点):模拟 double.ToString("R", InvariantCulture),
   // 如 1E+20 / 1.5 / 2.5E-07,均为合法 C# double 字面量。
   return csharpRoundTrip(value);
@@ -230,7 +232,8 @@ function csharpNumberLiteral(value: number): string {
 /** number 的 C# 类型名:int(≤ int.MaxValue)/ long(≤ long.MaxValue)/ double。 */
 function csharpNumberTypeName(value: number): "int" | "long" | "double" {
   if (Number.isInteger(value) && Math.abs(value) <= 2147483647) return "int";
-  if (Number.isInteger(value) && Math.abs(value) <= 9223372036854775807) return "long";
+  // 同 csharpNumberLiteral:9223372036854775807 字面量舍入为 2^63,必须用 <,±2^63 归 double。
+  if (Number.isInteger(value) && Math.abs(value) < 9223372036854775807) return "long";
   return "double";
 }
 

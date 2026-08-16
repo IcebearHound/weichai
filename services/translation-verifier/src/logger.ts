@@ -1,5 +1,9 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** 默认日志目录:monorepo 根 logs/(由模块位置解析,不依赖运行 cwd)。 */
+export const DEFAULT_LOG_DIR = fileURLToPath(new URL("../../../logs", import.meta.url));
 
 /**
  * 零依赖日志系统(仿 ReCodeAgent src/run.py setup_logging):
@@ -20,7 +24,7 @@ export interface Logger {
 export interface LoggerOptions {
   /** 控制台级别;默认 process.env.VERIFIER_LOG_LEVEL ?? "INFO"。 */
   level?: LogLevel;
-  /** 日志目录;默认 process.env.VERIFIER_LOG_DIR ?? "logs"。 */
+  /** 日志目录;默认 process.env.VERIFIER_LOG_DIR ?? monorepo 根 logs/(与 cwd 无关)。 */
   logDir?: string;
   /** 文件级别;默认 "DEBUG"。 */
   fileLevel?: LogLevel;
@@ -42,7 +46,7 @@ function toLogLevel(value: string | undefined, fallback: LogLevel): LogLevel {
 
 export function createLogger(name: string, options: LoggerOptions = {}): Logger {
   const level: LogLevel = toLogLevel(options.level ?? process.env.VERIFIER_LOG_LEVEL, "INFO");
-  const logDir = options.logDir ?? process.env.VERIFIER_LOG_DIR ?? "logs";
+  const logDir = options.logDir ?? process.env.VERIFIER_LOG_DIR ?? DEFAULT_LOG_DIR;
   const fileLevel: LogLevel = toLogLevel(options.fileLevel, "DEBUG");
   const fileName = options.fileName ?? "translation-verifier.log";
   const consoleApi = options.console ?? console;

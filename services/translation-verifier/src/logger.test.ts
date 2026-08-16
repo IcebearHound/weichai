@@ -1,6 +1,7 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLogger, type LoggerOptions } from "./logger.js";
 
@@ -173,5 +174,39 @@ describe("createLogger(文件 DEBUG 全量 + 控制台按级别)", () => {
     expect(c.info).toHaveBeenCalledTimes(1);
     expect(c.warn).toHaveBeenCalledTimes(1);
     expect(c.error).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("默认 logDir(monorepo 根 logs/,不依赖 cwd)", () => {
+  it("改变 cwd 后默认仍写到 monorepo 根 logs/(不依赖运行目录)", () => {
+    const c = fakeConsole();
+    const log = createLogger("default-dir-test", { console: c, level: "INFO", fileLevel: "DEBUG", fileName: "default-dir-test.log" });
+    const rootLogs = fileURLToPath(new URL("../../../logs", import.meta.url));
+    const nested = join(tempDir, "some", "nested", "dir");
+    mkdirSync(nested, { recursive: true });
+    const previousCwd = process.cwd();
+    process.chdir(nested);
+    try {
+      log.info("hello default dir");
+      expect(existsSync(join(rootLogs, "default-dir-test.log"))).toBe(true);
+      // 不应写入当前工作目录
+      expect(existsSync(join(nested, "default-dir-test.log"))).toBe(false);
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it("VERIFIER_LOG_DIR 环境变量覆盖默认目录", () => {
+    const previous = process.env.VERIFIER_LOG_DIR;
+    process.env.VERIFIER_LOG_DIR = tempDir;
+    try {
+      const c = fakeConsole();
+      const log = createLogger("env-dir-test", { console: c, level: "INFO", fileLevel: "DEBUG" });
+      log.info("hello env dir");
+      expect(existsSync(join(tempDir, "translation-verifier.log"))).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.VERIFIER_LOG_DIR;
+      else process.env.VERIFIER_LOG_DIR = previous;
+    }
   });
 });

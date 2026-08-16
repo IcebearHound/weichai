@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+// AggregationPolicy 定义聚合规则:最少提供方数、报价最大年龄、最大价差(基点)、
+// 排序后两端各裁剪的数量与是否优先新鲜报价。
 type AggregationPolicy struct {
 	MinimumProviders int
 	MaximumAge       time.Duration
@@ -16,6 +18,8 @@ type AggregationPolicy struct {
 	PreferFresh      bool
 }
 
+// AggregatedQuote 是聚合结果:聚合后的报价(中位价),Contributors 为参与聚合
+// 的提供方,Rejected 记录被拒绝的提供方及原因,Dispersion 为报价中值离散度。
 type AggregatedQuote struct {
 	Quote
 	Contributors []string
@@ -23,10 +27,14 @@ type AggregatedQuote struct {
 	Dispersion   float64
 }
 
+// QuoteAggregator 按策略聚合多家提供方的报价(占位实现,值接收者)。
 type QuoteAggregator struct {
 	Policy AggregationPolicy
 }
 
+// Aggregate 聚合报价:先筛选(合法、同货币对、不重复、不过龄、价差与新鲜度
+// 达标),按中值排序后裁剪两端极端报价,再取买卖中位数作为聚合价;同时计算
+// 离散度,并在离散度超限、价差超限等情形下拒绝整个聚合。
 func (aggregator QuoteAggregator) Aggregate(quotes []Quote, now time.Time) (AggregatedQuote, error) {
 	policy := aggregator.Policy
 	if policy.MinimumProviders < 1 {
@@ -101,6 +109,7 @@ func (aggregator QuoteAggregator) Aggregate(quotes []Quote, now time.Time) (Aggr
 	if policy.TrimEachSide*2 >= len(valid) {
 		return AggregatedQuote{}, errors.New("aggregation trimming removes every quote")
 	}
+	// 按中值排序后从两端各裁剪 TrimEachSide 条,剔除可能操纵价格的极端报价。
 	trimmed := valid[policy.TrimEachSide : len(valid)-policy.TrimEachSide]
 	if len(trimmed) < policy.MinimumProviders {
 		return AggregatedQuote{}, errors.New("aggregation trimmed below minimum provider count")
@@ -142,6 +151,7 @@ func (aggregator QuoteAggregator) Aggregate(quotes []Quote, now time.Time) (Aggr
 	bid := median(bids)
 	ask := median(asks)
 	if ask < bid {
+		// 偶数组裁剪后可能出现卖中位数低于买中位数,收敛到两者的中点。
 		midpoint := bid + (ask-bid)/2
 		bid = midpoint
 		ask = midpoint

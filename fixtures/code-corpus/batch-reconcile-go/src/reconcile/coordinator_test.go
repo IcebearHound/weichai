@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+// TestCoordinatorCommitsInInputOrder 验证协调器保持批内输入顺序逐笔成功提交,
+// 生成回执并归档批次。
 func TestCoordinatorCommitsInInputOrder(t *testing.T) {
 	coordinator, store, archive := testCoordinator(t, testEpoch, 3)
 	payments := []Payment{
@@ -43,6 +45,8 @@ func TestCoordinatorCommitsInInputOrder(t *testing.T) {
 	}
 }
 
+// TestCoordinatorRetriesOnlyFailedPayments 验证只有失败支付会重试(按配置的
+// 失败次数),成功支付只调用一次渠道,尝试次数写入回执且指标正确。
 func TestCoordinatorRetriesOnlyFailedPayments(t *testing.T) {
 	coordinator, store, _ := testCoordinator(t, testEpoch, 4)
 	payments := []Payment{
@@ -75,6 +79,8 @@ func TestCoordinatorRetriesOnlyFailedPayments(t *testing.T) {
 	}
 }
 
+// TestCoordinatorLeavesPermanentFailureInPlace 验证永久失败不再重试、原样保留
+// 在结果中,批次其他支付照常成功,且汇总错误能反映部分失败。
 func TestCoordinatorLeavesPermanentFailureInPlace(t *testing.T) {
 	coordinator, store, _ := testCoordinator(t, testEpoch, 2)
 	request := testRequest(
@@ -112,6 +118,9 @@ func TestCoordinatorLeavesPermanentFailureInPlace(t *testing.T) {
 	}
 }
 
+// TestCoordinatorConcurrentDuplicateJoinsSingleFlight 验证同一幂等键的 8 个并发
+// 请求合并为一次执行:仅 leader 调用渠道,其余加入者拿到相同回执,无重复
+// 副作用,指标中合并/重放计数正确。
 func TestCoordinatorConcurrentDuplicateJoinsSingleFlight(t *testing.T) {
 	coordinator, store, archive := testCoordinator(t, testEpoch, 2)
 	request := testRequest(
@@ -180,6 +189,8 @@ func TestCoordinatorConcurrentDuplicateJoinsSingleFlight(t *testing.T) {
 	}
 }
 
+// TestCoordinatorReplayNeverCallsTransferAgain 验证已完成批次的再次提交直接
+// 从归档重放,不再次调用渠道,返回相同的回执。
 func TestCoordinatorReplayNeverCallsTransferAgain(t *testing.T) {
 	coordinator, store, _ := testCoordinator(t, testEpoch, 1)
 	request := testRequest("batch-replay-005", testPayment("replay-one", "src", "dst", CurrencyGBP, 6_700, 0))
@@ -207,6 +218,8 @@ func TestCoordinatorReplayNeverCallsTransferAgain(t *testing.T) {
 	}
 }
 
+// TestCoordinatorRejectsKeyReuseWithDifferentPayload 验证同一幂等键携带不同
+// 内容时被拒绝为 BatchConflictError,且冲突重放绝不调用渠道。
 func TestCoordinatorRejectsKeyReuseWithDifferentPayload(t *testing.T) {
 	coordinator, _, _ := testCoordinator(t, testEpoch, 1)
 	original := testRequest("batch-conflict-006", testPayment("same-id", "src", "dst", CurrencyAUD, 1_000, 0))
@@ -232,6 +245,9 @@ func TestCoordinatorRejectsKeyReuseWithDifferentPayload(t *testing.T) {
 	}
 }
 
+// TestCoordinatorDifferentBatchKeysSharePaymentGate 验证支付级锁跨批次生效:
+// 两个不同批次并发提交同一支付时,第二笔转账必须等待第一笔完成,最终只
+// 产生一次渠道调用与一条回执。
 func TestCoordinatorDifferentBatchKeysSharePaymentGate(t *testing.T) {
 	coordinator, store, _ := testCoordinator(t, testEpoch, 4)
 	payment := testPayment("global-payment", "source-shared", "benef-shared", CurrencyUSD, 4_400, 0)

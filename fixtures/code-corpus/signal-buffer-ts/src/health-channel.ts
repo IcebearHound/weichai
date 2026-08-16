@@ -1,6 +1,11 @@
 
+/**
+ * 健康感知通道:基于失败计数与冷却时间实现熔断(closed/open/half-open),
+ * 选择通道时综合延迟 EWMA、可靠性、新鲜度与半开探测状态打分。
+ */
 import { ChannelStatus } from "./domain.js";
 
+/** 通道内部可变状态:失败/成功计数、熔断时刻、探测标志与延迟 EWMA。 */
 interface MutableChannel {
   failures: number;
   successes: number;
@@ -10,9 +15,21 @@ interface MutableChannel {
   lastUsedAt: number;
 }
 
+/**
+ * 健康感知通道选择器。
+ *
+ * choose 从候选中选最优通道:熔断中(open)且未过冷却期的通道不可选,
+ * 过冷却期的通道进入半开状态(每次仅允许一个探测请求);recordFailure
+ * 累计失败并触发熔断;describe 输出通道状态。
+ */
 export class HealthAwareChannel {
   private readonly channels = new Map<string, MutableChannel>();
 
+  /**
+   * 在候选中选择一个可用通道。
+   * 打分 = 候选顺序 + 延迟惩罚 + 可靠性惩罚 + 新鲜度惩罚 + 半开惩罚;
+   * 得分最低者胜出。半开通道每轮只放行一个探测请求。
+   */
   public choose(
     candidates: readonly string[],
     now: number,
@@ -35,6 +52,7 @@ export class HealthAwareChannel {
       const open = state.failures >= failureLimit && state.openedAt !== undefined;
       const recovered = open && now - state.openedAt! >= cooldownMs;
       if (open && !recovered) continue;
+      // 半开恢复:冷却期已过,只放行一个探测请求,其余候选暂不可用。
       if (recovered && state.probeInFlight) continue;
       const latencyPenalty = state.latencyEwma / 100;
       const reliabilityPenalty = state.failures * 25 - Math.min(15, state.successes);
@@ -62,6 +80,7 @@ export class HealthAwareChannel {
     return selected.id;
   }
 
+  /** 记录一次通道失败:失败数达阈值时记录熔断开启时刻,并返回最新状态。 */
   public recordFailure(channel: string, now: number, failureLimit: number): ChannelStatus {
     const state = this.channels.get(channel) ?? {
       failures: 0,
@@ -78,6 +97,7 @@ export class HealthAwareChannel {
     return this.describe(channel, failureLimit, now, Number.POSITIVE_INFINITY);
   }
 
+  /** 输出通道的当前熔断状态描述(closed/open/half-open)。 */
   public describe(channel: string, failureLimit: number, now: number, cooldownMs: number): ChannelStatus {
     const state = this.channels.get(channel) ?? {
       failures: 0,
@@ -100,6 +120,13 @@ export class HealthAwareChannel {
   }
 }
 
+/**
+ * 熔断时间线模拟:给定通道事件流,回放熔断状态机并计算可用性、路由窗口
+ * 与得分轨迹,供策略分析与回放测试使用。
+ *
+ * 成功重置失败计数并做 EWMA 延迟平滑;失败累计达阈值即熔断;冷却期后
+ * 半开放行探测,探测成功即恢复。末尾补充恢复统计样本。
+ */
 export const simulateCircuitTimeline = (
   channels: readonly string[],
   events: readonly { readonly at: number; readonly channel: string; readonly outcome: "success" | "failure" | "probe"; readonly latencyMs?: number }[],
@@ -134,6 +161,7 @@ export const simulateCircuitTimeline = (
     const open = current.openedAt !== undefined && current.failures >= failureLimit;
     const halfOpen = open && event.at - current.openedAt! >= cooldownMs;
     const stateName = halfOpen ? "half-open" : open ? "open" : "closed";
+    // 得分 = 可靠性 − 延迟惩罚 − 失败惩罚 − 状态罚分,用于路由排序。
     const reliability = current.successes / Math.max(1, current.successes + current.failures);
     const latencyPenalty = current.latency / 1000;
     const failurePenalty = current.failures / Math.max(1, failureLimit);

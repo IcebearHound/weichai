@@ -1,3 +1,9 @@
+/**
+ * 合并窗口缓存:面向小但昂贵的外部查询的内存缓存。值在新鲜期过后仍保留
+ * (过期降级),每键至多一个在途请求(并发合并),并带超时与诊断。
+ */
+
+/** 缓存条目的只读快照:值与新鲜度指标。 */
 export interface CacheSnapshot<V> {
   readonly value: V;
   readonly storedAt: number;
@@ -9,6 +15,7 @@ export interface CacheSnapshot<V> {
   readonly fresh: boolean;
 }
 
+/** 键的完整诊断:状态、年龄、命中/失败统计与在途信息。 */
 export interface CacheDiagnostic<K> {
   readonly key: K;
   readonly state: "fresh" | "stale" | "loading";
@@ -32,6 +39,7 @@ export interface CacheDiagnostic<K> {
   readonly lastFailureAt?: number;
 }
 
+// 内部可变缓存条目。
 interface MutableCacheSnapshot<V> {
   value: V;
   storedAt: number;
@@ -40,6 +48,7 @@ interface MutableCacheSnapshot<V> {
   hits: number;
 }
 
+// 键的失败历史:尝试/失败计数与最近加载时长。
 interface FailureHistory {
   attempts: number;
   failures: number;
@@ -50,12 +59,14 @@ interface FailureHistory {
   lastFailureAt?: number;
 }
 
+// 在途加载:开始时刻、共享 promise 与加入者计数。
 interface ActiveFlight<V> {
   readonly startedAt: number;
   readonly completion: Promise<V>;
   joiners: number;
 }
 
+/** 由内部条目生成只读快照,附带相对观测时刻的年龄/过期时长。 */
 const freezeSnapshot = <V>(
   value: MutableCacheSnapshot<V>,
   observedAt: number,
@@ -74,6 +85,7 @@ const freezeSnapshot = <V>(
   });
 };
 
+/** 校验时长参数:必须为有限非负数。 */
 const requireDuration = (name: string, durationMs: number): number => {
   if (!Number.isFinite(durationMs) || durationMs < 0) {
     throw new RangeError(`${name} must be a finite, non-negative duration`);
@@ -82,12 +94,11 @@ const requireDuration = (name: string, durationMs: number): number => {
 };
 
 /**
- * An in-memory cache specialized for small, expensive provider lookups.
+ * 合并窗口缓存。
  *
- * A value remains available after its freshness deadline.  This is deliberate:
- * callers receive that stale value only when the replacement load fails.  The
- * cache also owns one in-flight promise per key, so a burst for one currency
- * pair never becomes a burst against the upstream provider.
+ * 值在新鲜期过后仍保持可用:仅当替换加载失败时调用方才拿到陈旧值,
+ * 这是有意设计;每键只持有一个在途 promise,同一货币对的突发并发不会
+ * 变成对上游提供方的突发流量。
  */
 export class CoalescingWindow<K, V> {
   private readonly values = new Map<K, MutableCacheSnapshot<V>>();
@@ -110,6 +121,10 @@ export class CoalescingWindow<K, V> {
     }
   }
 
+  /**
+   * 解析一个键的值:新鲜命中直接返回;同键在途则加入其 promise(合并并发);
+   * 否则发起新加载,带超时;加载失败时若有陈旧值则降级返回之。
+   */
   public async resolve(key: K, loader: () => Promise<V>): Promise<V> {
     const observedAt = this.clock();
     if (!Number.isFinite(observedAt)) {
@@ -182,6 +197,7 @@ export class CoalescingWindow<K, V> {
           throw new RangeError("clock must return a finite epoch value");
         }
 
+        // 成功:写入新值并重置失败计数;陈旧值仍保留在 map 中供降级。
         const prior = this.values.get(key);
         this.values.set(key, {
           value: loaded,
@@ -209,6 +225,7 @@ export class CoalescingWindow<K, V> {
 
         const stale = this.values.get(key);
         if (stale !== undefined) {
+          // 失败降级:有陈旧值时返回陈旧值,避免调用方在提供方抖动时空等。
           stale.hits += 1;
           if (Number.isFinite(failedAt)) {
             stale.lastAccessAt = Math.max(stale.lastAccessAt, failedAt);
@@ -240,6 +257,7 @@ export class CoalescingWindow<K, V> {
     return completion;
   }
 
+  /** 查看键的缓存快照(不触发加载);无缓存或时钟异常时返回 undefined。 */
   public peek(key: K): CacheSnapshot<V> | undefined {
     const found = this.values.get(key);
     if (found === undefined) {
@@ -253,6 +271,10 @@ export class CoalescingWindow<K, V> {
     return freezeSnapshot(found, observedAt);
   }
 
+  /**
+   * 修剪过期条目:删除超过最大过期时长且无在途加载的键,按最近访问
+   * 升序优先删除,返回被删除的键列表。
+   */
   public prune(maximumStaleMs = this.ttlMs * 12): readonly K[] {
     requireDuration("maximumStaleMs", maximumStaleMs);
     const observedAt = this.clock();
@@ -291,6 +313,7 @@ export class CoalescingWindow<K, V> {
     return Object.freeze(removed);
   }
 
+  /** 输出全部键的诊断行,按状态(loading > stale > fresh)、失败数、命中数排序。 */
   public diagnostics(): readonly CacheDiagnostic<K>[] {
     const observedAt = this.clock();
     if (!Number.isFinite(observedAt)) {

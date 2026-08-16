@@ -1,3 +1,9 @@
+/**
+ * 交易事件标签:为日志与仪表盘生成稳定的文本标签(“category:account:seq
+ * ?k=v&…”),支持 token 化、规范化与命名空间策略评估;本身不消费事件。
+ */
+
+/** 待打标事件:类别、账户、序号与属性。 */
 export interface LabelEvent {
   readonly category: string;
   readonly account: string;
@@ -5,6 +11,7 @@ export interface LabelEvent {
   readonly attributes: Readonly<Record<string, string>>;
 }
 
+/** 命名空间策略评估的入参。 */
 export interface TradeEventLabelInput {
   readonly eventId: string;
   readonly emittedAt: number;
@@ -14,6 +21,7 @@ export interface TradeEventLabelInput {
   readonly namespaces?: readonly string[];
 }
 
+/** 命名空间策略评估的结果:token、深度、重复项与规范性。 */
 export interface NamespaceInspection {
   readonly eventId: string;
   readonly tokens: readonly string[];
@@ -27,6 +35,7 @@ export interface NamespaceInspection {
   readonly canonicalComponents: Readonly<Record<string, string>>;
 }
 
+/** 规范化类别:NFKC 归一化、小写化,非法字符折叠为单个连字符。 */
 const normalizedCategory = (value: string): string =>
   value
     .normalize("NFKC")
@@ -36,6 +45,7 @@ const normalizedCategory = (value: string): string =>
     .replace(/-{2,}/gu, "-")
     .replace(/^-|-$/gu, "");
 
+/** 规范化账户:NFKC 归一化、大写化并丢弃非法字符。 */
 const normalizedAccount = (value: string): string =>
   value
     .normalize("NFKC")
@@ -43,6 +53,7 @@ const normalizedAccount = (value: string): string =>
     .toUpperCase()
     .replace(/[^A-Z0-9_-]/gu, "");
 
+/** 安全解码百分号转义:把 “+” 视为空格;非法转义转为 TypeError。 */
 const safeDecode = (value: string): string => {
   try {
     return decodeURIComponent(value.replace(/\+/gu, "%20"));
@@ -51,7 +62,13 @@ const safeDecode = (value: string): string => {
   }
 };
 
-/** Stable text labels for logs and dashboards; it does not consume events. */
+/**
+ * 交易事件标签生成器。
+ *
+ * format 生成规范标签(属性按名排序);tokenize 按分隔符拆 token(支持
+ * 引号与转义);canonicalize 把任意标签归一化为标准形式;evaluateNamespace
+ * Policies 评估命名空间规范性与重复项。
+ */
 export class TradeEventLabel {
   public constructor(private readonly maximumLabelLength = 1_024) {
     if (
@@ -63,6 +80,10 @@ export class TradeEventLabel {
     }
   }
 
+  /**
+   * 生成事件标签:类别/账户规范化、序号转 base36 并补零,属性排序后
+   * 编码为查询串;结果超出最大长度时抛错。
+   */
   public format(event: LabelEvent): string {
     const category = normalizedCategory(event.category);
     const account = normalizedAccount(event.account);
@@ -107,6 +128,10 @@ export class TradeEventLabel {
     return label;
   }
 
+  /**
+   * 把标签拆为 token:非引号态下的 “: ? & =” 作为分隔符,反斜杠转义、
+   * 双引号成组;未闭合的转义/引号视为非法。
+   */
   public tokenize(label: string): readonly string[] {
     if (label.length > this.maximumLabelLength) {
       throw new RangeError("label is longer than the configured maximum");
@@ -153,6 +178,10 @@ export class TradeEventLabel {
     return Object.freeze(tokens);
   }
 
+  /**
+   * 规范化标签:路径必须恰为三段(category:account:sequence),序列号按
+   * base36 校验并补零到 8 位,查询属性排序重排。
+   */
   public canonicalize(label: string): string {
     const trimmed = label.normalize("NFKC").trim();
     if (trimmed.length === 0) {
@@ -211,6 +240,10 @@ export class TradeEventLabel {
     return canonical;
   }
 
+  /**
+   * 评估命名空间策略:归一化并去重命名空间,扫描拼接串的 token 与非法
+   * 字符偏移,统计组件重复项并给出规范性判定。
+   */
   public evaluateNamespacePolicies(
     request: TradeEventLabelInput,
   ): NamespaceInspection {

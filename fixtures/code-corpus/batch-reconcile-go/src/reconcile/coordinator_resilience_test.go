@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+// TestCoordinatorRejectsInvalidEnvelopeBeforeSideEffects 验证非法请求在校验期被
+// 拒绝:不调用渠道、不产生回执、不入归档,并返回逐笔“无效”结果。
 func TestCoordinatorRejectsInvalidEnvelopeBeforeSideEffects(t *testing.T) {
 	coordinator, store, archive := testCoordinator(t, testEpoch, 2)
 	base := testPayment("invalid-envelope", "source", "target", CurrencyUSD, 100, 0)
@@ -47,6 +49,8 @@ func TestCoordinatorRejectsInvalidEnvelopeBeforeSideEffects(t *testing.T) {
 	}
 }
 
+// TestCoordinatorRequiresOperationAndDependencies 验证构造期对存储、归档、并发
+// 数、超时的校验,以及调用期对空渠道函数的拒绝。
 func TestCoordinatorRequiresOperationAndDependencies(t *testing.T) {
 	policy, _ := NewRetryPolicy(0, 0, 1, 0, 1)
 	validConfig := CoordinatorConfig{WorkerLimit: 1, AttemptTimeout: time.Second, Clock: func() time.Time { return testEpoch }, RetryPolicy: policy}
@@ -80,6 +84,8 @@ func TestCoordinatorRequiresOperationAndDependencies(t *testing.T) {
 	}
 }
 
+// TestCoordinatorAttemptTimeoutCanRetryAndRecover 验证单次转账超时后按策略重试,
+// 第二次尝试成功并留下正确的尝试计数与回执。
 func TestCoordinatorAttemptTimeoutCanRetryAndRecover(t *testing.T) {
 	policy, _ := NewRetryPolicy(0, 0, 1, 0, 17)
 	store := NewMemoryReceiptStore()
@@ -115,6 +121,8 @@ func TestCoordinatorAttemptTimeoutCanRetryAndRecover(t *testing.T) {
 	}
 }
 
+// TestCoordinatorContextCancellationStopsWaitingJoiner 验证加入者等待批次完成时
+// 可被 context 取消而提前返回,不影响 leader 继续完成并归档。
 func TestCoordinatorContextCancellationStopsWaitingJoiner(t *testing.T) {
 	coordinator, store, _ := testCoordinator(t, testEpoch, 1)
 	request := testRequest("cancel-join-key", testPayment("cancel-join", "source", "target", CurrencyEUR, 700, 0))
@@ -157,6 +165,8 @@ func TestCoordinatorContextCancellationStopsWaitingJoiner(t *testing.T) {
 	}
 }
 
+// TestCoordinatorConcurrentConflictingFlightFailsImmediately 验证批次在途时,同一
+// 键携带不同内容的请求立即被判为冲突,不阻塞、不调用渠道。
 func TestCoordinatorConcurrentConflictingFlightFailsImmediately(t *testing.T) {
 	coordinator, store, _ := testCoordinator(t, testEpoch, 1)
 	original := testRequest("live-conflict-key", testPayment("live-conflict", "source", "target", CurrencyGBP, 1_000, 0))
@@ -200,6 +210,8 @@ func TestCoordinatorConcurrentConflictingFlightFailsImmediately(t *testing.T) {
 	}
 }
 
+// TestCoordinatorReceiptLookupFailureDoesNotInvokeProvider 验证回执查询故障时
+// 支付判为永久失败、不调用渠道,且失败结果可归档重放。
 func TestCoordinatorReceiptLookupFailureDoesNotInvokeProvider(t *testing.T) {
 	coordinator, store, archive := testCoordinator(t, testEpoch, 1)
 	payment := testPayment("lookup-failure", "source", "target", CurrencyCHF, 250, 0)
@@ -222,6 +234,8 @@ func TestCoordinatorReceiptLookupFailureDoesNotInvokeProvider(t *testing.T) {
 	}
 }
 
+// TestCoordinatorReceiptSaveFailureDoesNotRetryTransfer 验证渠道已成功但回执
+// 落库失败时按永久失败处理,不重试渠道(避免重复扣款)。
 func TestCoordinatorReceiptSaveFailureDoesNotRetryTransfer(t *testing.T) {
 	coordinator, store, _ := testCoordinator(t, testEpoch, 1)
 	payment := testPayment("save-failure", "source", "target", CurrencyCNY, 880, 0)
@@ -243,6 +257,8 @@ func TestCoordinatorReceiptSaveFailureDoesNotRetryTransfer(t *testing.T) {
 	}
 }
 
+// TestCoordinatorWorkerLimitBoundsParallelTransfers 验证并发转账数被 WorkerLimit
+// 钳制:12 笔支付在并发上限 3 内执行完毕且全部成功。
 func TestCoordinatorWorkerLimitBoundsParallelTransfers(t *testing.T) {
 	coordinator, _, _ := testCoordinator(t, testEpoch, 3)
 	payments := make([]Payment, 12)
@@ -285,6 +301,8 @@ func TestCoordinatorWorkerLimitBoundsParallelTransfers(t *testing.T) {
 	}
 }
 
+// TestCoordinatorPaymentGatesAreReleasedAfterCompletion 验证连续 20 个批次完成后
+// 支付锁与在途批次全部释放,无状态泄漏。
 func TestCoordinatorPaymentGatesAreReleasedAfterCompletion(t *testing.T) {
 	coordinator, _, _ := testCoordinator(t, testEpoch, 4)
 	for batch := 0; batch < 20; batch++ {
@@ -307,6 +325,8 @@ func TestCoordinatorPaymentGatesAreReleasedAfterCompletion(t *testing.T) {
 	}
 }
 
+// TestCoordinatorDefaultClockAndRetryPolicyAreUsable 验证缺省时钟与退避策略可用:
+// 未显式提供时间时回执仍会盖上提交时间戳。
 func TestCoordinatorDefaultClockAndRetryPolicyAreUsable(t *testing.T) {
 	coordinator, err := NewBatchCommitCoordinator(NewMemoryReceiptStore(), NewBatchArchive(), CoordinatorConfig{
 		WorkerLimit:    1,
@@ -329,6 +349,8 @@ func TestCoordinatorDefaultClockAndRetryPolicyAreUsable(t *testing.T) {
 	}
 }
 
+// TestCoordinatorArchiveClonePreventsCallerMutation 验证调用方修改返回的条目不
+// 会污染归档:重放与 Get 都返回未被篡改的原始结果。
 func TestCoordinatorArchiveClonePreventsCallerMutation(t *testing.T) {
 	coordinator, _, archive := testCoordinator(t, testEpoch, 1)
 	request := testRequest("clone-protection-key", testPayment("clone-protection", "source", "target", CurrencyUSD, 100, 0))
@@ -352,6 +374,8 @@ func TestCoordinatorArchiveClonePreventsCallerMutation(t *testing.T) {
 	}
 }
 
+// TestConcurrentArchiveReadsReturnIndependentCopies 验证 32 个并发读者各自修改
+// 取回的副本互不影响,归档内容保持不被污染。
 func TestConcurrentArchiveReadsReturnIndependentCopies(t *testing.T) {
 	archive := NewBatchArchive()
 	receipt := storedReceipt("archive-concurrent", "archive-concurrent-key", 0)

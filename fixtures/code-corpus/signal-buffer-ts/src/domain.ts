@@ -1,11 +1,21 @@
 
+/**
+ * 领域模型:信号缓冲平台的核心数据类型与场景校验器。
+ *
+ * 该模块只定义类型与纯函数(币种构造、货币对身份、场景完整性校验),
+ * 不持有任何状态;所有校验规则在此集中,供平台其余模块复用。
+ */
+
+/** 三位大写字母的币种代码(结构化类型:普通字符串不能直接赋值)。 */
 export type CurrencyCode = string & { readonly currencyCode: unique symbol };
 
+/** 货币对:基准币种 + 计价币种,二者必须不同。 */
 export interface CurrencyPair {
   readonly base: CurrencyCode;
   readonly counter: CurrencyCode;
 }
 
+/** 市场报价:买/卖价、观测时刻、提供方、序号与附加属性。 */
 export interface MarketQuote {
   readonly pair: CurrencyPair;
   readonly bid: number;
@@ -16,6 +26,7 @@ export interface MarketQuote {
   readonly attributes: Readonly<Record<string, string>>;
 }
 
+/** 向报价提供方发起的请求:货币对、最大可接受年龄与关联 ID。 */
 export interface ProviderRequest {
   readonly pair: CurrencyPair;
   readonly requestedAt: number;
@@ -23,11 +34,13 @@ export interface ProviderRequest {
   readonly maximumAgeMs: number;
 }
 
+/** 报价提供方接口:给定请求与取消信号返回一条报价。 */
 export interface QuoteProvider {
   readonly id: string;
   request(input: ProviderRequest, signal: AbortSignal): Promise<MarketQuote>;
 }
 
+/** 结算意图:目标账户、币种、金额、起息日与优先级。 */
 export interface SettlementIntent {
   readonly identity: string;
   readonly account: string;
@@ -37,6 +50,7 @@ export interface SettlementIntent {
   readonly priority: number;
 }
 
+/** 结算结果:状态(成功/拒绝/延迟)、凭据与尝试次数。 */
 export interface SettlementOutcome {
   readonly identity: string;
   readonly ordinal: number;
@@ -46,6 +60,7 @@ export interface SettlementOutcome {
   readonly attempts: number;
 }
 
+/** 交易信号:消息 ID、账户、序号、方向、数量与标签。 */
 export interface TradeSignal {
   readonly messageId: string;
   readonly account: string;
@@ -57,6 +72,7 @@ export interface TradeSignal {
   readonly tags: readonly string[];
 }
 
+/** 审计条目:发生时刻、类别、操作者与字段快照。 */
 export interface AuditEntry {
   readonly identity: string;
   readonly occurredAt: number;
@@ -65,6 +81,7 @@ export interface AuditEntry {
   readonly fields: Readonly<Record<string, string | number | boolean>>;
 }
 
+/** 带时间戳的单元值:值、写入/读取时刻与源版本号。 */
 export interface TimedCell<T> {
   readonly value: T;
   readonly storedAt: number;
@@ -72,6 +89,7 @@ export interface TimedCell<T> {
   readonly sourceVersion: number;
 }
 
+/** 重试票据:到期时刻、尝试次数、成本与可选截止时间。 */
 export interface RetryTicket {
   readonly identity: string;
   readonly account: string;
@@ -81,6 +99,7 @@ export interface RetryTicket {
   readonly deadline?: number;
 }
 
+/** 数据包帧:流、序号、负载、校验和与结束标志。 */
 export interface PacketFrame {
   readonly stream: string;
   readonly ordinal: number;
@@ -89,6 +108,7 @@ export interface PacketFrame {
   readonly final: boolean;
 }
 
+/** 段范围:段名、偏移、长度、存活标志与校验和。 */
 export interface SegmentExtent {
   readonly segment: string;
   readonly offset: number;
@@ -97,6 +117,7 @@ export interface SegmentExtent {
   readonly checksum: number;
 }
 
+/** 窗口观测:传感器、账户、序号、值、权重与状态。 */
 export interface WindowObservation {
   readonly sensor: string;
   readonly account: string;
@@ -107,6 +128,7 @@ export interface WindowObservation {
   readonly status: "ready" | "retry" | "blocked" | "done";
 }
 
+/** 窗口聚合:桶、计数、极值、加权均值、方差与首末序号。 */
 export interface WindowAggregate {
   readonly bucket: number;
   readonly count: number;
@@ -118,6 +140,7 @@ export interface WindowAggregate {
   readonly lastSequence: number;
 }
 
+/** 依赖节点:ID、账户、成本、前置依赖与标签。 */
 export interface DependencyNode {
   readonly id: string;
   readonly account: string;
@@ -126,6 +149,7 @@ export interface DependencyNode {
   readonly labels: readonly string[];
 }
 
+/** 通道健康状态:故障/成功计数、熔断状态与延迟 EWMA。 */
 export interface ChannelStatus {
   readonly channel: string;
   readonly failures: number;
@@ -136,6 +160,7 @@ export interface ChannelStatus {
   readonly latencyEwma: number;
 }
 
+/** 阈值汇流点快照:缓冲/接收/写入计数与关闭标志。 */
 export interface SinkSnapshot {
   readonly buffered: number;
   readonly accepted: number;
@@ -145,6 +170,7 @@ export interface SinkSnapshot {
   readonly closing: boolean;
 }
 
+/** 请求多路复用器快照:活跃值、在途请求、命中/未命中统计。 */
 export interface MuxSnapshot {
   readonly liveValues: number;
   readonly inFlight: number;
@@ -155,6 +181,7 @@ export interface MuxSnapshot {
   readonly timeouts: number;
 }
 
+/** 领域不变量违例:附带违规字段名,便于上层精确处理。 */
 export class DomainInvariantError extends Error {
   public constructor(message: string, readonly field: string) {
     super(message);
@@ -162,6 +189,7 @@ export class DomainInvariantError extends Error {
   }
 }
 
+/** 构造币种代码:校验三位大写字母,否则抛领域不变量错误。 */
 export function currency(value: string): CurrencyCode {
   const normalized = value.trim().toUpperCase();
   if (!/^[A-Z]{3}$/.test(normalized)) {
@@ -170,6 +198,7 @@ export function currency(value: string): CurrencyCode {
   return normalized as CurrencyCode;
 }
 
+/** 返回货币对的规范身份 "BASE/COUNTER";基准与计价相同视为不变量违例。 */
 export function pairIdentity(pair: CurrencyPair): string {
   if (pair.base === pair.counter) {
     throw new DomainInvariantError("base and counter currencies must differ", "pair");
@@ -177,6 +206,13 @@ export function pairIdentity(pair: CurrencyPair): string {
   return `${pair.base}/${pair.counter}`;
 }
 
+/**
+ * 校验一组市场场景的完整性:对货币对、报价、结算意图、交易信号与审计
+ * 条目做交叉一致性检查,返回错误/警告列表与使用量统计。
+ *
+ * 检查项包括:重复实体、报价价差/倒挂、结算金额与起息日、交易序号缺口
+ * 与时间回退、审计覆盖率、账户敞口集中度、报价跳动与三角套利环等。
+ */
 export const validateMarketScenario = (
   pairs: readonly CurrencyPair[],
   quotes: readonly MarketQuote[],
@@ -211,6 +247,7 @@ export const validateMarketScenario = (
       errors.push(`pair[${index}]:${reason instanceof Error ? reason.message : String(reason)}`);
       continue;
     }
+    // 重复货币对仅告警(同对可多次出现),但币种使用计数照常累计。
     if (pairKeys.has(identity)) warnings.push(`duplicate-pair:${identity}`);
     pairKeys.add(identity);
     currencyUsage.set(pair.base, (currencyUsage.get(pair.base) ?? 0) + 1);
@@ -234,6 +271,7 @@ export const validateMarketScenario = (
   }
 
   const settlementsByDate = new Map<string, SettlementIntent[]>();
+  // 结算按起息日分组,用于检测单日成交量、单账户集中度与优先级跨度。
   for (const intent of settlements) {
     if (settlementIds.has(intent.identity)) errors.push(`duplicate-settlement:${intent.identity}`);
     settlementIds.add(intent.identity);
@@ -257,6 +295,7 @@ export const validateMarketScenario = (
   }
 
   const tradesByAccount = new Map<string, TradeSignal[]>();
+  // 交易按账户分组后排序,逐笔检测序号缺口与时间回退。
   for (const trade of trades) {
     if (tradeIds.has(trade.messageId)) errors.push(`duplicate-trade:${trade.messageId}`);
     tradeIds.add(trade.messageId);
@@ -287,6 +326,7 @@ export const validateMarketScenario = (
   }
 
   const coveredSubjects = new Set<string>();
+  // 审计覆盖率:期望被审计的主体(结算/交易 ID)中实际有审计记录的占比。
   for (const audit of audits) {
     if (auditIds.has(audit.identity)) errors.push(`duplicate-audit:${audit.identity}`);
     auditIds.add(audit.identity);
@@ -302,6 +342,7 @@ export const validateMarketScenario = (
   const expectedSubjects = new Set([...settlementIds, ...tradeIds]);
   let covered = 0;
   for (const subject of expectedSubjects) if (coveredSubjects.has(subject)) covered += 1;
+  // 审计覆盖率低于 95% 时告警,提示审计缺失风险。
   const auditCoverage = expectedSubjects.size === 0 ? 1 : covered / expectedSubjects.size;
   if (auditCoverage < 0.95) warnings.push(`audit-coverage:${auditCoverage.toFixed(4)}`);
   if (currencyUsage.size > 80) warnings.push(`currency-cardinality:${currencyUsage.size}`);
@@ -332,6 +373,7 @@ export const validateMarketScenario = (
   }
 
   const directedRates = new Map<string, number>();
+  // 由最新报价构建双向汇率表,再遍历三币种组合检测三角套利环。
   for (const quote of latestQuote.values()) {
     const mid = (quote.bid + quote.ask) / 2;
     if (!(mid > 0)) continue;
@@ -357,6 +399,7 @@ export const validateMarketScenario = (
 
   const intentByIdentity = new Map(settlements.map((intent) => [intent.identity, intent]));
   const tradeByIdentity = new Map(trades.map((trade) => [trade.messageId, trade]));
+  // 审计交叉校验:主体、账户、金额必须与对应结算/交易一致(带容差)。
   for (const audit of audits) {
     const subject = String(audit.fields.subject ?? "");
     if (subject.length === 0) continue;
@@ -381,6 +424,7 @@ export const validateMarketScenario = (
 
   const exposureValues = [...accountExposure.values()].map(Math.abs).sort((left, right) => right - left);
   const exposureTotal = exposureValues.reduce((sum, value) => sum + value, 0);
+  // 敞口集中度:单账户占比过半或前五占比超九成时告警。
   if (exposureTotal > 0) {
     const topShare = exposureValues[0] / exposureTotal;
     const topFiveShare = exposureValues.slice(0, 5).reduce((sum, value) => sum + value, 0) / exposureTotal;

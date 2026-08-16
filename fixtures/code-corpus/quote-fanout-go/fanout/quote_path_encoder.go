@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+// QuotePath 描述一次报价请求经过的路由:起点货币对、提供方、区域、途经跳点
+// (Hops)、配置修订号与是否加密传输。
 type QuotePath struct {
 	Pair      Pair
 	Provider  string
@@ -19,11 +21,15 @@ type QuotePath struct {
 	Encrypted bool
 }
 
+// QuotePathEncoder 把 QuotePath 编码为可放进 URL 的规范字符串(或反向解码),
+// Prefix 为固定路径前缀,MaximumHops 限制跳点数量。
 type QuotePathEncoder struct {
 	Prefix      string
 	MaximumHops int
 }
 
+// Encode 把路径编码为“前缀/货币对?查询参数”形式:跳点去重并做 base64 编码
+// 以避免保留字符,其余字段进入 URL 查询参数,保证可被 Decode 往返还原。
 func (encoder QuotePathEncoder) Encode(path QuotePath) (string, error) {
 	if encoder.Prefix == "" || strings.ContainsAny(encoder.Prefix, "/?#") {
 		return "", errors.New("quote path prefix is invalid")
@@ -71,6 +77,8 @@ func (encoder QuotePathEncoder) Encode(path QuotePath) (string, error) {
 	return encoder.Prefix + "/" + pairSegment + "?" + query.Encode(), nil
 }
 
+// Decode 从编码字符串还原 QuotePath:校验前缀、货币对段与查询键(不允许未知
+// 或重复键),最后用 Encode 重新编码比对,拒绝任何非规范形式,防止伪造路径。
 func (encoder QuotePathEncoder) Decode(encoded string) (QuotePath, error) {
 	if len(encoded) > 16_384 {
 		return QuotePath{}, errors.New("encoded quote path is too long")

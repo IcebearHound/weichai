@@ -14,7 +14,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * ConcurrentAuditAccumulator 的行为测试:阈值/定时触发落盘、并发生产者合并、
+ * 写失败回滚重试、关闭时排空、故障聚合与恢复计数等。
+ */
 final class AccumulatorTest {
+    /** 汇总入口:运行全部用例,返回本类新增的断言数。 */
     static int run() throws Exception {
         int before = TestSupport.assertions();
         validatesConfigurationAndLifecycle();
@@ -36,10 +41,12 @@ final class AccumulatorTest {
         return TestSupport.assertions() - before;
     }
 
+    /** 测试替身工厂:固定时钟 BASE,便于断言回执时间。 */
     private static ConcurrentAuditAccumulator accumulator(BatchWriter writer, int events, long bytes, Duration interval) {
         return new ConcurrentAuditAccumulator(writer, events, bytes, interval, Clock.fixed(TestSupport.BASE, java.time.ZoneOffset.UTC));
     }
 
+    /** 非法配置(阈值/间隔/字节数)应被拒绝;生命周期 新->开->关 转换正确。 */
     private static void validatesConfigurationAndLifecycle() throws Exception {
         RecordingWriter writer = new RecordingWriter();
         for (TestSupport.ThrowingRunnable invalid : List.<TestSupport.ThrowingRunnable>of(
@@ -66,6 +73,7 @@ final class AccumulatorTest {
         TestSupport.check(writer.closed, "close should close writer");
     }
 
+    /** 事件数达到阈值即触发一次批量落盘,并保持接受顺序。 */
     private static void flushesAtEventThreshold() throws Exception {
         RecordingWriter writer = new RecordingWriter();
         try (ConcurrentAuditAccumulator accumulator = accumulator(writer, 3, 1_000_000, Duration.ofSeconds(30))) {
@@ -85,6 +93,7 @@ final class AccumulatorTest {
         }
     }
 
+    /** 字节数达到阈值也触发落盘,大事件完整持久化。 */
     private static void flushesAtByteThreshold() throws Exception {
         RecordingWriter writer = new RecordingWriter();
         try (ConcurrentAuditAccumulator accumulator = accumulator(writer, 100, 1024, Duration.ofSeconds(30))) {
@@ -98,6 +107,7 @@ final class AccumulatorTest {
         }
     }
 
+    /** 定时器到点应强制刷新低于阈值的事件。 */
     private static void flushesOnTimer() throws Exception {
         RecordingWriter writer = new RecordingWriter();
         try (ConcurrentAuditAccumulator accumulator = accumulator(writer, 100, 1_000_000, Duration.ofMillis(12))) {
@@ -109,6 +119,7 @@ final class AccumulatorTest {
         }
     }
 
+    /** 手动 flush 只返回本次新产生的回执,并总是同步底层写入器。 */
     private static void manualFlushReturnsNewReceipts() throws Exception {
         RecordingWriter writer = new RecordingWriter();
         try (ConcurrentAuditAccumulator accumulator = accumulator(writer, 10, 1_000_000, Duration.ofSeconds(30))) {
@@ -127,6 +138,7 @@ final class AccumulatorTest {
         }
     }
 
+    /** 多生产者并发提交:全部接受、全部持久化且身份唯一,批次遵守事件阈值。 */
     private static void mergesConcurrentProducersWithoutLoss() throws Exception {
         RecordingWriter writer = new RecordingWriter();
         ConcurrentAuditAccumulator accumulator = accumulator(writer, 17, 10_000_000, Duration.ofSeconds(30));
@@ -170,6 +182,7 @@ final class AccumulatorTest {
         }
     }
 
+    /** 写入进行中仍可继续接收新事件;单写线程保持全局接受顺序。 */
     private static void serializesWritesWhileAcceptingNewEvents() throws Exception {
         BlockingWriter writer = new BlockingWriter();
         ConcurrentAuditAccumulator accumulator = accumulator(writer, 2, 1_000_000, Duration.ofSeconds(30));
@@ -190,6 +203,7 @@ final class AccumulatorTest {
         accumulator.close();
     }
 
+    /** 写入失败后批次回到队首,下次 flush 自动重试并只持久化一次。 */
     private static void retriesRestoredBatchAfterWriterFailure() throws Exception {
         FailingWriter writer = new FailingWriter(1);
         try (ConcurrentAuditAccumulator accumulator = accumulator(writer, 2, 1_000_000, Duration.ofSeconds(30))) {
@@ -212,6 +226,7 @@ final class AccumulatorTest {
         }
     }
 
+    /** 连续失败不丢事件:失败批次保持原序待处理,恢复后一次持久化。 */
     private static void processingFailureNeverDropsPendingEvents() throws Exception {
         FailingWriter writer = new FailingWriter(2);
         ConcurrentAuditAccumulator accumulator = accumulator(writer, 3, 1_000_000, Duration.ofSeconds(30));
@@ -232,6 +247,7 @@ final class AccumulatorTest {
         accumulator.close();
     }
 
+    /** 关闭应排空低于阈值的所有剩余事件并更新计数。 */
     private static void closeDrainsSubthresholdEvents() throws Exception {
         RecordingWriter writer = new RecordingWriter();
         ConcurrentAuditAccumulator accumulator = accumulator(writer, 100, 1_000_000, Duration.ofSeconds(30));
@@ -248,6 +264,7 @@ final class AccumulatorTest {
         TestSupport.check(writer.closed, "close should close underlying writer");
     }
 
+    /** 写入永久失败时,close 应报告残留事件与未持久化状态。 */
     private static void closeReportsPermanentWriteFailure() throws Exception {
         FailingWriter writer = new FailingWriter(100);
         ConcurrentAuditAccumulator accumulator = accumulator(writer, 100, 1_000_000, Duration.ofSeconds(30));
@@ -261,6 +278,7 @@ final class AccumulatorTest {
         TestSupport.check(writer.closed, "failed drain should still close writer");
     }
 
+    /** sync 失败与写入器 close 失败应被聚合到同一个异常(suppressed)。 */
     private static void closeCombinesSyncAndWriterCloseFailures() throws Exception {
         FailingWriter writer = new FailingWriter(0, true, true);
         ConcurrentAuditAccumulator accumulator = accumulator(writer, 10, 1_000_000, Duration.ofSeconds(30));
@@ -272,6 +290,7 @@ final class AccumulatorTest {
         TestSupport.equal(AccumulatorState.CLOSED, accumulator.status().state(), "error close should finalize state");
     }
 
+    /** 构造时从恢复结果接续批次号与持久化计数;恢复失败则构造失败。 */
     private static void restoresPersistedPositionAtConstruction() throws Exception {
         RecordingWriter writer = new RecordingWriter();
         writer.recovered.add(TestSupport.batch(0, 2));
@@ -296,6 +315,7 @@ final class AccumulatorTest {
         TestSupport.check(failure.getCause() instanceof IOException, "construction failure should retain recovery cause");
     }
 
+    /** 回执历史有界,状态快照最多暴露 8 个最近摘要。 */
     private static void boundsReceiptHistoryAndStatusDigests() throws Exception {
         RecordingWriter writer = new RecordingWriter();
         try (ConcurrentAuditAccumulator accumulator = accumulator(writer, 1, 1_000_000, Duration.ofSeconds(30))) {
@@ -312,6 +332,7 @@ final class AccumulatorTest {
         }
     }
 
+    /** 并发 flush 调用方应共享同一次排空,事件只持久化一次。 */
     private static void supportsConcurrentFlushCallers() throws Exception {
         RecordingWriter writer = new RecordingWriter();
         ConcurrentAuditAccumulator accumulator = accumulator(writer, 100, 1_000_000, Duration.ofSeconds(30));
@@ -338,6 +359,7 @@ final class AccumulatorTest {
         }
     }
 
+    /** awaitIdle 在写入阻塞时超时返回 false,释放后返回 true。 */
     private static void awaitIdleHonorsTimeout() throws Exception {
         BlockingWriter writer = new BlockingWriter();
         ConcurrentAuditAccumulator accumulator = accumulator(writer, 1, 1_000_000, Duration.ofSeconds(30));

@@ -8,6 +8,7 @@ use std::time::Duration;
 
 type PayoutMutation = (&'static str, Box<dyn Fn(&mut Payout)>);
 
+/// 构造一笔测试付款:资金来源与收款人分别派生自 id。
 fn payout(identity: &str, amount_minor: i64, currency: &str) -> Payout {
     Payout {
         id: identity.to_owned(),
@@ -19,6 +20,7 @@ fn payout(identity: &str, amount_minor: i64, currency: &str) -> Payout {
     }
 }
 
+/// 连续序列的推进被记录为 Advanced,水位与连续进度一致。
 #[test]
 fn sequence_ledger_tracks_contiguous_progress() {
     let mut ledger = SequenceLedger::default();
@@ -45,6 +47,7 @@ fn sequence_ledger_tracks_contiguous_progress() {
     assert!(ledger.missing("account-a").is_empty());
 }
 
+/// 跳号时打开空洞,随后乱序到达的序列逐一填补并更新连续进度。
 #[test]
 fn sequence_ledger_opens_and_fills_gaps() {
     let mut ledger = SequenceLedger::default();
@@ -91,6 +94,7 @@ fn sequence_ledger_opens_and_fills_gaps() {
     assert_eq!(ledger.contiguous_through("account-gap"), Some(5));
 }
 
+/// 重复观察与乱序迟达被区分统计:重复与迟到计数互不混淆。
 #[test]
 fn sequence_ledger_distinguishes_duplicates_and_late_values() {
     let mut ledger = SequenceLedger::default();
@@ -119,6 +123,7 @@ fn sequence_ledger_distinguishes_duplicates_and_late_values() {
     assert_eq!(snapshots[0].observed_count, 4);
 }
 
+/// 多流相互独立,快照按流名排序输出。
 #[test]
 fn sequence_ledger_tracks_streams_independently_and_sorts_snapshots() {
     let mut ledger = SequenceLedger::default();
@@ -140,6 +145,7 @@ fn sequence_ledger_tracks_streams_independently_and_sorts_snapshots() {
     assert_eq!(snapshots[2].missing.last(), Some(&21));
 }
 
+/// 合并两个账本时,空洞信息不会因重放顺序而丢失。
 #[test]
 fn sequence_ledger_merge_replays_observations_without_losing_gaps() {
     let mut left = SequenceLedger::default();
@@ -157,6 +163,7 @@ fn sequence_ledger_merge_replays_observations_without_losing_gaps() {
     assert_eq!(left.high_water("right-only"), Some(1));
 }
 
+/// 剪除已持久化的旧序列后,新序列仍保持正确推进;移除流后快照为空。
 #[test]
 fn sequence_ledger_prunes_old_identity_memory_and_removes_stream() {
     let mut ledger = SequenceLedger::default();
@@ -172,6 +179,7 @@ fn sequence_ledger_prunes_old_identity_memory_and_removes_stream() {
     assert!(ledger.snapshots().is_empty());
 }
 
+/// 非法输入(空流名、零序列)被拒绝。
 #[test]
 fn sequence_ledger_rejects_invalid_inputs() {
     let mut ledger = SequenceLedger::default();
@@ -192,6 +200,7 @@ fn sequence_ledger_rejects_invalid_inputs() {
     assert!(ledger.missing("valid").is_empty());
 }
 
+/// 付款校验拒绝非法字段,且任何非法变体都会改变指纹。
 #[test]
 fn payout_validation_and_fingerprint_cover_business_fields() {
     let base = payout("payout-valid", 12_345, "USD");
@@ -232,6 +241,7 @@ fn payout_validation_and_fingerprint_cover_business_fields() {
     }
 }
 
+/// 部分付款失败的批次按配置重试,成功次数记录在回执中,结果保持输入顺序。
 #[test]
 fn payout_book_retries_partial_failures_and_preserves_order() {
     let book = RetryingPayoutBook::new(4).expect("book");
@@ -261,6 +271,7 @@ fn payout_book_retries_partial_failures_and_preserves_order() {
         })
         .expect("batch");
     assert_eq!(results.len(), items.len());
+    // 期望的尝试次数:[稳定 1 次, retry-b 2 次, retry-c 3 次, 稳定 1 次]。
     let expected_attempts = [1, 2, 3, 1];
     for (index, result) in results.iter().enumerate() {
         let PayoutResult::Settled(receipt) = result else {
@@ -279,6 +290,7 @@ fn payout_book_retries_partial_failures_and_preserves_order() {
     assert_eq!(snapshot.receipt_count, 4);
 }
 
+/// 耗尽尝试次数的付款在结果中保持其输入位置,其余付款不受影响。
 #[test]
 fn payout_book_keeps_exhausted_failure_at_input_position() {
     let book = RetryingPayoutBook::new(3).unwrap();
@@ -308,6 +320,7 @@ fn payout_book_keeps_exhausted_failure_at_input_position() {
     assert_eq!(book.snapshot().unwrap().receipt_count, 2);
 }
 
+/// 同键重放直接返回首次结果,不执行任何操作;计数记为重放。
 #[test]
 fn payout_book_replay_returns_same_receipts_without_operations() {
     let book = RetryingPayoutBook::new(2).unwrap();
@@ -338,6 +351,7 @@ fn payout_book_replay_returns_same_receipts_without_operations() {
     assert_eq!(book.snapshot().unwrap().replayed_batches, 1);
 }
 
+/// 批次键已存在且内容不同时拒绝,防止误用键造成错乱。
 #[test]
 fn payout_book_rejects_key_reuse_with_different_values() {
     let book = RetryingPayoutBook::new(2).unwrap();
@@ -357,6 +371,7 @@ fn payout_book_rejects_key_reuse_with_different_values() {
     );
 }
 
+/// 并发提交同一批次键时只有一个执行,其余加入者获得完全一致的结果。
 #[test]
 fn concurrent_same_batch_joins_one_execution() {
     let book = Arc::new(RetryingPayoutBook::new(2).unwrap());
@@ -375,6 +390,7 @@ fn concurrent_same_batch_joins_one_execution() {
     let leader = thread::spawn(move || {
         leader_book.apply_batch("payout-joined-key", &leader_items, |item, attempt| {
             let call = leader_calls.fetch_add(1, Ordering::SeqCst);
+            // 首次调用暂停领队,让跟随者全部进入等待队列。
             if call == 0 {
                 leader_entered.wait();
                 leader_release.wait();
@@ -401,6 +417,7 @@ fn concurrent_same_batch_joins_one_execution() {
     for follower in followers {
         assert_eq!(follower.join().unwrap().unwrap(), canonical);
     }
+    // 只有领队执行了两个 item 的操作。
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     let snapshot = book.snapshot().unwrap();
     assert_eq!(snapshot.joined_batches, 6);
@@ -408,6 +425,7 @@ fn concurrent_same_batch_joins_one_execution() {
     assert_eq!(snapshot.receipt_count, 2);
 }
 
+/// 尝试上限、批次键长度、空批次、重复付款 id 的配置/输入校验。
 #[test]
 fn payout_book_validates_batch_and_attempt_configuration() {
     assert!(RetryingPayoutBook::new(0).is_err());
@@ -429,6 +447,7 @@ fn payout_book_validates_batch_and_attempt_configuration() {
         .is_err());
 }
 
+/// 遗忘旧批次缓存不会影响已签发的回执。
 #[test]
 fn payout_book_forgets_old_completed_batches_but_keeps_receipts() {
     let book = RetryingPayoutBook::new(1).unwrap();

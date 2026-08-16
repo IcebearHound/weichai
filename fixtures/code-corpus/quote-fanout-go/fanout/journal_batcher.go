@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+// JournalEntry 是一条审计日志记录:事件 ID、类别、发生时刻、关联 ID、账户
+// 与附加字段,可通过 Canonical 序列化为去歧义的文本形式。
 type JournalEntry struct {
 	ID            string
 	Kind          string
@@ -19,6 +21,8 @@ type JournalEntry struct {
 	Fields        map[string]string
 }
 
+// Canonical 把条目序列化为规范文本:字段按名排序,值中的保留字符(\ | = 与
+// 换行)被转义,保证不同拼写顺序产生完全相同的字符串,便于审计比对。
 func (entry JournalEntry) Canonical() (string, error) {
 	if err := validateJournalEntry(entry, time.Time{}); err != nil {
 		return "", err
@@ -29,6 +33,7 @@ func (entry JournalEntry) Canonical() (string, error) {
 	}
 	sort.Strings(keys)
 	escape := func(value string) string {
+		// 转义分隔符与转义符自身,保证“a\|b”不会被误读为字段边界。
 		value = strings.ReplaceAll(value, "\\", "\\\\")
 		value = strings.ReplaceAll(value, "|", "\\|")
 		value = strings.ReplaceAll(value, "=", "\\=")
@@ -61,10 +66,13 @@ func (entry JournalEntry) Canonical() (string, error) {
 	return canonical, nil
 }
 
+// JournalWriter 把一批日志条目落盘,实现需保证批量写语义(全部成功或返回错误)。
 type JournalWriter interface {
 	WriteJournal(context.Context, []JournalEntry) error
 }
 
+// JournalPolicy 配置批处理:单批最大条数、待处理队列上限、定时冲刷间隔与
+// 单次写入超时。
 type JournalPolicy struct {
 	MaximumBatch   int
 	MaximumPending int
@@ -72,11 +80,13 @@ type JournalPolicy struct {
 	WriteTimeout   time.Duration
 }
 
+// journalAppend 是一次追加请求,reply 返回入队结果。
 type journalAppend struct {
 	entry JournalEntry
 	reply chan error
 }
 
+// journalDrain 是一次冲刷(排空)请求,reply 返回写入条数与错误。
 type journalDrain struct {
 	ctx   context.Context
 	reply chan journalDrainResult
@@ -87,11 +97,15 @@ type journalDrainResult struct {
 	err     error
 }
 
+// journalClose 是关闭请求:冲刷剩余条目后停止运行循环。
 type journalClose struct {
 	ctx   context.Context
 	reply chan error
 }
 
+// JournalBatcher 通过单 goroutine 的 Run 循环把追加的日志条目攒批写入:
+// 队列按发生时刻排序,达到单批上限或到定时点即冲刷;Close 在退出前
+// 排空剩余条目,保证审计日志不丢失。
 type JournalBatcher struct {
 	writer JournalWriter
 	policy JournalPolicy
@@ -106,6 +120,8 @@ type JournalBatcher struct {
 	closed bool
 }
 
+// NewJournalBatcher 构造批处理器并校验策略:批次上限、队列容量(不小于批次)、
+// 冲刷间隔与写超时均在支持范围内。
 func NewJournalBatcher(
 	writer JournalWriter,
 	clock Clock,
@@ -143,6 +159,8 @@ func NewJournalBatcher(
 	}, nil
 }
 
+// Append 追加一条日志并等待入队结果:校验后投递到运行循环,期间响应 context
+// 取消与关闭状态;重复 ID、队列已满都会被拒绝。
 func (batcher *JournalBatcher) Append(ctx context.Context, entry JournalEntry) error {
 	if ctx == nil {
 		return errors.New("journal append context is required")
@@ -176,6 +194,9 @@ func (batcher *JournalBatcher) Append(ctx context.Context, entry JournalEntry) e
 	}
 }
 
+// validateJournalEntry 校验日志条目的字段:身份与类别必填、发生时刻不晚于
+// 当前时间(相对 now,零值跳过)、关联 ID 长度受限、字段数量与键值长度受限
+// 且字段名不重复。
 func validateJournalEntry(entry JournalEntry, now time.Time) error {
 	if entry.ID == "" || len(entry.ID) > 100 {
 		return errors.New("journal entry identifier is invalid")
@@ -217,6 +238,7 @@ func validateJournalEntry(entry JournalEntry, now time.Time) error {
 	return nil
 }
 
+// cloneJournalEntry 深拷贝条目的字段表,避免调用方修改共享 map 影响队列。
 func cloneJournalEntry(entry JournalEntry) JournalEntry {
 	fields := make(map[string]string, len(entry.Fields))
 	for key, value := range entry.Fields {
@@ -226,6 +248,9 @@ func cloneJournalEntry(entry JournalEntry) JournalEntry {
 	return entry
 }
 
+// Run 启动批处理主循环(仅可运行一次):接收追加/冲刷/关闭请求与定时信号,
+// 攒批时按发生时刻排序、写前先做规范化与去重校验,达到批上限或定时点即
+// 冲刷;context 取消时排空剩余条目后退出。
 func (batcher *JournalBatcher) Run(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("journal run context is required")
@@ -243,6 +268,7 @@ func (batcher *JournalBatcher) Run(ctx context.Context) error {
 			}
 			count := len(pending)
 			if !forced && count > batcher.policy.MaximumBatch {
+				// 非强制冲刷时只写入单批上限内的条目,剩余留到下一批。
 				count = batcher.policy.MaximumBatch
 			}
 			batch := make([]JournalEntry, count)
@@ -340,6 +366,7 @@ func (batcher *JournalBatcher) Run(ctx context.Context) error {
 				request.reply <- closeErr
 				return
 			case <-ticker.C:
+				// 到冲刷间隔:把当前攒批的内容写入,避免日志长期滞留内存。
 				_, _ = flush(ctx, false)
 			}
 		}
@@ -356,6 +383,7 @@ func (batcher *JournalBatcher) Run(ctx context.Context) error {
 	return runErr
 }
 
+// Drain 主动冲刷当前待处理队列,返回本次写出的条数与错误。
 func (batcher *JournalBatcher) Drain(ctx context.Context) (int, error) {
 	if ctx == nil {
 		return 0, errors.New("journal drain context is required")
@@ -376,6 +404,7 @@ func (batcher *JournalBatcher) Drain(ctx context.Context) (int, error) {
 	}
 }
 
+// Close 冲刷剩余条目后关闭批处理器;重复调用返回 nil。
 func (batcher *JournalBatcher) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("journal close context is required")
@@ -402,6 +431,7 @@ func (batcher *JournalBatcher) Close(ctx context.Context) error {
 	}
 }
 
+// Pending 返回当前待处理条目数,同时校验计数不变量。
 func (batcher *JournalBatcher) Pending() int {
 	batcher.mu.Lock()
 	defer batcher.mu.Unlock()

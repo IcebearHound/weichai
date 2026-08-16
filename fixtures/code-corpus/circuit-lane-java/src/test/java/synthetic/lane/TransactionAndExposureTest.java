@@ -11,10 +11,15 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * 事务批处理与敞口计算的行为测试:批处理重试/幂等/回执冲突/并发语义,
+ * 以及敞口矩阵的汇总对账、压力损失与输入校验。
+ */
 final class TransactionAndExposureTest {
     private TransactionAndExposureTest() {
     }
 
+    /** 汇总入口:顺序执行全部用例。 */
     static void run() {
         retriesOnlyFailingItemsAndPreservesInputOrder();
         idempotencyReturnsStoredResultWithoutCallingOperation();
@@ -29,6 +34,7 @@ final class TransactionAndExposureTest {
         exposureHandlesEmptyBookAndCapacity();
     }
 
+    /** 只有失败项重试,成功项不重试,结果顺序与输入一致,耗尽重试的项得到类型化失败结果。 */
     private static void retriesOnlyFailingItemsAndPreservesInputOrder() {
         TransactionalBatch batch = new TransactionalBatch(3, 20);
         List<String> instructions = List.of("pay-alpha", "pay-beta", "pay-gamma", "pay-delta");
@@ -74,6 +80,7 @@ final class TransactionAndExposureTest {
         );
     }
 
+    /** 同幂等键的重复提交应直接返回已存储结果,不再调用操作。 */
     private static void idempotencyReturnsStoredResultWithoutCallingOperation() {
         TransactionalBatch batch = new TransactionalBatch(2);
         AtomicInteger calls = new AtomicInteger();
@@ -94,6 +101,7 @@ final class TransactionAndExposureTest {
         );
     }
 
+    /** 幂等键复用于不同指令集时应被拒绝。 */
     private static void idempotencyRejectsDifferentInstructionPayload() {
         TransactionalBatch batch = new TransactionalBatch(1);
         batch.apply(
@@ -117,6 +125,7 @@ final class TransactionAndExposureTest {
         );
     }
 
+    /** 同一回执被两条不同指令复用时,后一条应得到失败结果。 */
     private static void duplicateReceiptCannotBeAssignedTwice() {
         TransactionalBatch batch = new TransactionalBatch(2);
         List<String> result = batch.apply(
@@ -132,6 +141,7 @@ final class TransactionAndExposureTest {
         TestSupport.equal(2, result.size(), "receipt collision should retain ordered result width");
     }
 
+    /** 同键并发提交只执行一次逻辑批次,两个调用方拿到同一份存储结果。 */
     private static void concurrentSameKeyExecutesOneBatch() {
         TransactionalBatch batch = new TransactionalBatch(2);
         List<String> instructions = List.of("one", "two", "three", "four");
@@ -183,6 +193,7 @@ final class TransactionAndExposureTest {
         TestSupport.same(first.get(), second.get(), "concurrent replay should share stored immutable result");
     }
 
+    /** forget 与 validateInstructions 应安全暴露批次状态且只读。 */
     private static void forgetAndValidationExposeBatchStateSafely() {
         TransactionalBatch batch = new TransactionalBatch(1, 5);
         batch.apply("forget-key", List.of("first", "second"), (instruction, attempt) -> instruction + "-receipt");
@@ -203,6 +214,7 @@ final class TransactionAndExposureTest {
         );
     }
 
+    /** 非法批次配置(尝试次数、容量、键、指令)应被拒绝。 */
     private static void batchRejectsMalformedInputs() {
         TestSupport.failure(
                 IllegalArgumentException.class,
@@ -250,6 +262,7 @@ final class TransactionAndExposureTest {
         );
     }
 
+    /** 敞口汇总应满足 多头-空头=净额 的对账关系,并按绝对净额降序排序。 */
     private static void exposureCalculationReconcilesGrossAndNet() {
         ExposureMatrix matrix = new ExposureMatrix(20);
         List<ExposureMatrix.Position> positions = List.of(
@@ -280,6 +293,7 @@ final class TransactionAndExposureTest {
         TestSupport.equal(10_000L, jpy.netMinor(), "JPY net should remain positive");
     }
 
+    /** 压力场景损失 = 市场冲击损失 + 流动性成本,结果应全为负且含全部币种。 */
     private static void exposureStressAppliesMarketAndLiquidityLoss() {
         ExposureMatrix matrix = new ExposureMatrix(10);
         List<ExposureMatrix.Position> positions = List.of(
@@ -300,6 +314,7 @@ final class TransactionAndExposureTest {
         );
     }
 
+    /** 数据源重复、冲击缺失/重复、非法仓位与冲击参数应被拒绝。 */
     private static void exposureValidationRejectsAmbiguousInputs() {
         ExposureMatrix matrix = new ExposureMatrix(10);
         List<ExposureMatrix.Position> duplicateSource = List.of(
@@ -346,6 +361,7 @@ final class TransactionAndExposureTest {
         );
     }
 
+    /** 空仓位表返回空结果,超容量输入应被拒绝。 */
     private static void exposureHandlesEmptyBookAndCapacity() {
         ExposureMatrix matrix = new ExposureMatrix(2);
         TestSupport.equal(List.of(), matrix.calculate(List.of()), "empty position book should net to empty list");

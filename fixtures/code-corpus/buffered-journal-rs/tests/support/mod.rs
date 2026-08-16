@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+//! 测试支撑库:构造隔离的临时工作区与合成领域对象,供各测试文件复用。
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -9,8 +10,10 @@ use buffered_journal_rs::{
     JournalCodec, JournalRecord, ProviderEndpoint, RetryScheduler, SegmentDescriptor, WorkItem,
 };
 
+/// 全局递增序号,保证每次创建的临时目录路径唯一。
 static DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+/// 隔离的临时测试工作区:创建时建目录,析构时递归删除。
 pub struct TempWorkspace {
     path: PathBuf,
 }
@@ -41,6 +44,7 @@ impl Drop for TempWorkspace {
     }
 }
 
+/// 合成一条日志记录。
 pub fn record(identity: &str, account: &str, occurred_at: i64, payload: &str) -> JournalRecord {
     JournalRecord {
         identity: identity.to_owned(),
@@ -50,6 +54,7 @@ pub fn record(identity: &str, account: &str, occurred_at: i64, payload: &str) ->
     }
 }
 
+/// 合成一条工作项。
 pub fn work(key: &str, account: &str, sequence: i64) -> WorkItem {
     WorkItem {
         key: key.to_owned(),
@@ -63,6 +68,7 @@ pub fn work(key: &str, account: &str, sequence: i64) -> WorkItem {
     }
 }
 
+/// 测试用编解码器配置(宽容尾部截断)。
 pub fn codec() -> JournalCodec {
     JournalCodec {
         version: 2,
@@ -74,6 +80,7 @@ pub fn codec() -> JournalCodec {
     }
 }
 
+/// 合成一个提供方端点。
 pub fn endpoint(name: &str, priority: u16) -> ProviderEndpoint {
     ProviderEndpoint {
         name: name.to_owned(),
@@ -91,6 +98,7 @@ pub fn endpoint(name: &str, priority: u16) -> ProviderEndpoint {
     }
 }
 
+/// 合成一个调度器(小容量,便于测试)。
 pub fn scheduler() -> RetryScheduler {
     RetryScheduler {
         maximum_entries: 128,
@@ -105,6 +113,7 @@ pub fn scheduler() -> RetryScheduler {
     }
 }
 
+/// 合成一个已封存的段描述(账户按 id 取模归属,便于构造多段场景)。
 pub fn descriptor(
     root: &Path,
     segment_id: u64,

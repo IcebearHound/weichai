@@ -12,13 +12,26 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
 
+/**
+ * 链路追踪采样器:按确定性哈希(带 salt)对 trace 进行概率采样,
+ * 同时以「每服务每时间窗口」为粒度设置采样上限,避免高流量服务过度采样。
+ *
+ * <p>确定性设计保证同一 (service, traceId, salt) 在重放/多实例间采样结果一致,
+ * 便于分布式追踪跨节点对齐采样决策。
+ */
 public final class TraceSampler {
+    // 采样概率(0~1)
     private final double probability;
+    // 每个时间窗口内每个服务最多接受的采样数
     private final int maximumPerWindow;
     private final Duration window;
+    // 哈希盐:使采样决策在不同部署之间不可预测
     private final byte[] salt;
+    // 服务 -> 当前窗口起点
     private final Map<String, Long> windowStarts = new LinkedHashMap<>();
+    // 服务 -> 当前窗口内已接受的采样数
     private final Map<String, Integer> accepted = new LinkedHashMap<>();
+    // 服务 -> 已观测总量(用于统计)
     private final Map<String, Long> seen = new LinkedHashMap<>();
 
     public TraceSampler(double probability, int maximumPerWindow, Duration window, byte[] salt) {
@@ -41,6 +54,11 @@ public final class TraceSampler {
         this.salt = salt.clone();
     }
 
+    /**
+     * 决定是否采样该 trace。forced 为 true 时无条件采样(用于关键请求强制追踪);
+     * 否则以哈希值映射到 [0,1) 均匀区间并与概率比较。
+     * 窗口切换时重置该服务的已接受计数。
+     */
     public synchronized boolean accept(String service, String traceId, Instant observedAt, boolean forced) {
         Objects.requireNonNull(service, "trace service");
         Objects.requireNonNull(traceId, "trace identifier");
@@ -63,6 +81,7 @@ public final class TraceSampler {
             }
         }
         long windowMillis = window.toMillis();
+        // 把观察时间对齐到窗口起点;窗口前移时清零已接受计数
         long currentWindow = Math.floorDiv(observedAt.toEpochMilli(), windowMillis) * windowMillis;
         Long priorWindow = windowStarts.get(normalizedService);
         if (priorWindow == null || currentWindow > priorWindow) {
@@ -79,6 +98,7 @@ public final class TraceSampler {
         boolean selected = forced;
         if (!selected && probability > 0.0) {
             try {
+                // 用哈希前 8 字节构造 [0,1) 均匀随机数,保证同输入采样决策可复现
                 MessageDigest digest = MessageDigest.getInstance("SHA-256");
                 digest.update(salt);
                 digest.update((byte) 0);
@@ -94,6 +114,7 @@ public final class TraceSampler {
                         | ((long) bytes[5] & 0xffL) << 16
                         | ((long) bytes[6] & 0xffL) << 8
                         | ((long) bytes[7] & 0xffL);
+                // 右移 1 位消除符号位后除以 Long.MAX_VALUE,映射到 [0,1)
                 double unit = (double) (unsigned >>> 1) / (double) Long.MAX_VALUE;
                 selected = unit < probability;
             } catch (NoSuchAlgorithmException impossible) {
@@ -106,6 +127,9 @@ public final class TraceSampler {
         return selected;
     }
 
+    /**
+     * 导出采样统计(每个服务的 seen/accepted/window-start),只读快照。
+     */
     public synchronized Map<String, Long> observed() {
         Map<String, Long> result = new TreeMap<>();
         for (Map.Entry<String, Long> entry : seen.entrySet()) {

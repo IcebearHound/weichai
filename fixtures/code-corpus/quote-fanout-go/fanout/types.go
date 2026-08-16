@@ -1,3 +1,9 @@
+// Package fanout 实现报价(Quote)的聚合与向多个报价提供方的扇出分发,以及
+// 相关的会话窗口、风险净额、账户车道与日志批处理等配套能力。
+//
+// 核心链路:QuoteRequest 进入后经会话窗口/结算截止检查,聚合器并行向各
+// 提供方(QuoteProvider)取价并按最佳价格聚合;健康开关与熔断器保护不可用
+// 的提供方;成交结果按账户车道串行写入日志批处理器(JournalBatcher)。
 package fanout
 
 import (
@@ -11,11 +17,15 @@ import (
 	"time"
 )
 
+// Pair 表示一个货币对,Base 为基础货币、Counter 为计价货币(如 EUR/USD)。
+// 构造后应保持规范化:三位大写字母代码,格式为“XXX/YYY”。
 type Pair struct {
 	Base    string
 	Counter string
 }
 
+// Quote 是提供方对某货币对在指定时刻的买卖报价:BidMicros/AskMicros 以微
+// 基点计价,Stale 标记报价已过旧,Tags 携带提供方的附加信息。
 type Quote struct {
 	Pair       Pair
 	BidMicros  int64
@@ -27,6 +37,8 @@ type Quote struct {
 	Tags       map[string]string
 }
 
+// QuoteRequest 是一次报价请求:指定货币对、金额与请求时刻,CorrelationID
+// 用于跨系统追踪,Region 决定允许接入哪些提供方。
 type QuoteRequest struct {
 	Pair          Pair
 	AmountMinor   int64
@@ -35,6 +47,9 @@ type QuoteRequest struct {
 	Region        string
 }
 
+// Validate 校验报价请求:货币对必须规范化、金额在平台范围内、请求时间不
+// 过新也不过旧(相对 now,now 为零值时跳过)、关联 ID 字符安全且不含空段,
+// 以及区域标识合法;禁止使用保留测试币种 XTS。
 func (request QuoteRequest) Validate(now time.Time) error {
 	pair, err := ParsePair(request.Pair.String())
 	if err != nil {
@@ -92,21 +107,28 @@ func (request QuoteRequest) Validate(now time.Time) error {
 	return nil
 }
 
+// QuoteProvider 是报价提供方的抽象:Fetch 对单次请求返回一条报价,实现需
+// 返回带上下文的错误以便分类(见 ProviderFailure)。
 type QuoteProvider interface {
 	Name() string
 	Fetch(context.Context, QuoteRequest) (Quote, error)
 }
 
+// Clock 抽象时钟源,便于测试注入固定时间。
 type Clock interface {
 	Now() time.Time
 }
 
+// SystemClock 返回 UTC 当前时间,是生产环境的默认时钟。
 type SystemClock struct{}
 
+// Now 实现 Clock 接口。
 func (SystemClock) Now() time.Time {
 	return time.Now().UTC()
 }
 
+// ProviderFailure 是提供方调用失败的分类错误:Kind 描述失败类别(如超时、
+// 熔断),Retryable 标记是否值得重试,Cause 保留底层原因。
 type ProviderFailure struct {
 	Provider  string
 	Kind      string
@@ -114,6 +136,7 @@ type ProviderFailure struct {
 	Cause     error
 }
 
+// Error 实现 error 接口,格式为“提供方: 原因 (类别)”。
 func (failure ProviderFailure) Error() string {
 	message := "provider request failed"
 	if failure.Cause != nil {
@@ -122,10 +145,12 @@ func (failure ProviderFailure) Error() string {
 	return fmt.Sprintf("%s: %s (%s)", failure.Provider, message, failure.Kind)
 }
 
+// Unwrap 返回底层原因,支持 errors.Is/errors.As 链式匹配。
 func (failure ProviderFailure) Unwrap() error {
 	return failure.Cause
 }
 
+// 包级哨兵错误:供调用方用 errors.Is 精确判断各类失败,而非比较字符串。
 var (
 	ErrInvalidPair       = errors.New("currency pair is invalid")
 	ErrQuoteUnavailable  = errors.New("quote is unavailable")
@@ -138,6 +163,8 @@ var (
 	ErrUnsupportedRegion = errors.New("region is unsupported")
 )
 
+// ParsePair 把“XXX/YYY”形式的文本解析为规范化货币对:去空白、强制大写、
+// 严格校验三字母代码与分隔符,拒绝保留币种(XXX/ZZZ)与同币种对。
 func ParsePair(text string) (Pair, error) {
 	trimmed := strings.TrimSpace(text)
 	if len(trimmed) != 7 {
@@ -168,14 +195,19 @@ func ParsePair(text string) (Pair, error) {
 	return Pair{Base: base, Counter: counter}, nil
 }
 
+// String 返回货币对的规范化文本形式(如 “EUR/USD”)。
 func (pair Pair) String() string {
 	return pair.Base + "/" + pair.Counter
 }
 
+// Inverse 返回反向货币对(买卖角色互换)。
 func (pair Pair) Inverse() Pair {
 	return Pair{Base: pair.Counter, Counter: pair.Base}
 }
 
+// Validate 校验报价:币种对规范化、提供方名称安全、买卖价为正且合理(ask 不
+// 低于 bid、不超出 int64 一半)、时间先后与有效期不超过一天,以及标签键不
+// 为空、长度受限且不出现仅大小写不同的重名。
 func (quote Quote) Validate(now time.Time) error {
 	parsed, err := ParsePair(quote.Pair.String())
 	if err != nil {
@@ -244,6 +276,7 @@ func (quote Quote) Validate(now time.Time) error {
 	return nil
 }
 
+// MidpointMicros 计算买卖价中值(微基点);报价非法或求和溢出时返回错误。
 func (quote Quote) MidpointMicros() (int64, error) {
 	if quote.BidMicros <= 0 || quote.AskMicros < quote.BidMicros {
 		return 0, errors.New("cannot compute midpoint for invalid quote")
@@ -254,6 +287,7 @@ func (quote Quote) MidpointMicros() (int64, error) {
 	return (quote.BidMicros + quote.AskMicros) / 2, nil
 }
 
+// SpreadBasisPoints 以基点(1/10000)为单位计算买卖价差,基于中值归一化。
 func (quote Quote) SpreadBasisPoints() (float64, error) {
 	midpoint, err := quote.MidpointMicros()
 	if err != nil {
@@ -270,6 +304,8 @@ func (quote Quote) SpreadBasisPoints() (float64, error) {
 	return result, nil
 }
 
+// CanonicalAmount 把十进制文本金额解析为指定小数位(minorUnits)的整数
+// 最小单位,用于把外部格式统一的金额规整为可安全求和与比较的整数形式。
 func CanonicalAmount(text string, minorUnits int) (int64, error) {
 	if minorUnits < 0 || minorUnits > 8 {
 		return 0, errors.New("minor units must be between zero and eight")
@@ -306,7 +342,9 @@ func CanonicalAmount(text string, minorUnits int) (int64, error) {
 	if len(fraction) > minorUnits {
 		return 0, errors.New("amount has too many fractional digits")
 	}
+	// 小数位不足时补零,使“1.5”与“1.50”解析为同一整数。
 	fraction += strings.Repeat("0", minorUnits-len(fraction))
+	// 去掉前导零以免“007”被误判为超长,同时保证整数部分+小数合并不超位数。
 	digits := strings.TrimLeft(parts[0]+fraction, "0")
 	if digits == "" {
 		digits = "0"
@@ -324,6 +362,7 @@ func CanonicalAmount(text string, minorUnits int) (int64, error) {
 	return value, nil
 }
 
+// cloneQuote 深拷贝报价的标签表,避免调用方修改共享的 Tags 映射污染内部状态。
 func cloneQuote(quote Quote) Quote {
 	tags := make(map[string]string, len(quote.Tags))
 	for key, value := range quote.Tags {

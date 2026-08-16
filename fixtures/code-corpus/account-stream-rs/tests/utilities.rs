@@ -5,6 +5,7 @@ use account_stream_rs::{
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+/// 分片结果确定且受盐值影响:同参数稳定,换盐后大部分账户迁移。
 #[test]
 fn account_partitioning_is_deterministic_salted_and_bounded() {
     let first = AccountPartitioner::new(32, 17).unwrap();
@@ -29,12 +30,14 @@ fn account_partitioning_is_deterministic_salted_and_bounded() {
             moved += 1;
         }
     }
+    // 盐值应显著改变映射(至少一半账户迁移),否则换盐没有意义。
     assert!(moved >= 4, "salt moved only {moved} accounts");
     assert!(first.partition("").is_err());
     assert!(AccountPartitioner::new(0, 1).is_err());
     assert!(AccountPartitioner::new(65_537, 1).is_err());
 }
 
+/// 分组后每个分片内账户有序,且归属与单独计算一致。
 #[test]
 fn account_partition_group_sorts_each_shard() {
     let partitioner = AccountPartitioner::new(4, 1_234).unwrap();
@@ -62,6 +65,7 @@ fn account_partition_group_sorts_each_shard() {
     }
 }
 
+/// 分布统计暴露分片形状:均值接近理论值,变异系数保持在低位。
 #[test]
 fn account_partition_balance_exposes_distribution_shape() {
     let partitioner = AccountPartitioner::new(8, 72).unwrap();
@@ -76,11 +80,13 @@ fn account_partition_balance_exposes_distribution_shape() {
     assert!((balance.average - 125.0).abs() < f64::EPSILON);
     assert!((0.0..0.25).contains(&balance.coefficient_of_variation));
     assert!(balance.empty_partitions.is_empty());
+    // 空账户集:均值 0,所有分区均为空。
     let empty = partitioner.balance(&[]).unwrap();
     assert_eq!(empty.average, 0.0);
     assert_eq!(empty.empty_partitions, (0..8).collect::<Vec<_>>());
 }
 
+/// 扩容(4→8 分区)只迁移部分账户,且迁移集合与直接对比一致。
 #[test]
 fn account_partition_movement_compares_topologies() {
     let four = AccountPartitioner::new(4, 7).unwrap();
@@ -100,6 +106,7 @@ fn account_partition_movement_compares_topologies() {
     assert!(four.moved_accounts(&four, &accounts).unwrap().is_empty());
 }
 
+/// 解析器正确处理引号、转义、赋值与标志位的混合输入。
 #[test]
 fn command_parser_handles_quotes_escapes_assignments_and_flags() {
     let parser = QuoteTokenParser;
@@ -110,6 +117,7 @@ fn command_parser_handles_quotes_escapes_assignments_and_flags() {
     assert_eq!(parsed.positional, vec!["EUR USD"]);
     assert_eq!(parsed.assignments["amount"], "125000");
     assert_eq!(parsed.assignments["note"], "client order");
+    // 重复标志位被去重。
     assert_eq!(parsed.flags, vec!["stream", "verbose"]);
     let escaped = parser
         .tokenize(r#"emit line\ one "line\ttwo" 'line three'"#)
@@ -117,6 +125,7 @@ fn command_parser_handles_quotes_escapes_assignments_and_flags() {
     assert_eq!(escaped, vec!["emit", "line one", "line\ttwo", "line three"]);
 }
 
+/// 渲染后重新解析得到等价的规范化命令,渲染输出幂等。
 #[test]
 fn command_parser_round_trip_is_canonical() {
     let parser = QuoteTokenParser;
@@ -142,6 +151,7 @@ fn command_parser_round_trip_is_canonical() {
     assert_eq!(parser.render(&reparsed).unwrap(), rendered);
 }
 
+/// 歧义或残缺的输入(空命令、非法动词、未闭合引号/转义、重复赋值等)一律拒绝。
 #[test]
 fn command_parser_rejects_ambiguous_or_incomplete_input() {
     let parser = QuoteTokenParser;
@@ -163,6 +173,7 @@ fn command_parser_rejects_ambiguous_or_incomplete_input() {
     }
 }
 
+/// 构造一份标准回执信封,供编解码测试复用。
 fn receipt_envelope() -> ReceiptEnvelope {
     ReceiptEnvelope {
         instruction: "instruction-001".to_owned(),
@@ -178,6 +189,7 @@ fn receipt_envelope() -> ReceiptEnvelope {
     }
 }
 
+/// 编码-解码往返一致,版本号可被快速识别,版本不符被拒绝。
 #[test]
 fn receipt_codec_round_trips_and_checks_version() {
     let codec = ReceiptCodec::new(3, 64 * 1024).unwrap();
@@ -192,6 +204,7 @@ fn receipt_codec_round_trips_and_checks_version() {
     );
 }
 
+/// 帧内任意位置的数据损坏与截断都能被校验和/长度检查识别。
 #[test]
 fn receipt_codec_detects_corruption_and_truncation() {
     let codec = ReceiptCodec::new(7, 64 * 1024).unwrap();
@@ -209,6 +222,7 @@ fn receipt_codec_detects_corruption_and_truncation() {
     }
 }
 
+/// 构造参数与信封字段的边界校验。
 #[test]
 fn receipt_codec_validates_envelope_and_size_limits() {
     assert!(ReceiptCodec::new(0, 1_024).is_err());
@@ -228,6 +242,7 @@ fn receipt_codec_validates_envelope_and_size_limits() {
     assert!(codec.encode(&large).is_err());
 }
 
+/// 退避计划按指数增长并在上限处封顶,预算计算与逐项一致。
 #[test]
 fn retry_schedule_grows_caps_and_respects_budget() {
     let schedule = RetrySchedule {
@@ -237,6 +252,7 @@ fn retry_schedule_grows_caps_and_respects_budget() {
         jitter_fraction: 0.0,
         seed: 99,
     };
+    // 无抖动时序列精确可预测:10→20→40→80 后维持 80。
     assert_eq!(
         schedule.sequence(7).unwrap(),
         vec![
@@ -264,6 +280,7 @@ fn retry_schedule_grows_caps_and_respects_budget() {
     );
 }
 
+/// 抖动是确定性的(同参数同结果)、有界的,且随种子变化。
 #[test]
 fn retry_schedule_jitter_is_seeded_and_bounded() {
     let schedule = RetrySchedule {
@@ -278,6 +295,7 @@ fn retry_schedule_jitter_is_seeded_and_bounded() {
         let second = schedule.delay(attempt).unwrap();
         assert_eq!(first, second);
         assert!(first <= schedule.maximum);
+        // 抖动 ±25%,1 秒基数时下限 750ms。
         assert!(first >= Duration::from_millis(750));
     }
     let changed_seed = RetrySchedule {
@@ -287,6 +305,7 @@ fn retry_schedule_jitter_is_seeded_and_bounded() {
     assert_ne!(schedule.delay(3).unwrap(), changed_seed.delay(3).unwrap());
 }
 
+/// 非法参数组合(base 为零、上限低于 base、乘数过小、抖动越界)被拒绝。
 #[test]
 fn retry_schedule_rejects_invalid_parameters() {
     let cases = [

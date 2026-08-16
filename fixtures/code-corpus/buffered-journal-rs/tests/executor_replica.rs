@@ -11,6 +11,7 @@ use buffered_journal_rs::{
 };
 use support::{endpoint, work};
 
+/// 记录处理顺序与并发度的处理器,可配置在指定键上失败。
 struct RecordingHandler {
     order: Mutex<Vec<(String, i64)>>,
     fail_key: Option<String>,
@@ -33,6 +34,7 @@ impl RecordingHandler {
 
 impl RecordHandler for RecordingHandler {
     fn handle(&self, record: &WorkItem) -> Result<(), String> {
+        // 记录并跟踪并发度。
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.maximum_active.fetch_max(active, Ordering::SeqCst);
         if !self.delay.is_zero() {
@@ -51,6 +53,7 @@ impl RecordHandler for RecordingHandler {
     }
 }
 
+/// 计数确认器,可配置在指定键上失败。
 #[derive(Default)]
 struct CountingAcknowledger {
     count: AtomicUsize,
@@ -67,6 +70,7 @@ impl RecordAcknowledger for CountingAcknowledger {
     }
 }
 
+/// 按脚本执行的外部提供方:可配置主端点在前 N 次调用失败,并记录调用次数。
 struct ScriptedProvider {
     calls: Mutex<BTreeMap<String, usize>>,
     recover_primary_after: usize,
@@ -97,11 +101,13 @@ impl ProviderInvoker for ScriptedProvider {
     }
 }
 
+/// 通道内按序列处理,但报告顺序与输入顺序一致。
 #[test]
 fn account_lane_orders_records_but_results_follow_input_order() {
     let executor = KeyedRecordExecutor::default();
     let handler = RecordingHandler::successful(Duration::ZERO);
     let acknowledger = CountingAcknowledger::default();
+    // 同一账户的序列 2 先于序列 1 出现。
     let records = vec![
         work("late-a", "account-a", 2),
         work("other", "account-b", 1),
@@ -115,6 +121,7 @@ fn account_lane_orders_records_but_results_follow_input_order() {
     assert!(reports
         .iter()
         .all(|report| report.outcome == WorkOutcome::Handled));
+    // 处理顺序必须按序列升序。
     let account_a = handler
         .order
         .lock()
@@ -127,6 +134,7 @@ fn account_lane_orders_records_but_results_follow_input_order() {
     assert_eq!(acknowledger.count.load(Ordering::SeqCst), 3);
 }
 
+/// 不同账户的通道并行执行(并发度观测 ≥ 2)。
 #[test]
 fn different_accounts_execute_in_parallel() {
     let executor = KeyedRecordExecutor::default();
@@ -145,6 +153,7 @@ fn different_accounts_execute_in_parallel() {
     );
 }
 
+/// 处理器失败不确认,并阻断同一账户后续序列(标记 Pending)。
 #[test]
 fn handler_failure_never_acknowledges_and_blocks_later_account_sequence() {
     let executor = KeyedRecordExecutor::default();
@@ -165,6 +174,7 @@ fn handler_failure_never_acknowledges_and_blocks_later_account_sequence() {
     assert_eq!(acknowledger.count.load(Ordering::SeqCst), 0);
 }
 
+/// 相同 identity 只执行一次处理器;重复投递被确认但标记 Duplicate。
 #[test]
 fn duplicate_is_processed_once_and_repeat_delivery_is_acknowledged() {
     let executor = KeyedRecordExecutor::default();
@@ -180,6 +190,7 @@ fn duplicate_is_processed_once_and_repeat_delivery_is_acknowledged() {
     assert_eq!(acknowledger.count.load(Ordering::SeqCst), 2);
 }
 
+/// 主端点失败打开熔断后,流量全部切换到备份端点。
 #[test]
 fn replica_failure_opens_only_primary_and_fails_over_to_backup() {
     let selector = ReplicaSelector::default();
@@ -189,6 +200,7 @@ fn replica_failure_opens_only_primary_and_fails_over_to_backup() {
         recover_primary_after: usize::MAX,
         delay: Duration::ZERO,
     };
+    // 主端点首次调用即失败,应快速切换到备份。
     let first = selector
         .route(&providers, "spot/EURUSD", &invoker)
         .expect("backup responds")
@@ -204,6 +216,7 @@ fn replica_failure_opens_only_primary_and_fails_over_to_backup() {
     assert_eq!(calls["backup"], 2);
 }
 
+/// 半开探测成功并达标后,熔断器关闭恢复正常。
 #[test]
 fn half_open_probe_closes_circuit_after_success() {
     let selector = ReplicaSelector::default();
@@ -214,14 +227,17 @@ fn half_open_probe_closes_circuit_after_success() {
         recover_primary_after: 1,
         delay: Duration::ZERO,
     };
+    // 第一次调用失败 → 熔断打开。
     assert!(selector
         .route(&[primary.clone()], "first", &invoker)
         .is_err());
+    // 冷却后(冷却期为 0)半开放行探测,探测成功。
     let recovered = selector
         .route(&[primary.clone()], "second", &invoker)
         .expect("half-open probe succeeds")
         .expect("probe response");
     assert_eq!(recovered, b"primary:second");
+    // 熔断关闭,后续请求直接成功。
     let closed = selector
         .route(&[primary], "third", &invoker)
         .expect("closed provider succeeds")
@@ -229,6 +245,7 @@ fn half_open_probe_closes_circuit_after_success() {
     assert_eq!(closed, b"primary:third");
 }
 
+/// 提供方响应超过请求超时视为失败。
 #[test]
 fn elapsed_provider_timeout_is_treated_as_failure() {
     let selector = ReplicaSelector::default();

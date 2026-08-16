@@ -1,3 +1,7 @@
+/**
+ * 跨组件的边界与性质测试:构造参数边界、零值语义、空报告、Unicode 归一化
+ * 稳定性、金额算法确定性等横切不变量。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AuditNameCodec } from "../src/audit-name-codec.js";
@@ -67,6 +71,7 @@ test("empty analytical reports return neutral summaries", () => {
 
 test("unicode normalization produces stable identifiers", () => {
   const codec = new AuditNameCodec();
+  // 组合字符与分解字符(é 的两种码点表示)应编码为同一分区名。
   const composed = codec.encode(["caf\u00e9"]);
   const decomposed = codec.encode(["cafe\u0301"]);
   assert.equal(composed, decomposed);
@@ -82,6 +87,7 @@ test("unicode normalization produces stable identifiers", () => {
 
 test("receipt time scoring reaches zero after four seconds", () => {
   const reconciler = new ReceiptReconciler();
+  // 时间差每满 1000ms 扣 1 分,4 秒后时间分归零(仅剩字段分 18 分)。
   const base = {
     id: "a",
     instructionId: "i",
@@ -119,6 +125,7 @@ test("route flags are independent of path validation", () => {
 
 test("journal supports empty payloads without hash collision by sequence", () => {
   const journal = new LedgerJournal();
+  // 空负载仍应产出与序号相关的唯一哈希,确保链上帧可区分。
   const hashes: string[] = [];
   for (let sequence = 0; sequence < 12; sequence += 1) {
     hashes.push(
@@ -173,6 +180,7 @@ test("settlement fingerprints change for order and contract changes", () => {
 
 test("batch fingerprint treats input order as immutable contract", async () => {
   const committer = new OrderedBatchCommitter();
+  // 同一幂等键换序提交应被拒绝:批次指纹把顺序视为契约的一部分。
   const one = {
     instructionId: "one",
     accountId: "a",
@@ -213,6 +221,7 @@ test("message payload is copied before the handler observes it", async () => {
 test("memo loader errors do not create cache entries", async () => {
   const memo = new MarketMemo();
   let calls = 0;
+  // 加载失败不应留下缓存项;失败后的下次读取会重新调用 loader。
   await assert.rejects(
     memo.read("FX/FAIL", async () => {
       calls += 1;
@@ -226,6 +235,7 @@ test("memo loader errors do not create cache entries", async () => {
 
 test("fee rounding at an exact half moves away from zero", () => {
   const table = new QuotedFeeTable();
+  // 绝对值恰好处于半步时向远离零的方向进位(±5 -> ±10)。
   const positives = [3n, 8n, 13n, 18n].map((value) =>
     table.roundCharge(value, 10n),
   );
@@ -269,6 +279,7 @@ test("telemetry retry allowance grows with observation count", () => {
 
 test("netting planner output never contains self-transfers", () => {
   const planner = new NettingPlanner();
+  // 30 对借贷账户逐一配对,指令中不应出现同账户转账且金额恒为正。
   const positions = [];
   for (let index = 0; index < 30; index += 1) {
     positions.push({

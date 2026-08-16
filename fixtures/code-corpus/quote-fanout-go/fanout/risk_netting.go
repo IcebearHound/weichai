@@ -7,6 +7,8 @@ import (
 	"sort"
 )
 
+// CurrencyPosition 是一个来源(Source)申报的单一币种风险敞口:账户、币种与
+// 金额(可为正负),Net 会将其按币种净额轧差。
 type CurrencyPosition struct {
 	Account  string
 	Currency string
@@ -14,6 +16,8 @@ type CurrencyPosition struct {
 	Source   string
 }
 
+// NettedPosition 是某币种轧差后的结果:总多头/总空头、净额、涉及账户列表,
+// Concentration 为最大单一账户敞口占总敞口的比例,用于集中度告警。
 type NettedPosition struct {
 	Currency       string
 	GrossLong      int64
@@ -24,12 +28,16 @@ type NettedPosition struct {
 	AbsoluteAmount uint64
 }
 
+// StressShock 是一次压力情景:MoveBasisPoint 为市场价变动(基点,可为负),
+// LiquidityBPS 为流动性成本(基点,非负)。
 type StressShock struct {
 	Currency       string
 	MoveBasisPoint int
 	LiquidityBPS   int
 }
 
+// StressedPosition 是压力测试后的持仓:在原轧差头寸基础上叠加市场损失与
+// 流动性成本,RemainingMinor 为剩余敞口。
 type StressedPosition struct {
 	NettedPosition
 	MarketLossMinor    int64
@@ -37,10 +45,14 @@ type StressedPosition struct {
 	RemainingMinor     int64
 }
 
+// RiskNetting 对多来源申报的风险敞口做按币种的净额轧差(占位实现,保留
+// 扩展点);MaximumPositions 限制单次处理的位置数。
 type RiskNetting struct {
 	MaximumPositions int
 }
 
+// Net 把位置按币种聚合:分别累计总多头、总空头与净额,并统计每个币种涉及
+// 的账户与集中度;结果按绝对敞口降序、币种升序排序。全程做溢出防护。
 func (netting RiskNetting) Net(positions []CurrencyPosition) ([]NettedPosition, error) {
 	if netting.MaximumPositions < 1 {
 		return nil, errors.New("risk netting maximum positions must be positive")
@@ -95,6 +107,7 @@ func (netting RiskNetting) Net(positions []CurrencyPosition) ([]NettedPosition, 
 			}
 			acc.long += position.Minor
 		} else if position.Minor < 0 {
+			// 先加一取反,避免对 MinInt64 直接取负时溢出,再转无符号求幅度。
 			magnitude := uint64(-(position.Minor + 1)) + 1
 			if magnitude > math.MaxInt64 || acc.short > math.MaxInt64-int64(magnitude) {
 				return nil, errors.New("gross short position overflow")
@@ -131,6 +144,7 @@ func (netting RiskNetting) Net(positions []CurrencyPosition) ([]NettedPosition, 
 			}
 		}
 		sort.Strings(accounts)
+		// 集中度 = 最大单账户敞口 / 总敞口,衡量头寸是否过于集中在单一账户。
 		concentration := 0.0
 		if gross > 0 {
 			concentration = float64(maximum) / float64(gross)
@@ -169,6 +183,9 @@ func (netting RiskNetting) Net(positions []CurrencyPosition) ([]NettedPosition, 
 	return result, nil
 }
 
+// Stress 对轧差后的头寸施加压力情景:按市场变动基点计算市场损失(损失只取
+// 负向),叠加流动性成本,得到压力后的剩余敞口;要求每个币种都有对应的
+// 冲击参数。
 func (netting RiskNetting) Stress(positions []CurrencyPosition, shocks []StressShock) ([]StressedPosition, error) {
 	netted, err := netting.Net(positions)
 	if err != nil {

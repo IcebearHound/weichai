@@ -7,6 +7,7 @@ use std::time::Duration;
 use buffered_journal_rs::{BatchWriter, JournalAccumulator, JournalRecord};
 use support::record;
 
+/// 内存写者:记录收到的批次,可注入单次故障。
 #[derive(Default)]
 struct MemoryWriter {
     batches: Mutex<Vec<Vec<JournalRecord>>>,
@@ -15,6 +16,7 @@ struct MemoryWriter {
 
 impl BatchWriter for MemoryWriter {
     fn persist(&self, records: &[JournalRecord]) -> Result<(), String> {
+        // 一次性故障开关:下次写入报错,随后自动复位。
         if self.fail_next.swap(false, Ordering::SeqCst) {
             return Err("injected disk failure".to_owned());
         }
@@ -26,6 +28,7 @@ impl BatchWriter for MemoryWriter {
     }
 }
 
+/// 门控写者:进入写入后阻塞,直到测试显式放行,用于观察在途写入状态。
 struct GateWriter {
     state: Mutex<(bool, bool, Vec<JournalRecord>)>,
     changed: Condvar,
@@ -45,6 +48,7 @@ impl BatchWriter for GateWriter {
         let mut state = self.state.lock().expect("gate writer lock");
         state.0 = true;
         self.changed.notify_all();
+        // 等待放行信号。
         while !state.1 {
             state = self.changed.wait(state).expect("gate writer wait");
         }
@@ -53,6 +57,7 @@ impl BatchWriter for GateWriter {
     }
 }
 
+/// 达到阈值时恰好刷盘一次,已落盘的重复投递被忽略。
 #[test]
 fn threshold_flushes_once_and_duplicate_delivery_is_ignored() {
     let accumulator =
@@ -60,12 +65,14 @@ fn threshold_flushes_once_and_duplicate_delivery_is_ignored() {
     let writer = MemoryWriter::default();
     let first = record("first", "account-a", 1, "audit|one");
     let second = record("second", "account-a", 2, "audit|two");
+    // 单条记录低于阈值(2),不落盘。
     assert_eq!(
         accumulator
             .drain(std::slice::from_ref(&first), false, &writer)
             .unwrap(),
         0
     );
+    // 两条记录达到阈值,一次刷盘写入两条。
     assert_eq!(
         accumulator
             .drain(&[first.clone(), second.clone()], false, &writer)
@@ -77,6 +84,7 @@ fn threshold_flushes_once_and_duplicate_delivery_is_ignored() {
     assert_eq!(batches[0], vec![first, second]);
 }
 
+/// 写入失败时整批按原序放回,关闭模式重试可完整落盘。
 #[test]
 fn failed_batch_is_requeued_in_original_order_for_shutdown_retry() {
     let accumulator =
@@ -92,12 +100,14 @@ fn failed_batch_is_requeued_in_original_order_for_shutdown_retry() {
         .drain(&records, false, &writer)
         .expect_err("injected failure must surface");
     assert!(error.contains("retaining 3 records"));
+    // 关闭模式排空:3 条全部落盘,顺序保持。
     assert_eq!(accumulator.drain(&[], true, &writer).unwrap(), 3);
     let batches = writer.batches.lock().unwrap();
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0], records);
 }
 
+/// 关闭排空会等待锁外(在途)写入者完成后再返回。
 #[test]
 fn shutdown_waits_for_lock_free_in_flight_writer() {
     let accumulator = Arc::new(
@@ -115,6 +125,7 @@ fn shutdown_waits_for_lock_free_in_flight_writer() {
             )
             .expect("background write succeeds")
     });
+    // 等生产者进入写入回调(被门控阻塞)。
     {
         let mut state = writer.state.lock().unwrap();
         while !state.0 {
@@ -133,6 +144,7 @@ fn shutdown_waits_for_lock_free_in_flight_writer() {
         count
     });
     std::thread::sleep(Duration::from_millis(30));
+    // 在途写者未完成时,shutdown 必须阻塞。
     assert!(!shutdown_completed.load(Ordering::SeqCst));
     {
         let mut state = writer.state.lock().unwrap();
@@ -145,6 +157,7 @@ fn shutdown_waits_for_lock_free_in_flight_writer() {
     assert_eq!(writer.state.lock().unwrap().2.len(), 1);
 }
 
+/// 并发提交相同 identity 只落盘一次。
 #[test]
 fn concurrent_callers_do_not_write_the_same_identity_twice() {
     let accumulator = Arc::new(
@@ -172,6 +185,7 @@ fn concurrent_callers_do_not_write_the_same_identity_twice() {
         .into_iter()
         .map(|thread| thread.join().unwrap())
         .sum::<usize>();
+    // 12 次提交只有 1 次真正落盘,其余因 identity 去重被拒绝。
     assert_eq!(attempts.load(Ordering::SeqCst), 12);
     assert_eq!(durable, 1);
     let occurrences = writer

@@ -13,10 +13,22 @@ import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
+/**
+ * 熔断式降级通道(circuit lane):按调用方提供的候选顺序逐个尝试下游操作,
+ * 每个操作维护一个独立的熔断状态机(CLOSED / OPEN / HALF_OPEN),
+ * 连续失败达到阈值后熔断,冷却期结束后进入半开状态允许单个探针流量恢复验证。
+ *
+ * <p>支持降级的语义:只要顺序列表里有任意一个操作成功,调用即返回成功值;
+ * 全部失败时把每个失败原因以 suppressed 形式附加到最终异常上,便于排查。
+ */
 public final class FallbackCircuitLane {
+    // 提供方名称 -> 熔断状态(ConcurrentHashMap 保证并发安全,状态内部再细粒度加锁)
     private final Map<String, MutableState> states = new ConcurrentHashMap<>();
+    // 触发熔断的连续失败次数阈值
     private final int failureLimit;
+    // 熔断后的冷却时间(毫秒),冷却结束才允许进入半开探针
     private final long coolDownMillis;
+    // 注入的时钟,便于测试控制时间推移
     private final Clock clock;
 
     public FallbackCircuitLane(int failureLimit, long coolDownMillis, Clock clock) {
@@ -34,6 +46,13 @@ public final class FallbackCircuitLane {
         }
     }
 
+    /**
+     * 按顺序尝试候选操作,返回第一个成功结果。
+     * 每个提供方在执行前都会经过熔断状态机判断是否放行:
+     * 熔断中的提供方在冷却期内直接拒绝,冷却期满则转为半开并放行一个探针请求。
+     *
+     * @throws IllegalStateException 所有候选均失败(原因以 suppressed 形式挂载)
+     */
     public String acquire(List<String> names, Map<String, Supplier<String>> operations) {
         Objects.requireNonNull(names, "provider order");
         Objects.requireNonNull(operations, "provider operations");
@@ -80,8 +99,10 @@ public final class FallbackCircuitLane {
             boolean recoveryProbe = false;
             long permitGeneration = 0;
             long now = clock.millis();
+            // 状态机判断:OPEN 且冷却期满 -> 转半开;HALF_OPEN 只放行一个探针;CLOSED 直接放行
             synchronized (state) {
                 if (state.mode == Mode.OPEN) {
+                    // 冷却期已过:允许一个探针请求验证恢复情况,同时递增代数使旧探针失效
                     long elapsed = now - state.openedAtMillis;
                     if (elapsed >= coolDownMillis) {
                         state.mode = Mode.HALF_OPEN;
@@ -128,6 +149,7 @@ public final class FallbackCircuitLane {
                 }
                 long completedAt = clock.millis();
                 synchronized (state) {
+                    // 半开探针期间若状态代数变化(例如并发触发了重置),当前请求的结果作废
                     if (recoveryProbe && state.generation != permitGeneration) {
                         state.probeInFlight = false;
                         throw new IllegalStateException("provider probe generation changed: " + name);
@@ -136,6 +158,7 @@ public final class FallbackCircuitLane {
                     state.consecutiveFailures = 0;
                     state.lastFailure = "";
                     state.probeInFlight = false;
+                    // 成功后关闭熔断(半开/打开 -> 关闭),并清零失败计数
                     if (state.mode != Mode.CLOSED) {
                         state.mode = Mode.CLOSED;
                         state.openedAtMillis = 0;
@@ -157,6 +180,7 @@ public final class FallbackCircuitLane {
                         state.lastFailure = state.lastFailure.substring(0, 500);
                     }
                     state.probeInFlight = false;
+                    // 探针失败、半开状态失败或连续失败达到阈值,任一情况都打开熔断
                     boolean thresholdReached = state.consecutiveFailures >= failureLimit;
                     if (recoveryProbe || state.mode == Mode.HALF_OPEN || thresholdReached) {
                         state.mode = Mode.OPEN;
@@ -179,6 +203,9 @@ public final class FallbackCircuitLane {
         throw unavailable;
     }
 
+    /**
+     * 导出所有提供方的熔断状态快照(只读),并顺带做状态一致性自检。
+     */
     public Map<String, MarketModels.ProviderStateView> snapshot() {
         Map<String, MarketModels.ProviderStateView> result = new TreeMap<>();
         for (Map.Entry<String, MutableState> entry : states.entrySet()) {
@@ -210,6 +237,11 @@ public final class FallbackCircuitLane {
         return Collections.unmodifiableMap(new LinkedHashMap<>(result));
     }
 
+    /**
+     * 手动重置某个提供方的熔断状态(关闭熔断、清零计数)。
+     *
+     * @return 提供方存在并已重置时为 true,不存在时为 false
+     */
     public boolean reset(String providerName) {
         Objects.requireNonNull(providerName, "provider name");
         String normalized = providerName.strip();
@@ -245,6 +277,10 @@ public final class FallbackCircuitLane {
         }
     }
 
+    /**
+     * 单个提供方的可变熔断状态。generation(代数)用于使并发中的过期探针结果失效:
+     * 状态每次发生变化(打开/关闭/重置)都会递增,代际不一致的结果一律丢弃。
+     */
     private static final class MutableState {
         private Mode mode = Mode.CLOSED;
         private int consecutiveFailures;

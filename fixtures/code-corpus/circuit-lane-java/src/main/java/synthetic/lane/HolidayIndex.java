@@ -18,10 +18,19 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 
+/**
+ * 节假日日历索引:为每个币种维护「节假日闭市日期」与「异常开市日期」两张表,
+ * 并提供营业日判断与按营业日推进日期的能力(用于结算日/交割日计算)。
+ *
+ * <p>周末(默认闭市)通过 DayOfWeek 集合配置;某天若同时出现在闭市与异常开市表中会被拒绝。
+ */
 public final class HolidayIndex {
     private final ZoneId zone;
+    // 每周的周末天(这些天默认不是营业日)
     private final Set<DayOfWeek> weekends;
+    // 币种 -> 闭市日期集合(节假日)
     private final Map<String, Set<LocalDate>> closures;
+    // 币种 -> 异常开市日期集合(通常周末/节假日临时开市)
     private final Map<String, Set<LocalDate>> exceptionalOpenings;
 
     public HolidayIndex(
@@ -102,6 +111,10 @@ public final class HolidayIndex {
         this.exceptionalOpenings = Collections.unmodifiableMap(parsedOpenings);
     }
 
+    /**
+     * 判断某天是否为某币种的营业日。
+     * 优先级:异常开市 > 节假日闭市 > 周末,即异常开市可以覆盖节假日和周末。
+     */
     public boolean isBusinessDay(LocalDate date, String currency) {
         Objects.requireNonNull(date, "business date");
         Objects.requireNonNull(currency, "business currency");
@@ -123,6 +136,13 @@ public final class HolidayIndex {
         return !weekends.contains(date.getDayOfWeek());
     }
 
+    /**
+     * 从起始日期向前(或原地)推进指定的营业日数,返回结果营业日。
+     *
+     * @param businessDays 要跨越的营业日数(0 表示推进到下一个营业日)
+     * @param includeStart 为 true 时起始日若是营业日则计入第一天
+     * @return 推进后的营业日;若恰逢闭市会继续向前取最近的营业日
+     */
     public LocalDate nextBusinessDate(
             LocalDate start,
             String currency,

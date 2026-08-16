@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// frameReceipt 构造一条合法的测试回执,证据摘要按身份首字符填充 64 位十六进制。
 func frameReceipt(identity string, minor int64, currency Currency, offset time.Duration) Receipt {
 	return Receipt{
 		ReceiptID:      "frame-receipt-" + identity,
@@ -25,6 +26,8 @@ func frameReceipt(identity string, minor int64, currency Currency, offset time.D
 	}
 }
 
+// TestReceiptFrameRoundTripSortsDeterministically 验证编解码往返一致:乱序输入
+// 经编码后按 PaymentID 排序,解码得到的回执顺序确定,且每条均通过校验。
 func TestReceiptFrameRoundTripSortsDeterministically(t *testing.T) {
 	receipts := []Receipt{
 		frameReceipt("c", 300, CurrencyGBP, 3*time.Second),
@@ -58,6 +61,8 @@ func TestReceiptFrameRoundTripSortsDeterministically(t *testing.T) {
 	}
 }
 
+// TestReceiptFrameEncodingIsIndependentOfInputOrder 验证编码结果与输入顺序无关
+// (帧内排序),同时确认序号参与编码,不同序列号会产生不同字节。
 func TestReceiptFrameEncodingIsIndependentOfInputOrder(t *testing.T) {
 	first := frameReceipt("a", 100, CurrencyUSD, time.Second)
 	second := frameReceipt("b", 200, CurrencyEUR, 2*time.Second)
@@ -81,6 +86,8 @@ func TestReceiptFrameEncodingIsIndependentOfInputOrder(t *testing.T) {
 	}
 }
 
+// TestReceiptFrameDetectsCorruption 在帧的多个位置(头部、中部、尾部)翻转字节,
+// 验证解码都能以“校验和不匹配”拒绝被篡改的数据。
 func TestReceiptFrameDetectsCorruption(t *testing.T) {
 	encoded, err := EncodeReceiptFrame(9, testEpoch, []Receipt{frameReceipt("a", 100, CurrencyUSD, 0)})
 	if err != nil {
@@ -95,6 +102,8 @@ func TestReceiptFrameDetectsCorruption(t *testing.T) {
 	}
 }
 
+// TestReceiptFrameRejectsInvalidHeaders 验证编码侧对非法头部(零序号、零时间、
+// 空回执)的拒绝,以及解码侧对截断帧的拒绝。
 func TestReceiptFrameRejectsInvalidHeaders(t *testing.T) {
 	if _, err := EncodeReceiptFrame(0, testEpoch, []Receipt{frameReceipt("a", 1, CurrencyUSD, 0)}); err == nil {
 		t.Error("zero sequence should fail")
@@ -110,6 +119,8 @@ func TestReceiptFrameRejectsInvalidHeaders(t *testing.T) {
 	}
 }
 
+// TestReceiptFrameRejectsWrongVersionWithValidChecksum 篡改版本字节并重新计算
+// 合法校验和,验证版本检查独立于校验和,旧/未知版本仍被拒绝。
 func TestReceiptFrameRejectsWrongVersionWithValidChecksum(t *testing.T) {
 	encoded, err := EncodeReceiptFrame(11, testEpoch, []Receipt{frameReceipt("b", 99, CurrencyCAD, 0)})
 	if err != nil {
@@ -123,6 +134,8 @@ func TestReceiptFrameRejectsWrongVersionWithValidChecksum(t *testing.T) {
 	}
 }
 
+// TestReceiptFrameRejectsTrailingBodyBytes 在帧体后追加字节并重算校验和,验证
+// 解码端能识别出多余载荷并拒绝,防止伪造帧携带附加数据。
 func TestReceiptFrameRejectsTrailingBodyBytes(t *testing.T) {
 	encoded, err := EncodeReceiptFrame(12, testEpoch, []Receipt{frameReceipt("c", 125, CurrencyCHF, 0)})
 	if err != nil {
@@ -138,6 +151,8 @@ func TestReceiptFrameRejectsTrailingBodyBytes(t *testing.T) {
 	}
 }
 
+// TestFrameDigestReflectsOrderAndEvidence 验证摘要对回执顺序与证据摘要敏感:
+// 顺序或证据变化必然导致摘要变化。
 func TestFrameDigestReflectsOrderAndEvidence(t *testing.T) {
 	left := frameReceipt("a", 100, CurrencyUSD, 0)
 	right := frameReceipt("b", 200, CurrencyEUR, time.Second)
@@ -156,6 +171,8 @@ func TestFrameDigestReflectsOrderAndEvidence(t *testing.T) {
 	}
 }
 
+// crc32Checksum 用与帧编解码相同的 Castagnoli 表计算校验和,供测试构造
+// “校验和合法但内容非法”的恶意帧。
 func crc32Checksum(data []byte) uint32 {
 	return crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli))
 }

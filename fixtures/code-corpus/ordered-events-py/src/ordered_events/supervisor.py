@@ -1,3 +1,9 @@
+"""消费编排器:把一批事件交给泵处理,并统一处理后事。
+
+并行消费 → 汇总处理结果 → 失败事件转入死信队列并记日志 →
+生成批次级摘要与告警。所有失败与成功路径都有审计痕迹(journal)。
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -13,6 +19,12 @@ from .pump import PartitionedEventPump
 
 
 class ConsumptionSupervisor:
+    """批处理编排入口。
+
+    orchestrate 一次性编排一批 (事件, 头) 的消费:并发提交给泵,逐个核对结果,
+    失败者登记死信并记事件失败日志,最后汇总状态与告警。
+    """
+
     async def orchestrate(
         self,
         events: Sequence[tuple[TradeEvent, EventHeaders]],
@@ -23,10 +35,24 @@ class ConsumptionSupervisor:
         acknowledge: Callable[[TradeEvent, EventHeaders], Awaitable[None]],
         now: Callable[[], datetime] | None = None,
     ) -> MappingProxyType:
+        """并发消费一批事件,返回批次汇总(只读映射)。
+
+        - 全部任务并发执行,单个失败不影响其它任务(gather return_exceptions);
+        - 失败原因按异常文本启发式归类:含 sequence/checkpoint → 序列错误,
+          含 ack → 确认失败,否则归为处理失败,并登记死信 + 记失败日志;
+        - 成功结果计入状态计数与各账户检查点推进;
+        - 生成告警:失败事件数、单账户失败爆发(≥3)、重复占比过高、
+          某账户重复多于成功等;
+        - 最后记一条 batch-consumed 汇总日志。
+
+        返回键:outcomes / dead_letters / states / account_states /
+        checkpoints / errors / warnings。
+        """
         clock = now or (lambda: datetime.now(UTC))
         tasks = [
             asyncio.create_task(
                 pump.consume(event, headers, process, acknowledge),
+                # 任务名便于日志定位到具体账户/序号/消息
                 name=f"consume:{event.account}:{event.sequence}:{event.message_id}",
             )
             for event, headers in events
@@ -40,6 +66,7 @@ class ConsumptionSupervisor:
             if isinstance(value, BaseException):
                 detail = f"{type(value).__name__}: {value}"
                 lowered = detail.lower()
+                # 按异常文本启发式归类失败原因,用于决定死信重试策略
                 if "sequence" in lowered or "checkpoint" in lowered:
                     reason = "sequence"
                 elif "ack" in lowered:
@@ -104,10 +131,12 @@ class ConsumptionSupervisor:
                 warnings.append(f"account-failure-burst:{account}:{count}")
         duplicates = state_counts["duplicate"]
         if duplicates > max(5, len(outcomes) // 4):
+            # 重复量超过 5 条且超过总数 1/4,视为异常放大
             warnings.append(f"duplicate-volume:{duplicates}")
         for account, counts in account_states.items():
             handled = counts["handled"]
             duplicate = counts["duplicate"]
+            # 单账户重复超过成功数且 ≥3 才告警,避免正常重试的噪音
             if duplicate > handled and duplicate >= 3:
                 warnings.append(f"duplicate-account:{account}:{duplicate}")
         journal.append(

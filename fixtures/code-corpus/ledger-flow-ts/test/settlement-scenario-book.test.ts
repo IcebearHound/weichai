@@ -1,3 +1,9 @@
+/**
+ * SettlementScenarioBook(合成结算场景)的单元测试。
+ *
+ * 覆盖场景编译的确定性、费用上下限、路由附加、聚合、失衡暴露,以及执行
+ * 的槽位稳定、重试、阻断账户、凭据去重、并发上限与汇总聚合。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -51,6 +57,7 @@ const balancedDefinition = (): ScenarioDefinition => ({
 
 test("scenario compilation creates deterministic netting instructions", () => {
   const book = new SettlementScenarioBook();
+  // 平衡场景:两笔债务合计 100000,轧差为 3 条指令且按币种完全配对。
   const compiled = book.compile(balancedDefinition());
   assert.equal(compiled.scenarioId, "daily");
   assert.equal(compiled.instructions.length, 3);
@@ -106,6 +113,7 @@ test("compiled instruction order follows priority then currency", () => {
 
 test("fee calculation respects minimum and maximum caps", () => {
   const book = new SettlementScenarioBook();
+  // 费率计算结果低于最低费用时抬升到 5;高于上限时压低到 50。
   const low = book.compile({
     scenarioId: "fee-min",
     positions: [
@@ -167,6 +175,7 @@ test("compilation combines repeated account positions", () => {
 
 test("imbalanced books expose rather than hide unmatched currency", () => {
   const book = new SettlementScenarioBook();
+  // 失衡场景不抛错:未配对的 30 差额如实暴露在 unmatchedByCurrency 中。
   const compiled = book.compile({
     scenarioId: "unmatched",
     positions: [
@@ -183,6 +192,7 @@ test("imbalanced books expose rather than hide unmatched currency", () => {
 test("execute returns stable slots despite out-of-order completion", async () => {
   let now = 0;
   const book = new SettlementScenarioBook(2, () => now++);
+  // 完成顺序与输入顺序不同,但输出槽位仍按输入序号对齐。
   const compiled = book.compile(balancedDefinition());
   const completion: string[] = [];
   const records = await book.execute(compiled, async (instruction) => {
@@ -266,6 +276,7 @@ test("blocked accounts never reach the writer", async () => {
 
 test("receipt reuse across different instructions becomes a failure", async () => {
   const book = new SettlementScenarioBook(1);
+  // 所有指令返回同一凭据:首条成功后,其余指令因凭据复用被判失败。
   const compiled = book.compile(balancedDefinition());
   const records = await book.execute(compiled, async () => "same-receipt", 1);
   assert.equal(records[0]!.status, "settled");
@@ -297,6 +308,7 @@ test("execution concurrency obeys its configured bound", async () => {
 
 test("summary aggregates money, retries, latency and errors", () => {
   const book = new SettlementScenarioBook();
+  // 混合状态记录:成功归集金额、失败记错误计数、延迟分位只取非零段。
   const records: ScenarioExecutionRecord[] = [
     {
       index: 0,
@@ -450,6 +462,7 @@ test("empty scenario compilation and execution stay well-defined", async () => {
 
 test("generated balanced scenarios conserve gross principal", () => {
   const book = new SettlementScenarioBook();
+  // 规模 1..25 的生成场景:毛本金总额必须守恒,无未配对余额。
   for (let size = 1; size <= 25; size += 1) {
     const positions = [];
     let expected = 0n;

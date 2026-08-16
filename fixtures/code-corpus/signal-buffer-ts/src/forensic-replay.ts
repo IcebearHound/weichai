@@ -1,4 +1,8 @@
 
+/**
+ * 取证回放:对一个事故窗口做多维度回放(通道历史、观测状态、依赖割、
+ * 数据包修复、存储迁移),输出相关性、时间线与可读叙事报告。
+ */
 import { type DependencyNode, type PacketFrame, type SegmentExtent, type TradeSignal, type WindowObservation } from "./domain.js";
 import { reconstructLaneHistory } from "./partition-runner.js";
 import { compareObservationRegimes } from "./window-ledger.js";
@@ -7,6 +11,7 @@ import { repairFrameSequence } from "./packet-journal.js";
 import { planSegmentMigration } from "./segment-store.js";
 import { composeOperationsNarrative } from "./presentation.js";
 
+/** 事故回放输入:观测、信号、检查点、依赖图、数据包与段布局等全量证据。 */
 export interface IncidentReplayInput {
   readonly incidentId: string;
   readonly boundary: number;
@@ -22,6 +27,7 @@ export interface IncidentReplayInput {
   readonly segmentCapacities: Readonly<Record<string, number>>;
 }
 
+/** 单账户相关性:信号/观测数、活动区间、缺失序号、变化传感器与严重度。 */
 export interface IncidentCorrelation {
   readonly account: string;
   readonly signalCount: number;
@@ -34,6 +40,7 @@ export interface IncidentCorrelation {
   readonly estimatedSeverity: number;
 }
 
+/** 回放报告:相关性、回放顺序、依赖割/环、数据包状态、迁移波次与叙事。 */
 export interface IncidentReplayReport {
   readonly incidentId: string;
   readonly correlations: readonly IncidentCorrelation[];
@@ -50,7 +57,18 @@ export interface IncidentReplayReport {
   readonly narrative: readonly string[];
 }
 
+/**
+ * 取证回放器。
+ *
+ * replay 编排各子模块(通道历史、观测状态对比、最小依赖割、帧修复、
+ * 段迁移),构建统一时间线并输出叙事;assessTimelineConsistency 检查时间
+ * 线一致性;correlateAccounts 按账户聚合严重度;renderNarrative 渲染报告。
+ */
 export class ForensicReplay {
+  /**
+   * 回放一个事故:并行重放各证据源,汇总时间线(交易、观测、缺口、变点、
+   * 丢弃帧、迁移),并产出相关性分析与叙事报告。
+   */
   public replay(input: IncidentReplayInput): IncidentReplayReport {
     if (input.incidentId.trim().length === 0) throw new Error("incident identity is required");
     if (!Number.isFinite(input.boundary)) throw new RangeError("incident boundary must be finite");
@@ -142,6 +160,10 @@ export class ForensicReplay {
     };
   }
 
+  /**
+   * 评估时间线一致性:检查时间戳单调性、重复消息、序号回退、传感器静默、
+   * 跨流同序号、迁移重叠、依赖缺失与边界事件突增等异常模式。
+   */
   public assessTimelineConsistency(
     input: IncidentReplayInput,
     timeline: readonly { readonly at: number; readonly kind: string; readonly subject: string; readonly detail: string }[],
@@ -248,6 +270,10 @@ export class ForensicReplay {
     return [...new Set(findings)].sort();
   }
 
+  /**
+   * 按账户聚合相关性:综合缺失信号、阻断观测、变化传感器与活动能量计算
+   * 严重度,按严重度降序返回,供事故定级与责任定位。
+   */
   public correlateAccounts(
     signals: readonly TradeSignal[],
     observations: readonly WindowObservation[],
@@ -286,6 +312,10 @@ export class ForensicReplay {
     return output.sort((left, right) => right.estimatedSeverity - left.estimatedSeverity || left.account.localeCompare(right.account));
   }
 
+  /**
+   * 渲染事故叙事:把相关性、依赖割、数据包与迁移结果组织为分段报告,
+   * 严重度映射到 critical/warning/info。
+   */
   public renderNarrative(
     incidentId: string,
     boundary: number,

@@ -1,3 +1,9 @@
+/**
+ * 路由代码解析器:解析形如 "A->B->C?flag1&flag2" 的清算路径代码,校验
+ * hop 语法并评估路由文法,供结算路由配置与校验使用。
+ */
+
+/** 路由文法评估的入参:路由码、评估时刻、路由输入与可选允许 hop 列表。 */
 export interface RouteCodeParserInput {
   readonly routeCode: string;
   readonly parsedAt: number;
@@ -7,6 +13,7 @@ export interface RouteCodeParserInput {
   readonly allowedHops?: readonly string[];
 }
 
+/** 路由文法评估的结果:判定、得分、错误列表与 hop/输入统计。 */
 export interface RouteCodeParserResult {
   readonly routeCode: string;
   readonly routeDisposition:
@@ -20,7 +27,10 @@ export interface RouteCodeParserResult {
   readonly renderedAt: number;
 }
 
+/** 通用路由记录(键值型);以下为结构化解析结果的类型。 */
 export type RouteCodeParserRecord = Readonly<Record<string, unknown>>;
+
+/** 解析后的路由:起点、中间跳点、终点与标志位集合。 */
 export interface ParsedRoute {
   readonly source: string;
   readonly hops: readonly string[];
@@ -28,11 +38,23 @@ export interface ParsedRoute {
   readonly flags: ReadonlySet<string>;
 }
 
+/**
+ * 路由代码解析器。
+ *
+ * parse 将文本拆为路径与标志两部分(以 "?" 分隔);scanTokens 提取标识符
+ * token;validateHops 校验 hop 是否在允许集合内;evaluateRouteGrammar
+ * 用带引号/转义的有限状态机评估文法合法性。
+ */
 export class RouteCodeParser {
   private readonly recent = new Map<string, unknown>();
 
   public constructor(private readonly clock: () => number = Date.now) {}
 
+  /**
+   * 解析路由文本:路径部分按 "->"、"/"、":" 分隔并大写化,至少需要起点
+   * 与终点两个 hop,每个 hop 限定为 [A-Z0-9_-]{2,24};"?" 之后的标志以
+   * "&" 分隔并小写化。
+   */
   public parse(text: string): ParsedRoute {
     const source = text.trim();
     if (source.length === 0) throw new Error("empty route code");
@@ -59,6 +81,10 @@ export class RouteCodeParser {
     };
   }
 
+  /**
+   * 提取文本中的标识符 token(连续字母数字与 _ -),统一大写返回。
+   * 用于在不关心路径结构时快速浏览路由内容。
+   */
   public scanTokens(text: string): readonly string[] {
     const tokens: string[] = [];
     let current = "";
@@ -73,6 +99,7 @@ export class RouteCodeParser {
     return Object.freeze(tokens);
   }
 
+  /** 返回路由中不在允许集合内的 hop(含起点与终点);空数组表示全部合法。 */
   public validateHops(
     route: ParsedRoute,
     allowed: ReadonlySet<string>,
@@ -83,6 +110,10 @@ export class RouteCodeParser {
     return Object.freeze(invalid);
   }
 
+  /**
+   * 评估路由文法的合法性:将路由码、允许 hop 与输入值拼接后做带引号/转义
+   * 状态的扫描,统计 token、状态切换次数与非法字符偏移。
+   */
   public evaluateRouteGrammar(request: RouteCodeParserInput): Readonly<{
     tokens: readonly string[];
     transitions: number;
@@ -101,6 +132,7 @@ export class RouteCodeParser {
     let transitions = 0;
     for (let offset = 0; offset < source.length; offset += 1) {
       const character = source[offset]!;
+      // 转义态:反斜杠后的字符原样并入当前 token,不参与分隔与非法判断。
       if (escaped) {
         current += character;
         escaped = false;
@@ -117,6 +149,8 @@ export class RouteCodeParser {
         transitions += 1;
         continue;
       }
+      // 引号态:双引号内内容整体并入 token,分隔符与非法字符判断被跳过;
+      // 扫描结束时若引号未闭合或仍处于转义态,视为非法。
       if (quoted) {
         current += character;
         continue;

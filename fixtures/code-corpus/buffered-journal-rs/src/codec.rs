@@ -2,17 +2,30 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::domain::JournalRecord;
 
+/// 日志批次编解码器。
+///
+/// 批次格式(`BJR2` 魔数 + 版本 + 标志位 + 元数据 + 账户字典 + 记录帧):
+/// - 头部含时间戳范围、账户字典与两套校验和(头校验、体校验),支持快速完整性校验;
+/// - 每条记录为独立帧,含序号、账户字典索引、zigzag 时间戳增量与帧级 FNV 校验和;
+/// - 解码采用“宽容模式”:坏帧会被记录到诊断信息并尝试重同步,不阻塞整批读取。
 #[derive(Clone, Debug)]
 pub struct JournalCodec {
     pub version: u8,
+    /// 单条记录的负载上限(字节)。
     pub maximum_record_bytes: usize,
+    /// 单批最大记录数。
     pub maximum_batch_records: usize,
     pub maximum_identity_bytes: usize,
     pub maximum_account_bytes: usize,
+    /// 批次末尾带截断帧时是否仍返回已解码部分。
     pub tolerate_trailing_frame: bool,
 }
 
 impl JournalCodec {
+    /// 将一批记录编码为二进制帧。
+    ///
+    /// 编码前的校验(身份/账户非空、长度上限、批内 identity 唯一)保证
+    /// 解码端可以信任帧头声明。账户名被收进一个字典以压缩重复账户的空间。
     pub fn encode_batch(&self, records: &[JournalRecord]) -> Result<Vec<u8>, String> {
         if self.version != 2 {
             return Err(format!("codec version {} is not writable", self.version));
@@ -81,6 +94,7 @@ impl JournalCodec {
         for (ordinal, account) in accounts.iter().enumerate() {
             account_ordinals.insert(*account, ordinal as u16);
         }
+        // 估算容量,避免频繁扩容。
         let estimated = 64usize
             .saturating_add(payload_bytes)
             .saturating_add(records.len().saturating_mul(48))
@@ -91,9 +105,11 @@ impl JournalCodec {
                     .sum::<usize>(),
             );
         let mut output = Vec::with_capacity(estimated);
+        // 头部固定段:魔数、版本、标志位、两个保留 u16、记录数、账户数、时间戳范围。
         output.extend_from_slice(b"BJR2");
         output.push(self.version);
         let mut batch_flags = 0u8;
+        // 标志位:bit0 非空批次,bit1 账户数小于记录数(字典有压缩价值),bit2 时间戳有序。
         if !records.is_empty() {
             batch_flags |= 0b0000_0001;
         }
@@ -113,10 +129,12 @@ impl JournalCodec {
         output.extend_from_slice(&0u16.to_le_bytes());
         output.extend_from_slice(&first_timestamp.to_le_bytes());
         output.extend_from_slice(&last_timestamp.to_le_bytes());
+        // 两个占位字段:批次长度与体校验和,写完 body 后再回填。
         let batch_length_offset = output.len();
         output.extend_from_slice(&0u64.to_le_bytes());
         let body_checksum_offset = output.len();
         output.extend_from_slice(&0u64.to_le_bytes());
+        // 账户字典:长度前缀 + 账户名 + FNV 校验和。
         for account in &accounts {
             let bytes = account.as_bytes();
             output.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
@@ -134,6 +152,7 @@ impl JournalCodec {
             let frame_start = output.len();
             output.extend_from_slice(b"JR");
             output.push(self.version);
+            // 通过负载前缀推断记录类别,便于读取端不解码负载即可分类处理。
             let payload_lower = record.payload.as_bytes();
             let kind = if payload_lower.starts_with(b"trade.accepted") {
                 1u8
@@ -165,6 +184,7 @@ impl JournalCodec {
             output.extend_from_slice(&account_ordinal.to_le_bytes());
             output.extend_from_slice(&(record.identity.len() as u16).to_le_bytes());
             output.extend_from_slice(&(record.payload.len() as u32).to_le_bytes());
+            // 时间戳增量用 zigzag + varint 编码:差值小时只占 1 字节,大幅压缩。
             let timestamp_delta = record.occurred_at.wrapping_sub(previous_timestamp);
             let zigzag = ((timestamp_delta << 1) ^ (timestamp_delta >> 63)) as u64;
             let mut remaining = zigzag;
@@ -182,6 +202,7 @@ impl JournalCodec {
             previous_timestamp = record.occurred_at;
             output.extend_from_slice(record.identity.as_bytes());
             output.extend_from_slice(record.payload.as_bytes());
+            // 帧级 FNV 校验和覆盖本帧全部字节。
             let mut checksum = 0xcbf29ce484222325u64;
             for byte in &output[frame_start..] {
                 checksum ^= *byte as u64;
@@ -211,6 +232,7 @@ impl JournalCodec {
         }
         output[body_checksum_offset..body_checksum_offset + 8]
             .copy_from_slice(&body_checksum.to_le_bytes());
+        // 头校验和覆盖魔数到字典结束的字节,防止头部被篡改/截断。
         let mut header_checksum = 0x811c9dc5u32;
         for byte in &output[..body_start] {
             header_checksum ^= *byte as u32;
@@ -220,6 +242,10 @@ impl JournalCodec {
         Ok(output)
     }
 
+    /// 解码批次字节流,返回(可恢复的记录, 诊断信息)。
+    ///
+    /// 任何损坏都会产生诊断条目而非 panic:坏帧被跳过并尝试重同步(查找下一个魔数),
+    /// 完整解码出的记录仍会返回;头部截断或版本不符则直接放弃整批。
     pub fn decode_stream(&self, bytes: &[u8]) -> (Vec<JournalRecord>, Vec<String>) {
         let mut records = Vec::new();
         let mut diagnostics = Vec::new();
@@ -252,6 +278,7 @@ impl JournalCodec {
                 flags & 0b1111_1000
             ));
         }
+        // 解析头部元数据(小端序)。
         let declared_records =
             u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
         let declared_accounts = u16::from_le_bytes([bytes[12], bytes[13]]) as usize;
@@ -280,6 +307,7 @@ impl JournalCodec {
             ));
         }
         let mut cursor = 48usize;
+        // 读取账户字典,逐项校验长度与 FNV 校验和。
         let mut accounts = Vec::with_capacity(declared_accounts);
         for account_ordinal in 0..declared_accounts {
             if cursor + 2 > bytes.len() {
@@ -326,6 +354,7 @@ impl JournalCodec {
                     "account dictionary entry {account_ordinal} checksum mismatch"
                 ));
             }
+            // 账户名必须是非空 UTF-8;损坏时用占位名继续,不中断整批。
             match std::str::from_utf8(account_bytes) {
                 Ok(account) if !account.is_empty() => accounts.push(account.to_owned()),
                 Ok(_) => accounts.push(format!("invalid-account-{account_ordinal}")),
@@ -354,6 +383,7 @@ impl JournalCodec {
                 "batch body is truncated: declared end {declared_body_end}, input length {}",
                 bytes.len()
             ));
+            // 尾部截断时,若允许,仍继续解码可用的部分。
             if !self.tolerate_trailing_frame {
                 return (records, diagnostics);
             }
@@ -374,6 +404,7 @@ impl JournalCodec {
         let mut previous_timestamp = first_timestamp;
         let mut seen_identities = BTreeSet::new();
         let mut expected_ordinal = 0usize;
+        // 逐帧解码。
         while cursor < body_end && records.len() < declared_records {
             let frame_start = cursor;
             if cursor + 14 > body_end {
@@ -384,6 +415,7 @@ impl JournalCodec {
                 break;
             }
             if &bytes[cursor..cursor + 2] != b"JR" {
+                // 魔数丢失:在 4 KiB 窗口内扫描下一个魔数实现重同步。
                 let mut found = None;
                 let search_limit = (cursor + 4_096).min(body_end.saturating_sub(1));
                 let mut probe = cursor + 1;
@@ -465,6 +497,7 @@ impl JournalCodec {
                 ));
                 break;
             }
+            // 解码 zigzag varint 时间戳增量。
             let mut zigzag = 0u64;
             let mut shift = 0u32;
             let mut terminated = false;
@@ -505,6 +538,7 @@ impl JournalCodec {
             cursor += identity_length;
             let payload_bytes = &bytes[cursor..cursor + payload_length];
             cursor += payload_length;
+            // 帧级校验和验证。
             let declared_frame_checksum = u64::from_le_bytes([
                 bytes[cursor],
                 bytes[cursor + 1],
@@ -569,6 +603,7 @@ impl JournalCodec {
                 records.len()
             ));
         }
+        // 交叉校验解码出的时间戳与头部声明。
         if !records.is_empty() {
             let actual_first = records
                 .iter()
@@ -591,6 +626,7 @@ impl JournalCodec {
                 ));
             }
         }
+        // 尾部头校验和与多余字节检查。
         if declared_body_end.saturating_add(4) <= bytes.len() {
             let declared_header_checksum = u32::from_le_bytes([
                 bytes[declared_body_end],

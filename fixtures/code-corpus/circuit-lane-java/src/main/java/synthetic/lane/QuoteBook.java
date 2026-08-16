@@ -14,10 +14,19 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+/**
+ * 报价簿(quote book):按币种对维护一段保留期内的报价历史,
+ * 提供发布(去重 + 保留策略裁剪)、选优(最小价差优先,含排除/时效/价差上限过滤)与历史查询能力。
+ *
+ * <p>内部使用读写锁:发布走写锁,查询走读锁,支持读多写少的并发场景。
+ */
 public final class QuoteBook {
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    // 币种对 -> 保留期内的报价队列(按时间排序,队尾最新)
     private final Map<MarketModels.CurrencyPair, Deque<MarketModels.QuoteEnvelope>> quotes = new HashMap<>();
+    // 单个币种对最多保留的报价数
     private final int maximumPerPair;
+    // 报价保留期(早于该时长的报价被裁剪)
     private final Duration retention;
 
     public QuoteBook(int maximumPerPair, Duration retention) {
@@ -31,6 +40,10 @@ public final class QuoteBook {
         this.maximumPerPair = maximumPerPair;
     }
 
+    /**
+     * 发布一条报价:先做有效性校验与「同提供方同观察时间」去重,
+     * 再按保留期与容量上限裁剪历史,保证队内报价始终有序且不超容。
+     */
     public void publish(MarketModels.QuoteEnvelope quote, Instant receivedAt) {
         Objects.requireNonNull(quote, "published quote");
         Objects.requireNonNull(receivedAt, "quote receive time");
@@ -63,6 +76,7 @@ public final class QuoteBook {
                     .thenComparing(MarketModels.QuoteEnvelope::provider));
             Instant cutoff = receivedAt.minus(retention);
             history.clear();
+            // 先按保留期裁掉过期报价,再按容量上限截断最早部分,两者取较靠后的起点
             int firstRetained = 0;
             while (firstRetained < ordered.size()
                     && ordered.get(firstRetained).observedAt().isBefore(cutoff)) {
@@ -84,6 +98,10 @@ public final class QuoteBook {
         }
     }
 
+    /**
+     * 从历史中选择最优报价:在排除指定提供方、未过期、时效内、价差不超上限的候选中,
+     * 取相对价差(基点)最小的;价差相同取观察时间更新者,再相同取提供方名更小者,保证结果确定。
+     */
     public MarketModels.QuoteEnvelope best(
             MarketModels.CurrencyPair pair,
             Instant now,
@@ -164,6 +182,9 @@ public final class QuoteBook {
         }
     }
 
+    /**
+     * 返回某币种对自指定时间以来的报价历史(只读快照),并顺带校验时间单调性。
+     */
     public List<MarketModels.QuoteEnvelope> history(MarketModels.CurrencyPair pair, Instant since) {
         Objects.requireNonNull(pair, "quote history pair");
         Objects.requireNonNull(since, "quote history lower bound");

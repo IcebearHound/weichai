@@ -25,6 +25,14 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.locks.ReentrantLock;
 
+/**
+ * 分段式账本日志(BatchWriter 实现):把哈希链帧按固定字节上限切分为多个段文件
+ * (audit-<编号>.ledger),写帧前做 fsync,写后持久化检查点,
+ * 崩溃后可借助检查点 + 链验证恢复到一致位置。
+ *
+ * <p>每次 write 都校验批次号与链连续性;单帧超过段容量时直接拒绝(而非拆帧),
+ * 保证「一段内的帧要么全有效、要么可截断丢弃尾部半帧」的恢复语义。
+ */
 public final class SegmentJournal implements BatchWriter {
     private static final String PREFIX = "audit-";
     private static final String SUFFIX = ".ledger";
@@ -35,10 +43,12 @@ public final class SegmentJournal implements BatchWriter {
     private final HashChain chain;
     private final Clock clock;
     private final ReentrantLock ioLock = new ReentrantLock();
+    // 当前打开的段文件通道
     private FileChannel channel;
     private long segmentNumber;
     private long segmentOffset;
     private long nextBatchNumber;
+    // 链上前一帧摘要(写入时用于计算新帧哈希)
     private byte[] previousDigest;
     private boolean closed;
 
@@ -56,6 +66,10 @@ public final class SegmentJournal implements BatchWriter {
         openCurrentSegment();
     }
 
+    /**
+     * 写入一个批次:密封排序 -> 编码 -> 必要时轮转段 -> 写帧并 fsync -> 推进链与检查点。
+     * 批次号必须与期望的下一个编号一致(拒绝乱序写入)。
+     */
     @Override
     public WriteReceipt write(AuditBatch requested) throws IOException {
         Objects.requireNonNull(requested, "requested");
@@ -94,6 +108,10 @@ public final class SegmentJournal implements BatchWriter {
         }
     }
 
+    /**
+     * 恢复:扫描全部段文件,截断末段的损坏尾部,逐帧解码并做批次编号与哈希链验证;
+     * 全部通过后据此重建写入位置。中间段损坏直接报错(已封存段不允许截断)。
+     */
     @Override
     public List<AuditBatch> recover() throws IOException {
         ioLock.lock();
@@ -146,6 +164,7 @@ public final class SegmentJournal implements BatchWriter {
         }
     }
 
+    /** fsync 数据与元数据,并刷新检查点。 */
     @Override
     public void sync() throws IOException {
         ioLock.lock();
@@ -158,6 +177,7 @@ public final class SegmentJournal implements BatchWriter {
         }
     }
 
+/** 关闭通道(fsync + close),聚合可能出现的两个失败。 */
     @Override
     public void close() throws IOException {
         ioLock.lock();
@@ -207,6 +227,7 @@ public final class SegmentJournal implements BatchWriter {
         }
     }
 
+    /** 各段文件的元数据统计(批次/事件数/时间范围),用于观测。 */
     List<SegmentInfo> inspectSegments() throws IOException {
         ioLock.lock();
         try {
@@ -250,6 +271,7 @@ public final class SegmentJournal implements BatchWriter {
         }
     }
 
+    /** 返回段内每个批次号的字节偏移(用于按批次定位)。 */
     Map<Long, Long> batchOffsets(Path segment) throws IOException {
         byte[] bytes = Files.readAllBytes(segment);
         Map<Long, Long> offsets = new LinkedHashMap<>();
@@ -262,6 +284,10 @@ public final class SegmentJournal implements BatchWriter {
         return offsets;
     }
 
+    /**
+     * 重建写入位置:优先采用与磁盘段文件匹配且带有效签名的检查点;
+     * 检查点不可信或与文件不符时退化为从零开始验证(保守但安全)。
+     */
     void restorePosition() throws IOException {
         List<Path> segments = listSegments();
         if (segments.isEmpty()) {
@@ -289,6 +315,7 @@ public final class SegmentJournal implements BatchWriter {
         previousDigest = chain.genesis();
     }
 
+    /** 读取并校验检查点(含令牌签名验证),无效时返回 empty。 */
     Optional<CheckpointState> readCheckpoint() {
         Path checkpoint = directory.resolve(CHECKPOINT);
         if (!Files.isRegularFile(checkpoint)) {
@@ -311,6 +338,7 @@ public final class SegmentJournal implements BatchWriter {
         }
     }
 
+    /** 持久化检查点:临时文件写入 + fsync + 原子改名,防止检查点半写。 */
     void storeCheckpoint() throws IOException {
         Path temporary = directory.resolve(CHECKPOINT + ".tmp");
         Path destination = directory.resolve(CHECKPOINT);
@@ -337,6 +365,7 @@ public final class SegmentJournal implements BatchWriter {
         }
     }
 
+    /** 打开当前段文件通道,定位到已写长度。 */
     void openCurrentSegment() throws IOException {
         Path path = segmentPath(segmentNumber);
         channel = FileChannel.open(
@@ -355,6 +384,7 @@ public final class SegmentJournal implements BatchWriter {
         openCurrentSegment();
     }
 
+    /** 轮转:强制刷盘并关闭当前段,打开编号 +1 的新段。 */
     void rotateSegment() throws IOException {
         channel.force(true);
         channel.close();
@@ -363,6 +393,7 @@ public final class SegmentJournal implements BatchWriter {
         openCurrentSegment();
     }
 
+    /** 截断损坏的尾部(仅用于恢复时,且只允许末段)。 */
     void truncateTail(Path path, long length) throws IOException {
         if (channel != null && path.equals(segmentPath(segmentNumber))) {
             channel.close();
@@ -374,6 +405,7 @@ public final class SegmentJournal implements BatchWriter {
         }
     }
 
+    /** 列出全部段文件并按编号排序,同时校验编号连续无缺失。 */
     List<Path> listSegments() throws IOException {
         List<Path> result = new ArrayList<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(directory, PREFIX + "*" + SUFFIX)) {
@@ -419,6 +451,7 @@ public final class SegmentJournal implements BatchWriter {
         }
     }
 
+    /** 阻塞式全量写入:循环直到 Buffer 写完,处理部分写与写阻塞。 */
     static void writeFully(FileChannel channel, ByteBuffer bytes, long position) throws IOException {
         long cursor = position;
         while (bytes.hasRemaining()) {

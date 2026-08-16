@@ -19,12 +19,21 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.zip.CRC32C;
 
+/**
+ * 审计批次:一批不可变事件的容器,附带批量级元数据(创建时间、预估字节数、
+ * 租户计数、按主体的最大序号、CRC32C 校验和)。构造即校验,字段只读。
+ *
+ * <p>校验和用 CRC32C(比 CRC32 更适合硬件加速与错误检测),
+ * 覆盖 批次号+创建时间+事件数 的头部以及每个事件的主键与编码字段。
+ */
 public final class AuditBatch {
     private final long batchNumber;
     private final Instant createdAt;
     private final List<AuditEvent> events;
+    // 预估编码字节数(含 64 字节固定开销),用于分片与容量规划
     private final long estimatedBytes;
     private final Map<String, Integer> tenantCounts;
+    // 租户/主体 -> 当前批次内出现的最大账户序号
     private final Map<String, Long> greatestSequenceBySubject;
     private final int checksum;
 
@@ -59,6 +68,10 @@ public final class AuditBatch {
         this.checksum = calculateChecksum(copy, batchNumber, createdAt);
     }
 
+    /**
+     * 返回按 (租户, 主体, 账户序号, 时间, 事件ID) 全序排序后的「密封」版本。
+     * 排序已满足时直接返回自身(不产生新对象)。
+     */
     public AuditBatch sealed() {
         List<AuditEvent> ordered = new ArrayList<>(events);
         ordered.sort((left, right) -> {
@@ -86,6 +99,10 @@ public final class AuditBatch {
         return new AuditBatch(batchNumber, createdAt, ordered);
     }
 
+    /**
+     * 把批次序列化为字节负载:头部(批次号、创建时间、事件数、校验和) + 逐事件长度前缀编码。
+     * 缓冲区按需扩容。
+     */
     public byte[] payloadBytes() {
         int capacity = Math.toIntExact(Math.min(Integer.MAX_VALUE, estimatedBytes + events.size() * 16L));
         ByteBuffer payload = ByteBuffer.allocate(capacity);
@@ -140,6 +157,7 @@ public final class AuditBatch {
         return greatestSequenceBySubject;
     }
 
+    /** 批次年龄:给定时刻相对创建时间的时长,早于创建时间时归零。 */
     Duration ageAt(Instant instant) {
         if (instant.isBefore(createdAt)) {
             return Duration.ZERO;
@@ -147,6 +165,10 @@ public final class AuditBatch {
         return Duration.between(createdAt, instant);
     }
 
+    /**
+     * 按「最大事件数」与「最大字节数」把批次切分为多个子批次。
+     * 子批次的批次号由 原批次号*100000 + 序号 派生,保持可追溯。
+     */
     List<AuditBatch> partition(int maximumEvents, long maximumBytes) {
         if (maximumEvents <= 0 || maximumBytes <= 0) {
             throw new IllegalArgumentException("partition limits must be positive");
@@ -173,6 +195,10 @@ public final class AuditBatch {
         return List.copyOf(parts);
     }
 
+    /**
+     * 检查同一 (租户/主体) 流内的账户序号是否单调递增,
+     * 返回违反序的流与位置的描述列表(空列表表示全部合规)。
+     */
     List<String> orderingViolations() {
         Map<String, Long> previous = new HashMap<>();
         List<String> violations = new ArrayList<>();
@@ -187,6 +213,7 @@ public final class AuditBatch {
         return violations;
     }
 
+    /** 按租户分组(保持各租户内原有顺序),返回只读视图。 */
     Map<String, List<AuditEvent>> groupByTenant() {
         Map<String, List<AuditEvent>> grouped = new LinkedHashMap<>();
         for (AuditEvent event : events) {
@@ -199,6 +226,10 @@ public final class AuditBatch {
         return Collections.unmodifiableMap(frozen);
     }
 
+    /**
+     * 轮转调度(round-robin)输出租户间公平交错的顺序:每次从事件数最多的租户队列取一条。
+     * 空队列连续 miss 达到租户数时终止,避免死循环。
+     */
     List<AuditEvent> fairTenantOrder() {
         Map<String, ArrayDeque<AuditEvent>> queues = new LinkedHashMap<>();
         List<String> tenants = new ArrayList<>(tenantCounts.keySet());
@@ -230,6 +261,7 @@ public final class AuditBatch {
         return List.copyOf(ordered);
     }
 
+    /** 统计每个租户的事件数(按首次出现顺序)。 */
     static Map<String, Integer> countTenants(List<AuditEvent> events) {
         Map<String, Integer> counts = new LinkedHashMap<>();
         for (AuditEvent event : events) {
@@ -238,6 +270,7 @@ public final class AuditBatch {
         return counts;
     }
 
+    /** 计算每个 (租户/主体) 流内的最大账户序号。 */
     static Map<String, Long> findGreatestSequences(List<AuditEvent> events) {
         Map<String, Long> sequences = new LinkedHashMap<>();
         for (AuditEvent event : events) {
@@ -247,6 +280,7 @@ public final class AuditBatch {
         return sequences;
     }
 
+    /** 计算批次校验和:头部 + 每个事件的主键与编码字段。 */
     static int calculateChecksum(List<AuditEvent> events, long number, Instant createdAt) {
         CRC32C checksum = new CRC32C();
         ByteBuffer header = ByteBuffer.allocate(24);

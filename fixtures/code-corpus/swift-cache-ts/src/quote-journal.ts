@@ -1,9 +1,16 @@
+/**
+ * 报价日志:按序号追加帧(带 FNV 滚动校验和),支持帧序列恢复、压缩
+ * 与恢复策略评估。
+ */
+
+/** 日志帧:序号、负载与校验和。 */
 export interface JournalFrame {
   readonly sequence: number;
   readonly payload: Uint8Array;
   readonly checksum: number;
 }
 
+/** 恢复策略评估的入参。 */
 export interface QuoteJournalInput {
   readonly journalId: string;
   readonly appendedAt: number;
@@ -13,6 +20,7 @@ export interface QuoteJournalInput {
   readonly segments?: readonly string[];
 }
 
+/** 恢复策略评估的结果:有效链、恢复/拒绝键与缺失段。 */
 export interface RecoveryInspection {
   readonly journalId: string;
   readonly frameCount: number;
@@ -27,9 +35,11 @@ export interface RecoveryInspection {
   readonly lastRecoveredKey?: string;
 }
 
+// FNV-1a 风格校验和的种子与素数(32 位)。
 const initialChecksum = 2_166_136_261;
 const checksumPrime = 16_777_619;
 
+/** 用 FNV-1a 更新校验和:逐字节异或后乘素数并回绕 32 位。 */
 const updateChecksum = (state: number, bytes: Uint8Array): number => {
   let checksum = state >>> 0;
   for (const byte of bytes) {
@@ -38,6 +48,7 @@ const updateChecksum = (state: number, bytes: Uint8Array): number => {
   return checksum;
 };
 
+/** 把序号编码为 8 字节大端序列(高位在前),参与校验和计算。 */
 const sequenceBytes = (sequence: number): Uint8Array => {
   const bytes = new Uint8Array(8);
   const view = new DataView(bytes.buffer);
@@ -48,6 +59,7 @@ const sequenceBytes = (sequence: number): Uint8Array => {
   return bytes;
 };
 
+/** 计算一帧的校验和:先喂入序号字节再喂入负载字节。 */
 const frameChecksum = (sequence: number, payload: Uint8Array): number => {
   const afterSequence = updateChecksum(
     initialChecksum,
@@ -56,6 +68,7 @@ const frameChecksum = (sequence: number, payload: Uint8Array): number => {
   return updateChecksum(afterSequence, payload);
 };
 
+/** 冻结一帧(负载切片拷贝,校验和归位到 32 位无符号)。 */
 const immutableFrame = (frame: JournalFrame): JournalFrame =>
   Object.freeze({
     sequence: frame.sequence,
@@ -63,7 +76,13 @@ const immutableFrame = (frame: JournalFrame): JournalFrame =>
     checksum: frame.checksum >>> 0,
   });
 
-/** A compact append/recovery model for quote snapshots stored in a journal. */
+/**
+ * 报价日志。
+ *
+ * append 按序号写入帧,同序号重写需校验和与内容完全一致;
+ * recoverFrames 按序号从链头恢复连续且校验通过的帧;compactSegments
+ * 保留首尾帧与检查点帧;evaluateRecoveryPolicies 评估链的可恢复性。
+ */
 export class QuoteJournal {
   private readonly frames = new Map<number, JournalFrame>();
   private storedPayloadBytes = 0;
@@ -92,6 +111,10 @@ export class QuoteJournal {
     }
   }
 
+  /**
+   * 追加一帧:校验序号/负载上限;同序号重复写入时校验和或内容不一致
+   * 即报错(视为篡改或校验和冲突);容量超限拒绝。
+   */
   public append(sequence: number, payload: Uint8Array): JournalFrame {
     if (!Number.isSafeInteger(sequence) || sequence < 0) {
       throw new RangeError("sequence must be a non-negative safe integer");
@@ -133,6 +156,10 @@ export class QuoteJournal {
     return immutableFrame(frame);
   }
 
+  /**
+   * 恢复帧序列:按序号排序后从链头逐帧校验(序号连续、校验和匹配),
+   * 遇断链或非法帧即停止;同序号重复帧须内容一致。
+   */
   public recoverFrames(
     frames: readonly JournalFrame[],
   ): readonly JournalFrame[] {
@@ -190,6 +217,7 @@ export class QuoteJournal {
     return Object.freeze(recovered);
   }
 
+  /** 压缩帧序列:保留首帧、末帧与序号为 keepEvery 整数倍的检查点帧。 */
   public compactSegments(
     frames: readonly JournalFrame[],
     keepEvery = 32,
@@ -221,6 +249,10 @@ export class QuoteJournal {
     return Object.freeze([...unique.values()]);
   }
 
+  /**
+   * 评估恢复策略:解析 "segment#checksum" 键并沿链滚动校验,统计恢复/
+   * 拒绝键与缺失段,给出链完整性与恢复比率。
+   */
   public evaluateRecoveryPolicies(
     request: QuoteJournalInput,
   ): RecoveryInspection {

@@ -1,3 +1,11 @@
+"""定价场景实验室:端到端执行一个"报价→选价→路由→交易→结算"场景。
+
+run 按以下流水线处理:1) 校验报价(供应商白名单、币种、价格、时效),
+选择每对货币的最优报价并计算价差;2) 对交易行做 BFS 路由规划(带缓存)
+与一系列校验(重复 ID、账户序号单调、数量、限额);3) 按账户+序号排序后
+逐笔调用收据写入器结算,并用哈希链生成审计帧;4) 汇总各类统计。
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -10,6 +18,11 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 
 class PricingScenarioLab:
+    """定价场景执行器。
+
+    run 一次性执行完整场景并返回结构化结果(只读语义的字典)。
+    """
+
     def run(
         self,
         scenario_id: str,
@@ -21,6 +34,13 @@ class PricingScenarioLab:
         receipt_writer: Callable[[Mapping[str, object]], str],
         now: float | None = None,
     ) -> dict[str, object]:
+        """执行一个定价场景,返回完整结果字典。
+
+        入参:报价行、交易行、供应商优先级、路由边、账户限额、收据写入器
+        (receipt_writer 抛异常视为结算失败)。内部按报价校验→选价→路由→
+        交易校验→排序结算→审计链 的顺序推进,拒绝明细与各类统计
+        均包含在返回值中。
+        """
         normalized_scenario = scenario_id.strip()
         if not normalized_scenario or len(normalized_scenario) > 128:
             raise ValueError("scenario_id must contain from 1 to 128 characters")
@@ -38,6 +58,7 @@ class PricingScenarioLab:
                 raise ValueError(f"duplicate provider: {provider}")
             seen_providers.add(provider)
             providers.append(provider)
+        # 供应商优先级排名:下标越小优先级越高
         provider_rank = {provider: index for index, provider in enumerate(providers)}
 
         adjacency: dict[str, tuple[str, ...]] = {}
@@ -105,6 +126,7 @@ class PricingScenarioLab:
                 reasons.append("timestamp")
 
             age_seconds = observed_at - timestamp if math.isfinite(timestamp) else math.inf
+            # 时效窗口:早于 1 秒视为未来时间戳,晚于 5 秒视为过期
             if age_seconds < -1.0:
                 reasons.append("future")
             if age_seconds > 5.0:
@@ -137,6 +159,7 @@ class PricingScenarioLab:
         selected_quotes: dict[str, dict[str, object]] = {}
         spread_by_pair: dict[str, Decimal] = {}
         for pair_key, versions in sorted(quote_versions.items()):
+            # 同一货币对择优:供应商优先级 → 时间戳新 → 输入顺序
             versions.sort(
                 key=lambda row: (
                     int(row["provider_rank"]),
@@ -148,6 +171,7 @@ class PricingScenarioLab:
             pair_name = f"{pair_key[0]}/{pair_key[1]}"
             selected_quotes[pair_name] = selected
             prices = [Decimal(row["price"]) for row in versions]
+            # 价差 = 同对最高价 - 最低价,衡量该对的报价分歧
             spread_by_pair[pair_name] = max(prices) - min(prices)
 
         route_cache: dict[tuple[str, str], tuple[str, ...]] = {}
@@ -162,6 +186,7 @@ class PricingScenarioLab:
             if source == destination:
                 route_cache[(source, destination)] = (source,)
                 continue
+            # BFS 求最短路径;命中目的地后清空 frontier 提前结束
             frontier: deque[tuple[str, tuple[str, ...]]] = deque([(source, (source,))])
             visited = {source}
             found: tuple[str, ...] | None = None
@@ -210,6 +235,7 @@ class PricingScenarioLab:
                 reasons.append("sequence")
             previous_sequence = sequence_by_account.get(account)
             if previous_sequence is not None and sequence <= previous_sequence:
+                # 同一账户序号必须严格递增,否则判定乱序
                 reasons.append("sequence_order")
             try:
                 quantity_minor = int(raw_trade.get("quantity_minor", 0))
@@ -229,6 +255,7 @@ class PricingScenarioLab:
             limit = limits.get(account)
             proposed_exposure = exposure_by_account[account] + abs(quantity_minor)
             if limit is not None and proposed_exposure > limit:
+                # 账户累计敞口(绝对值累计)超限即拒绝
                 reasons.append("limit")
             if reasons:
                 rejected_trades.append(
@@ -244,9 +271,11 @@ class PricingScenarioLab:
             seen_trade_ids.add(trade_id)
             sequence_by_account[account] = sequence
             exposure_by_account[account] = proposed_exposure
+            # 基准币 +、计价币 -,维护各币种净敞口
             exposure_by_currency[base] += quantity_minor
             exposure_by_currency[counter] -= quantity_minor
             price = Decimal(quote["price"])
+            # 金额 × 价格,四舍五入到最小单位(整数)
             gross_counter_minor = (
                 Decimal(abs(quantity_minor)) * price
             ).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
@@ -285,6 +314,7 @@ class PricingScenarioLab:
                     raise ValueError("invalid receipt")
                 owner = receipt_owners.get(proposed_receipt)
                 if owner is not None and owner != trade_id:
+                    # 收据文本被其它交易占用:防收据复用
                     raise ValueError(f"receipt reused by {owner}")
                 receipt_owners[proposed_receipt] = trade_id
                 receipts[trade_id] = proposed_receipt
@@ -300,6 +330,7 @@ class PricingScenarioLab:
                         "error": detail,
                     }
                 )
+            # 审计帧内容:前序摘要 | 交易 ID | 账户 | 状态 | 详情,构成哈希链
             frame_source = (
                 f"{previous_digest}|{trade_id}|{trade['account']}|{status}|{detail}"
             ).encode("utf-8")
@@ -320,6 +351,7 @@ class PricingScenarioLab:
             for trade in prepared_trades
         )
         route_usage = Counter(
+            # 以 "A>B>C" 形式统计路由使用频次
             ">".join(str(hop) for hop in trade["route"])
             for trade in prepared_trades
         )

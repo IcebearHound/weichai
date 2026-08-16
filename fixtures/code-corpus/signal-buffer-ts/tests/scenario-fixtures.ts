@@ -1,3 +1,7 @@
+/**
+ * 场景固件:为测试套件提供统一的领域对象构造器与标准数据集。
+ * 所有构造器都带确定性默认值,保证跨测试稳定可复现。
+ */
 import {
   currency,
   type AuditEntry,
@@ -12,14 +16,17 @@ import {
   type WindowObservation,
 } from "../src/index.js";
 
+/** 常用币种常量。 */
 export const USD = currency("USD");
 export const EUR = currency("EUR");
 export const GBP = currency("GBP");
 export const JPY = currency("JPY");
 export const CHF = currency("CHF");
 
+/** 构造货币对,默认 USD/EUR。 */
 export const pair = (base = USD, counter = EUR): CurrencyPair => ({ base, counter });
 
+/** 构造一条报价:序列号驱动观测时刻与价格,附带场所/延迟/会话属性。 */
 export const quote = (
   sequence: number,
   provider = "north-feed",
@@ -41,6 +48,7 @@ export const quote = (
   },
 });
 
+/** 构造一条结算意图,默认 100 USD、2026-07-13 起息、优先级 50。 */
 export const settlement = (
   identity: string,
   account = "acct-a",
@@ -57,6 +65,7 @@ export const settlement = (
   priority,
 });
 
+/** 构造一条交易信号:消息 ID 形如 “account-m<sequence>”,买/卖对应不同标的。 */
 export const trade = (
   account: string,
   sequence: number,
@@ -74,6 +83,7 @@ export const trade = (
   tags: sequence % 2 === 0 ? ["automated", "liquid"] : ["manual"],
 });
 
+/** 构造一条审计条目:携带主体、账户与模拟环境字段。 */
 export const audit = (
   identity: string,
   subject: string,
@@ -93,6 +103,7 @@ export const audit = (
   },
 });
 
+/** 构造一条窗口观测,默认状态为 ready、权重 1。 */
 export const observation = (
   sensor: string,
   account: string,
@@ -111,6 +122,7 @@ export const observation = (
   status,
 });
 
+/** 构造一张重试票据,默认第 1 次尝试、无截止时间。 */
 export const retry = (
   identity: string,
   account: string,
@@ -127,6 +139,7 @@ export const retry = (
   deadline,
 });
 
+/** 按 FNV-1a 风格计算帧校验和(覆盖负载与序号),与源码实现一致。 */
 export const checksum = (ordinal: number, payload: Uint8Array): number => {
   let value = 2166136261;
   for (const byte of payload) {
@@ -137,6 +150,7 @@ export const checksum = (ordinal: number, payload: Uint8Array): number => {
   return Math.imul(value, 16777619) >>> 0;
 };
 
+/** 构造一帧数据包,自动计算合法校验和。 */
 export const frame = (
   ordinal: number,
   bytes: readonly number[],
@@ -153,6 +167,7 @@ export const frame = (
   };
 };
 
+/** 构造一段 extent,校验和默认由偏移与长度派生。 */
 export const extent = (
   segment: string,
   offset: number,
@@ -167,6 +182,7 @@ export const extent = (
   checksum: checksumValue,
 });
 
+/** 构造一个依赖节点,默认成本 1、账户 platform、无标签。 */
 export const node = (
   id: string,
   prerequisites: readonly string[] = [],
@@ -181,6 +197,7 @@ export const node = (
   labels,
 });
 
+/** 流动性市场报价:8 条双向报价覆盖 4 个货币对,来自 4 个提供方。 */
 export const liquidMarket: readonly MarketQuote[] = [
   quote(1, "north-feed", 1_000, 1.0810, 1.0812, pair(USD, EUR)),
   quote(2, "north-feed", 1_020, 0.9258, 0.9260, pair(EUR, USD)),
@@ -192,6 +209,7 @@ export const liquidMarket: readonly MarketQuote[] = [
   quote(8, "tokyo-feed", 1_140, 0.00632, 0.00634, pair(JPY, USD)),
 ];
 
+/** 标准结算账本:10 条跨币种、跨优先级、跨起息日的意图。 */
 export const settlementBook: readonly SettlementIntent[] = [
   settlement("s-001", "acct-a", 120_000, USD, "2026-07-13", 95),
   settlement("s-002", "acct-b", 80_000, EUR, "2026-07-13", 70),
@@ -205,6 +223,7 @@ export const settlementBook: readonly SettlementIntent[] = [
   settlement("s-010", "acct-d", 72_000, CHF, "2026-07-15", 66),
 ];
 
+/** 标准交易流:10 条跨账户信号(含 acct-a 的序号缺口 3)。 */
 export const tradeStream: readonly TradeSignal[] = [
   trade("acct-a", 1, 2_001, "buy", 10),
   trade("acct-b", 1, 2_002, "sell", 8),
@@ -218,6 +237,7 @@ export const tradeStream: readonly TradeSignal[] = [
   trade("acct-b", 3, 2_010, "sell", 12),
 ];
 
+/** 标准观测序列:3 组传感器 × 4 条(含 retry/blocked 状态),跨 3 账户。 */
 export const observationSeries: readonly WindowObservation[] = [
   observation("queue-depth", "acct-a", 1, 900, 8),
   observation("queue-depth", "acct-a", 2, 950, 9),
@@ -233,6 +253,7 @@ export const observationSeries: readonly WindowObservation[] = [
   observation("reject-rate", "acct-c", 4, 1_090, 0.31, "blocked"),
 ];
 
+/** 标准依赖图:从 ingest 到 publish 的 9 节点流水线(含两条关键路径)。 */
 export const dependencyFixture: readonly DependencyNode[] = [
   node("ingest", [], 2, "platform", ["edge"]),
   node("normalize", ["ingest"], 3, "platform", ["quote"]),
@@ -245,6 +266,7 @@ export const dependencyFixture: readonly DependencyNode[] = [
   node("publish", ["receipt", "audit"], 1, "platform", ["edge"]),
 ];
 
+/** 标准数据包流:4 帧乱序到达,末帧 ordinal=3。 */
 export const packetFixture: readonly PacketFrame[] = [
   frame(3, [31, 32, 33], true),
   frame(0, [1, 2, 3]),
@@ -252,6 +274,7 @@ export const packetFixture: readonly PacketFrame[] = [
   frame(1, [11, 12, 13]),
 ];
 
+/** 标准段布局:3 个段共 7 条 extent,含死区(供压缩/迁移测试)。 */
 export const extentFixture: readonly SegmentExtent[] = [
   extent("old-a", 0, 160, true, 101),
   extent("old-a", 160, 64, false, 102),

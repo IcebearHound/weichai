@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 type MessageMutation = (&'static str, Box<dyn Fn(&mut StreamMessage)>);
 
+/// 构造一条测试消息:序列号同时用于派生时间戳与消息体,保证每条消息可区分。
 fn message(identity: &str, account: &str, sequence: u64) -> StreamMessage {
     StreamMessage {
         id: identity.to_owned(),
@@ -22,6 +23,7 @@ fn message(identity: &str, account: &str, sequence: u64) -> StreamMessage {
     }
 }
 
+/// 成功投递的基本路径:处理器与确认回调按“先处理、后确认”的顺序各执行一次。
 #[test]
 fn successful_delivery_processes_then_acknowledges() {
     let inbox = PartitionedInbox::new(Duration::from_secs(1), 100).expect("inbox");
@@ -55,6 +57,7 @@ fn successful_delivery_processes_then_acknowledges() {
     assert_eq!(snapshot.lanes[0].processed, 1);
 }
 
+/// 已完成的消息再次投递时不触发处理器或确认,直接返回重复结果。
 #[test]
 fn completed_identity_is_deduplicated_without_handler_or_ack() {
     let inbox = PartitionedInbox::new(Duration::from_millis(200), 100).expect("inbox");
@@ -86,6 +89,7 @@ fn completed_identity_is_deduplicated_without_handler_or_ack() {
     assert_eq!(snapshot.completed_count, 1);
 }
 
+/// 处理器失败时不确认、不推进序列;同序列重试成功后恢复正常推进。
 #[test]
 fn handler_failure_never_acknowledges_and_sequence_can_retry() {
     let inbox = PartitionedInbox::new(Duration::from_secs(1), 100).expect("inbox");
@@ -109,6 +113,7 @@ fn handler_failure_never_acknowledges_and_sequence_can_retry() {
     assert_eq!(after_failure.completed_count, 0);
     assert_eq!(after_failure.lanes[0].expected_sequence, 1);
     assert_eq!(after_failure.lanes[0].failed, 1);
+    // 同一身份、同一序列重试,应能正常完成。
     let retried = inbox
         .handle(
             message("handler-failure", "account-handler", 1),
@@ -123,6 +128,7 @@ fn handler_failure_never_acknowledges_and_sequence_can_retry() {
     assert_eq!(acknowledgements.load(Ordering::SeqCst), 1);
 }
 
+/// 确认回调失败同样不标记完成,消息可被再次投递(处理器会再执行一次)。
 #[test]
 fn acknowledgement_failure_does_not_mark_message_completed() {
     let inbox = PartitionedInbox::new(Duration::from_secs(1), 100).expect("inbox");
@@ -156,6 +162,7 @@ fn acknowledgement_failure_does_not_mark_message_completed() {
     assert_eq!(handler_calls.load(Ordering::SeqCst), 2);
 }
 
+/// 高序列号消息会等待缺失的前序序列完成后才被处理,保证同账户严格有序。
 #[test]
 fn higher_sequence_waits_until_missing_predecessor_completes() {
     let inbox = Arc::new(PartitionedInbox::new(Duration::from_secs(2), 100).expect("inbox"));
@@ -172,6 +179,7 @@ fn higher_sequence_waits_until_missing_predecessor_completes() {
             |_| Ok(()),
         )
     });
+    // 轮询快照直至序列 2 进入等待状态,再提交序列 1。
     let wait_deadline = Instant::now() + Duration::from_secs(1);
     loop {
         let snapshot = inbox.snapshot().expect("snapshot while waiting");
@@ -204,6 +212,7 @@ fn higher_sequence_waits_until_missing_predecessor_completes() {
     assert_eq!(*order.lock().unwrap(), vec![1, 2]);
 }
 
+/// 缺失的前序序列在等待超时后放弃:不处理、不确认,并记为拒绝。
 #[test]
 fn missing_predecessor_times_out_without_processing_or_acknowledging() {
     let inbox = PartitionedInbox::new(Duration::from_millis(25), 100).expect("inbox");
@@ -237,6 +246,7 @@ fn missing_predecessor_times_out_without_processing_or_acknowledging() {
     assert_eq!(snapshot.lanes[0].waiting_callers, 0);
 }
 
+/// 同账户的多条消息即使并发提交,处理器也绝不重叠执行。
 #[test]
 fn same_account_handlers_never_overlap() {
     let inbox = Arc::new(PartitionedInbox::new(Duration::from_secs(3), 100).expect("inbox"));
@@ -244,6 +254,7 @@ fn same_account_handlers_never_overlap() {
     let maximum = Arc::new(AtomicUsize::new(0));
     let processed = Arc::new(Mutex::new(Vec::new()));
     let mut workers = Vec::new();
+    // 逆序提交制造竞争:处理器必须按序列正序执行。
     for sequence in (1..=8).rev() {
         let worker_inbox = inbox.clone();
         let worker_active = active.clone();
@@ -274,6 +285,7 @@ fn same_account_handlers_never_overlap() {
     assert_eq!(lane.processed, 8);
 }
 
+/// 不同账户的处理器可以真正并行执行(最大并发观测值应达到 2)。
 #[test]
 fn different_accounts_can_process_in_parallel() {
     let inbox = Arc::new(PartitionedInbox::new(Duration::from_secs(1), 100).expect("inbox"));
@@ -295,6 +307,7 @@ fn different_accounts_can_process_in_parallel() {
                     let current = worker_active.fetch_add(1, Ordering::SeqCst) + 1;
                     worker_maximum.fetch_max(current, Ordering::SeqCst);
                     worker_sender.send(account).unwrap();
+                    // 两个账户都进入处理器后再一起放行,验证确实重叠执行。
                     worker_barrier.wait();
                     worker_active.fetch_sub(1, Ordering::SeqCst);
                     Ok(())
@@ -323,6 +336,7 @@ fn different_accounts_can_process_in_parallel() {
     assert_eq!(snapshot.completed_count, 2);
 }
 
+/// 同一消息并发提交时,只有第一个线程执行处理器,其余作为重复返回。
 #[test]
 fn concurrent_duplicate_joins_lane_and_runs_side_effect_once() {
     let inbox = Arc::new(PartitionedInbox::new(Duration::from_secs(1), 100).expect("inbox"));
@@ -345,6 +359,7 @@ fn concurrent_duplicate_joins_lane_and_runs_side_effect_once() {
             |_| Ok(()),
         )
     });
+    // 等领队进入处理器后再让跟随者提交,确保其排入等待序列。
     entered.wait();
     let follower_inbox = inbox.clone();
     let follower_calls = handler_calls.clone();
@@ -371,6 +386,7 @@ fn concurrent_duplicate_joins_lane_and_runs_side_effect_once() {
     assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
 }
 
+/// 从指定起始序列恢复分区:首条消息不必从 1 开始。
 #[test]
 fn starting_sequences_support_resumed_partitions() {
     let starts = BTreeMap::from([("resumed-a".to_owned(), 41), ("resumed-b".to_owned(), 900)]);
@@ -398,6 +414,7 @@ fn starting_sequences_support_resumed_partitions() {
     assert_eq!(snapshot.lanes[1].account, "resumed-b");
 }
 
+/// 已完成的消息 id 不能复用到其他账户或序列位置,否则视为非法输入。
 #[test]
 fn identity_reuse_for_other_position_is_rejected() {
     let inbox = PartitionedInbox::new(Duration::from_millis(100), 100).expect("inbox");
@@ -428,6 +445,7 @@ fn identity_reuse_for_other_position_is_rejected() {
     ));
 }
 
+/// 关闭后拒绝新消息,但已完成的记录仍保留在快照中;重复关闭是幂等的。
 #[test]
 fn close_rejects_new_messages_but_preserves_snapshot() {
     let inbox = PartitionedInbox::new(Duration::from_millis(100), 100).expect("inbox");
@@ -452,6 +470,7 @@ fn close_rejects_new_messages_but_preserves_snapshot() {
     assert_eq!(snapshot.rejected, 1);
 }
 
+/// 构造一批字段非法的消息,逐一验证 `validate` 拒绝它们。
 #[test]
 fn validation_rejects_malformed_messages() {
     let base = message("valid", "valid-account", 1);
@@ -489,6 +508,7 @@ fn validation_rejects_malformed_messages() {
             "case {name} was accepted"
         );
     }
+    // 单独验证超量头(33 个)的边界。
     let mut too_many = base;
     too_many.headers = (0..33)
         .map(|index| (format!("header-{index}"), "value".to_owned()))

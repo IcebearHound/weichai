@@ -5,6 +5,7 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// 构造一条保留场景测试消息。
 fn retained_message(identity: &str, account: &str, sequence: u64) -> StreamMessage {
     StreamMessage {
         id: identity.to_owned(),
@@ -17,6 +18,7 @@ fn retained_message(identity: &str, account: &str, sequence: u64) -> StreamMessa
     }
 }
 
+/// 去重表到达容量时淘汰最旧记录:新完成的记录仍可去重,被淘汰的旧记录则报序列落后。
 #[test]
 fn completion_retention_evicts_oldest_identity_at_capacity() {
     let inbox = PartitionedInbox::new(Duration::from_millis(100), 3).unwrap();
@@ -38,6 +40,7 @@ fn completion_retention_evicts_oldest_identity_at_capacity() {
     assert_eq!(snapshot.completed_count, 3);
     assert_eq!(snapshot.accepted, 5);
     assert_eq!(snapshot.lanes[0].expected_sequence, 6);
+    // 仍保留在去重表中的记录返回重复。
     let recent = inbox
         .handle(
             retained_message("retention-5", "retention-account", 5),
@@ -46,6 +49,7 @@ fn completion_retention_evicts_oldest_identity_at_capacity() {
         )
         .unwrap();
     assert!(matches!(recent, DeliveryOutcome::Duplicate { .. }));
+    // 已被淘汰的记录因序列落后被拒绝(不再能识别为重复)。
     let evicted = inbox.handle(
         retained_message("retention-1", "retention-account", 1),
         |_| panic!("old sequence should not run"),
@@ -60,6 +64,7 @@ fn completion_retention_evicts_oldest_identity_at_capacity() {
     );
 }
 
+/// 显式遗忘只移除早于阈值的记录,新记录的去重能力不受影响。
 #[test]
 fn explicit_forget_removes_only_records_older_than_threshold() {
     let inbox = PartitionedInbox::new(Duration::from_millis(100), 100).unwrap();
@@ -95,6 +100,7 @@ fn explicit_forget_removes_only_records_older_than_threshold() {
     assert!(matches!(recent, DeliveryOutcome::Duplicate { .. }));
 }
 
+/// 快照能同时反映“正在处理的消息”与“等待中的序列号”。
 #[test]
 fn snapshots_show_waiting_sequence_and_active_identity() {
     let inbox = Arc::new(PartitionedInbox::new(Duration::from_secs(2), 100).unwrap());
@@ -123,6 +129,7 @@ fn snapshots_show_waiting_sequence_and_active_identity() {
             |_| Ok(()),
         )
     });
+    // 轮询直到快照同时呈现 active 消息与等待序列。
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
         let snapshot = inbox.snapshot().unwrap();
@@ -150,6 +157,7 @@ fn snapshots_show_waiting_sequence_and_active_identity() {
     assert_eq!(finished.lanes[0].expected_sequence, 3);
 }
 
+/// 处理器失败释放通道后,同序列的另一个副本可以接替并成功完成。
 #[test]
 fn failed_handler_releases_lane_for_another_copy_of_same_sequence() {
     let inbox = Arc::new(PartitionedInbox::new(Duration::from_secs(2), 100).unwrap());
@@ -194,6 +202,7 @@ fn failed_handler_releases_lane_for_another_copy_of_same_sequence() {
     assert_eq!(snapshot.lanes[0].processed, 1);
 }
 
+/// 一个账户的处理失败不会阻塞其他账户的投递。
 #[test]
 fn failure_on_one_account_does_not_stall_another_account() {
     let inbox = Arc::new(PartitionedInbox::new(Duration::from_secs(1), 100).unwrap());
@@ -214,6 +223,7 @@ fn failure_on_one_account_does_not_stall_another_account() {
         )
     });
     blocking_entered.wait();
+    // 被阻塞账户的处理器未返回时,其他账户照常快速处理。
     let other_started = Instant::now();
     let other = inbox
         .handle(
@@ -231,12 +241,14 @@ fn failure_on_one_account_does_not_stall_another_account() {
     ));
 }
 
+/// 多账户高负载下各自独立推进,无跨账户干扰,统计计数正确。
 #[test]
 fn many_accounts_advance_independently_under_load() {
     let inbox = Arc::new(PartitionedInbox::new(Duration::from_secs(3), 10_000).unwrap());
     let acknowledgements = Arc::new(AtomicUsize::new(0));
     let handled = Arc::new(Mutex::new(BTreeMap::<String, Vec<u64>>::new()));
     let mut workers = Vec::new();
+    // 12 个账户 × 10 条消息并发提交(每个账户内序列逆序制造竞争)。
     for account_index in 0..12 {
         for sequence in 1..=10 {
             let worker_inbox = inbox.clone();
@@ -287,6 +299,7 @@ fn many_accounts_advance_independently_under_load() {
     }
 }
 
+/// 构造器对等待时长与去重表容量参数的边界校验。
 #[test]
 fn constructor_rejects_wait_and_retention_limits() {
     assert!(PartitionedInbox::new(Duration::ZERO, 10).is_err());
@@ -309,6 +322,7 @@ fn constructor_rejects_wait_and_retention_limits() {
     .is_err());
 }
 
+/// 通道推进后,旧的未见过序列号报“落后”,且不触发处理器。
 #[test]
 fn older_unseen_sequence_reports_behind_after_progress() {
     let starts = BTreeMap::from([("behind-account".to_owned(), 10)]);

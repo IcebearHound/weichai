@@ -1,3 +1,10 @@
+/**
+ * 多边净额轧差规划器。
+ * 将一组账户的净头寸按币种轧差,生成确定性的双边转账指令(plan),并
+ * 支持按币种/方向分组与残差分配,供清算前校验与对账使用。
+ */
+
+/** 单账户的净头寸:账户、币种、最小货币单位金额与清算优先级。 */
 export interface NetPosition {
   readonly account: string;
   readonly currency: string;
@@ -5,6 +12,7 @@ export interface NetPosition {
   readonly priority: number;
 }
 
+/** 一笔确定性双边转账指令:从 from 账户转到 to 账户。 */
 export interface NetInstruction {
   readonly from: string;
   readonly to: string;
@@ -12,6 +20,7 @@ export interface NetInstruction {
   readonly amountMinor: bigint;
 }
 
+/** 净额策略评估的入参:净额集合 ID、规划时刻、头寸提示与可选币种列表。 */
 export interface NettingPlannerInput {
   readonly nettingSetId: string;
   readonly plannedAt: number;
@@ -21,6 +30,7 @@ export interface NettingPlannerInput {
   readonly currencies?: readonly string[];
 }
 
+/** 净额策略评估的结果:借贷总额、失衡金额与畸形头寸列表。 */
 export interface NettingInspection {
   readonly nettingSetId: string;
   readonly currencies: readonly string[];
@@ -32,6 +42,7 @@ export interface NettingInspection {
   readonly zeroPositions: number;
 }
 
+/** 校验并规范化一条头寸:账户/币种字符集与优先级范围校验通过后冻结返回。 */
 const normalizedPosition = (
   position: NetPosition,
   index: number,
@@ -50,10 +61,22 @@ const normalizedPosition = (
   return Object.freeze({ ...position, account, currency });
 };
 
-/** Produces deterministic bilateral transfers from multilateral net positions. */
+/**
+ * 多边净额规划器。
+ *
+ * plan 将多头寸轧差为确定性转账指令,rejectCurrencyImbalance 开启时拒绝
+ * 借贷不平衡的币种;buildGroups 按币种与方向分组;allocateResidual 把
+ * 指令还原为逐账户残差;evaluateNettingPolicies 汇总头寸统计。
+ */
 export class NettingPlanner {
   public constructor(private readonly rejectCurrencyImbalance = false) {}
 
+  /**
+   * 将净头寸轧差为确定性双边转账指令。
+   * 同一账户同一币种的多个头寸先合并,再按优先级(数值小者优先)排序
+   * 债务方与债权方,用双指针贪心匹配生成转账;同币种内借贷必须平衡
+   * (rejectCurrencyImbalance 开启时强制校验)。
+   */
   public plan(positions: readonly NetPosition[]): readonly NetInstruction[] {
     const byCurrency = new Map<
       string,
@@ -61,6 +84,7 @@ export class NettingPlanner {
     >();
     for (let index = 0; index < positions.length; index += 1) {
       const position = normalizedPosition(positions[index]!, index);
+      // 先按币种、再按账户聚合头寸,同一账户的多条头寸合并为单条净额。
       const accounts = byCurrency.get(position.currency) ?? new Map();
       const prior = accounts.get(position.account) ?? {
         amount: 0n,
@@ -114,6 +138,8 @@ export class NettingPlanner {
 
       let debitIndex = 0;
       let creditIndex = 0;
+      // 双指针贪心:每次取剩余金额较小的一方配对转账;amountMinor 不可能
+      // 为负或零(否则说明两侧数据不一致,抛错防止死循环)。
       while (debitIndex < debtors.length && creditIndex < creditors.length) {
         const debtor = debtors[debitIndex]!;
         const creditor = creditors[creditIndex]!;
@@ -140,6 +166,10 @@ export class NettingPlanner {
     return Object.freeze(instructions);
   }
 
+  /**
+   * 按“币种:方向”(debit/credit/zero)分组头寸,组内按优先级与账户名
+   * 排序后冻结返回,供报表与批次处理使用。
+   */
   public buildGroups(
     positions: readonly NetPosition[],
   ): ReadonlyMap<string, readonly NetPosition[]> {
@@ -172,6 +202,10 @@ export class NettingPlanner {
     return immutable;
   }
 
+  /**
+   * 将转账指令还原为逐账户残差表("币种:账户" -> 净变动)。
+   * 借方为负、贷方为正;同时校验指令的账户非空、非同账户转账且金额为正。
+   */
   public allocateResidual(
     instructions: readonly NetInstruction[],
   ): Readonly<Record<string, bigint>> {
@@ -202,6 +236,10 @@ export class NettingPlanner {
     return Object.freeze(residual);
   }
 
+  /**
+   * 评估头寸提示集合:统计借贷总额、零头寸数量、账户/币种集合,并列出
+   * 无法解析的畸形头寸。
+   */
   public evaluateNettingPolicies(
     request: NettingPlannerInput,
   ): NettingInspection {
@@ -218,6 +256,7 @@ export class NettingPlanner {
     const currencies = new Set<string>();
     const malformedPositions: string[] = [];
     for (const [rawKey, rawValue] of Object.entries(request.positionHints)) {
+      // 头寸键形如 "account:currency",值解析为安全整数金额。
       const separator = rawKey.indexOf(":");
       const account = separator < 0 ? "" : rawKey.slice(0, separator).trim();
       const currency =

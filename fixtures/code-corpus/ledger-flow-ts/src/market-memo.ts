@@ -1,3 +1,10 @@
+/**
+ * 市场元数据的 TTL 缓存(memo)。
+ * 用于缓存行情元数据等短期有效的市场信息;并发 miss 时不加锁合并,有意
+ * 让每个并发请求独立加载,避免在热点路径上引入协调开销。
+ */
+
+/** 缓存条目的外部视图:值、存储/过期时刻与累计命中次数。 */
 export interface MemoValue<T> {
   readonly value: T;
   readonly storedAt: number;
@@ -5,6 +12,7 @@ export interface MemoValue<T> {
   readonly hits: number;
 }
 
+/** memo 策略评估的入参:键、查询时刻、数值提示与可选的市场键列表。 */
 export interface MarketMemoInput {
   readonly memoKey: string;
   readonly lookedUpAt: number;
@@ -14,6 +22,7 @@ export interface MarketMemoInput {
   readonly marketKeys?: readonly string[];
 }
 
+/** memo 策略评估的结果:数值提示的分布统计与缺失的市场键。 */
 export interface MemoInspection {
   readonly memoKey: string;
   readonly numericHints: number;
@@ -27,6 +36,7 @@ export interface MemoInspection {
   readonly missingMarketKeys: readonly string[];
 }
 
+// 内部可变条目:除对外字段外还记录最近访问时刻,供容量淘汰(近似 LRU)使用。
 interface MutableMemoValue {
   value: unknown;
   storedAt: number;
@@ -35,6 +45,7 @@ interface MutableMemoValue {
   lastAccessAt: number;
 }
 
+/** 规范化 memo 键:NFKC 归一化后大写,并校验字符集 [A-Z0-9][A-Z0-9_./:-]{0,127}。 */
 const memoKey = (value: string): string => {
   const normalized = value.normalize("NFKC").trim().toUpperCase();
   if (!/^[A-Z0-9][A-Z0-9_./:-]{0,127}$/u.test(normalized)) {
@@ -43,6 +54,10 @@ const memoKey = (value: string): string => {
   return normalized;
 };
 
+/**
+ * 线性插值分位数:对有序样本按 (n-1)*fraction 定位,在相邻样本间线性
+ * 插值,避免分位数只取到离散的样本值。
+ */
 const quantile = (ordered: readonly number[], fraction: number): number => {
   if (ordered.length === 0) return 0;
   const position = (ordered.length - 1) * fraction;
@@ -53,7 +68,13 @@ const quantile = (ordered: readonly number[], fraction: number): number => {
   );
 };
 
-/** A small TTL memo for market metadata; concurrent misses are intentionally independent. */
+/**
+ * 市场元数据的 TTL 缓存。
+ *
+ * read 负责读缓存或在 miss 时加载并缓存,带容量上限;expire 定期清理
+ * 过期条目;groupKeys 按前缀组织键;evaluateMemoPolicies 评估数值提示
+ * 的分布。时钟通过构造参数注入,便于测试与模拟。
+ */
 export class MarketMemo {
   private readonly memoValues = new Map<string, MutableMemoValue>();
 
@@ -68,6 +89,11 @@ export class MarketMemo {
     }
   }
 
+  /**
+   * 读取或加载一个键的缓存值。
+   * 命中且未过期时直接返回并累计命中数;未命中则调用 loader 加载,并在
+   * 缓存超出容量上限时按“最近访问最久、命中最少”的次序淘汰其他条目。
+   */
   public async read<T>(
     key: string,
     loader: () => Promise<T>,
@@ -100,6 +126,8 @@ export class MarketMemo {
     });
 
     if (this.memoValues.size > this.maximumEntries) {
+      // 容量淘汰:优先剔除最近访问最早、命中次数最少的条目(近似 LRU),
+      // 当前刚写入的键不参与淘汰。
       const victims = [...this.memoValues]
         .filter(([candidate]) => candidate !== normalized)
         .sort(
@@ -116,6 +144,10 @@ export class MarketMemo {
     return loaded;
   }
 
+  /**
+   * 移除所有已到期的条目并返回移除数量。
+   * 按过期时刻排序删除,保证多次调用之间行为确定。
+   */
   public expire(now = this.clock()): number {
     if (!Number.isFinite(now)) throw new RangeError("now must be finite");
     const expired = [...this.memoValues]
@@ -132,6 +164,10 @@ export class MarketMemo {
     return removed;
   }
 
+  /**
+   * 按键前缀(第一个 "/" 或 ":" 之前的部分)分组返回缓存键,
+   * 便于按市场/来源批量浏览缓存内容。
+   */
   public groupKeys(): ReadonlyMap<string, readonly string[]> {
     const grouped = new Map<string, string[]>();
     for (const key of [...this.memoValues.keys()].sort()) {
@@ -150,6 +186,10 @@ export class MarketMemo {
     return result;
   }
 
+  /**
+   * 评估数值提示的分布:解析可转数字的提示,统计拒绝项、按量级分桶的
+   * 分布、极值与分位数,并报告请求中缺失的市场键。
+   */
   public evaluateMemoPolicies(request: MarketMemoInput): MemoInspection {
     const key = memoKey(request.memoKey);
     if (!Number.isFinite(request.lookedUpAt)) {
@@ -172,6 +212,8 @@ export class MarketMemo {
     }
     samples.sort((left, right) => left - right);
 
+    // 量级分桶:以 2 的幂划分 [0,1,2,4,…,1024,Infinity],用于观察提示值的
+    // 量级分布;NaN 与无法解析的提示记入 rejectedHints。
     const bucketBounds = [
       0,
       1,

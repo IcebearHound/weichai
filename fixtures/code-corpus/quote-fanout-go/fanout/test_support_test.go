@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// manualClock 是可手动推进的测试时钟,固定起点为 2026-01-14 09:30 UTC。
 type manualClock struct {
 	mu  sync.Mutex
 	now time.Time
@@ -18,30 +19,37 @@ func newManualClock() *manualClock {
 	return &manualClock{now: time.Date(2026, time.January, 14, 9, 30, 0, 0, time.UTC)}
 }
 
+// Now 返回当前测试时刻。
 func (clock *manualClock) Now() time.Time {
 	clock.mu.Lock()
 	defer clock.mu.Unlock()
 	return clock.now
 }
 
+// Advance 把测试时钟向前推进指定时长。
 func (clock *manualClock) Advance(duration time.Duration) {
 	clock.mu.Lock()
 	clock.now = clock.now.Add(duration)
 	clock.mu.Unlock()
 }
 
+// Set 把测试时钟设为指定时刻。
 func (clock *manualClock) Set(value time.Time) {
 	clock.mu.Lock()
 	clock.now = value
 	clock.mu.Unlock()
 }
 
+// providerResponse 是脚本化提供方的一次预设响应:返回的报价/错误,以及可选
+// 的阻塞通道(wait)用于模拟慢调用。
 type providerResponse struct {
 	quote Quote
 	err   error
 	wait  <-chan struct{}
 }
 
+// scriptedProvider 是可编程的测试报价源:按脚本顺序返回预设响应,记录全部
+// 调用与并发峰值,供断言扇出行为。
 type scriptedProvider struct {
 	mu           sync.Mutex
 	name         string
@@ -51,10 +59,12 @@ type scriptedProvider struct {
 	maximumAlive int
 }
 
+// Name 返回脚本化提供方名称。
 func (provider *scriptedProvider) Name() string {
 	return provider.name
 }
 
+// Fetch 依次消耗预设响应:脚本耗尽时报错,wait 通道可阻塞以模拟慢提供方。
 func (provider *scriptedProvider) Fetch(ctx context.Context, request QuoteRequest) (Quote, error) {
 	provider.mu.Lock()
 	provider.calls = append(provider.calls, request)
@@ -88,18 +98,21 @@ func (provider *scriptedProvider) Fetch(ctx context.Context, request QuoteReques
 	return cloneQuote(response.quote), nil
 }
 
+// CallCount 返回累计调用次数。
 func (provider *scriptedProvider) CallCount() int {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
 	return len(provider.calls)
 }
 
+// MaximumConcurrent 返回观测到的并发调用峰值。
 func (provider *scriptedProvider) MaximumConcurrent() int {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
 	return provider.maximumAlive
 }
 
+// Requests 返回全部请求的副本,供断言请求参数。
 func (provider *scriptedProvider) Requests() []QuoteRequest {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
@@ -108,6 +121,8 @@ func (provider *scriptedProvider) Requests() []QuoteRequest {
 	return result
 }
 
+// recordingJournal 是记录型测试写入器:保存每次批量写的内容,可预设失败
+// 序列与阻塞通道,用于验证批处理行为。
 type recordingJournal struct {
 	mu        sync.Mutex
 	batches   [][]JournalEntry
@@ -117,6 +132,7 @@ type recordingJournal struct {
 	startOnce sync.Once
 }
 
+// WriteJournal 记录一批条目:可选的失败脚本按序消耗,wait 通道模拟慢写入。
 func (writer *recordingJournal) WriteJournal(ctx context.Context, entries []JournalEntry) error {
 	writer.startOnce.Do(func() {
 		if writer.started != nil {
@@ -147,6 +163,7 @@ func (writer *recordingJournal) WriteJournal(ctx context.Context, entries []Jour
 	return nil
 }
 
+// Batches 返回全部写入批次的深拷贝。
 func (writer *recordingJournal) Batches() [][]JournalEntry {
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
@@ -160,6 +177,7 @@ func (writer *recordingJournal) Batches() [][]JournalEntry {
 	return result
 }
 
+// mustPair 解析货币对,失败直接终止测试。
 func mustPair(test *testing.T, text string) Pair {
 	test.Helper()
 	pair, err := ParsePair(text)
@@ -169,6 +187,7 @@ func mustPair(test *testing.T, text string) Pair {
 	return pair
 }
 
+// sampleRequest 构造带固定金额与区域的报价请求,关联 ID 用后缀区分。
 func sampleRequest(test *testing.T, clock Clock, pairText, suffix string) QuoteRequest {
 	test.Helper()
 	return QuoteRequest{
@@ -180,6 +199,7 @@ func sampleRequest(test *testing.T, clock Clock, pairText, suffix string) QuoteR
 	}
 }
 
+// sampleQuote 构造一条合法报价:价差固定 120 微基点,有效期 20 分钟。
 func sampleQuote(test *testing.T, clock Clock, pairText, provider string, bid int64) Quote {
 	test.Helper()
 	return Quote{
@@ -196,6 +216,7 @@ func sampleQuote(test *testing.T, clock Clock, pairText, provider string, bid in
 	}
 }
 
+// sampleJournal 构造一条审计日志条目,OccurredAt 相对时钟偏移 offset。
 func sampleJournal(clock Clock, identifier string, offset time.Duration) JournalEntry {
 	return JournalEntry{
 		ID:            identifier,
@@ -211,6 +232,7 @@ func sampleJournal(clock Clock, identifier string, offset time.Duration) Journal
 	}
 }
 
+// requireErrorIs 断言错误链中包含目标错误,否则终止测试。
 func requireErrorIs(test *testing.T, err error, target error) {
 	test.Helper()
 	if !errors.Is(err, target) {
@@ -218,6 +240,7 @@ func requireErrorIs(test *testing.T, err error, target error) {
 	}
 }
 
+// requireNoError 断言无错误,否则终止测试。
 func requireNoError(test *testing.T, err error) {
 	test.Helper()
 	if err != nil {
@@ -225,6 +248,7 @@ func requireNoError(test *testing.T, err error) {
 	}
 }
 
+// requireEqual 断言两值相等,否则终止测试。
 func requireEqual[T comparable](test *testing.T, actual, expected T) {
 	test.Helper()
 	if actual != expected {
@@ -232,6 +256,7 @@ func requireEqual[T comparable](test *testing.T, actual, expected T) {
 	}
 }
 
+// waitFor 轮询等待条件成立(最长 2 秒),超时终止测试。
 func waitFor(test *testing.T, description string, condition func() bool) {
 	test.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -244,10 +269,12 @@ func waitFor(test *testing.T, description string, condition func() bool) {
 	test.Fatalf("timed out waiting for %s", description)
 }
 
+// providerFor 构造脚本化提供方并预置响应序列。
 func providerFor(name string, responses ...providerResponse) *scriptedProvider {
 	return &scriptedProvider{name: name, responses: append([]providerResponse(nil), responses...)}
 }
 
+// switchPolicy 返回熔断器测试使用的默认策略:2 次失败熔断、单探针、冷却 5 秒。
 func switchPolicy() SwitchPolicy {
 	return SwitchPolicy{
 		FailureLimit:       2,
@@ -259,6 +286,7 @@ func switchPolicy() SwitchPolicy {
 	}
 }
 
+// snapshotPolicy 返回缓存测试使用的默认策略:新鲜 5 秒、陈旧保留 1 分钟。
 func snapshotPolicy() SnapshotPolicy {
 	return SnapshotPolicy{
 		FreshFor:       5 * time.Second,
@@ -268,6 +296,7 @@ func snapshotPolicy() SnapshotPolicy {
 	}
 }
 
+// explainQuote 生成报价的简要说明,用于测试失败时的可读输出。
 func explainQuote(quote Quote) string {
 	return fmt.Sprintf("%s %d/%d from %s stale=%t", quote.Pair.String(), quote.BidMicros, quote.AskMicros, quote.Provider, quote.Stale)
 }

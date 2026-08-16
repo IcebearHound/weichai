@@ -1,3 +1,8 @@
+/**
+ * ExpiringRequestMux、modelCachePressure、HealthAwareChannel 与
+ * simulateCircuitTimeline 的单元测试:覆盖请求合并、TTL/超时/陈旧降级、
+ * 缓存压力建模与熔断通道选择/时间线。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -8,6 +13,7 @@ import {
 } from "../src/index.js";
 
 test("request mux collapses concurrent work for the same key", async () => {
+  // 三个并发请求同一键:仅一次 loader 调用,其余作为共享等待者。
   let calls = 0;
   let release: (() => void) | undefined;
   const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -63,6 +69,7 @@ test("expiration refreshes a key", async () => {
 });
 
 test("provider failure falls back to retained stale data", async () => {
+  // 提供方失败时,未超龄的陈旧值作为降级结果返回(避免下游空等)。
   let now = 2_000;
   const mux = new ExpiringRequestMux<string, string>(5_000, 100, 20_000, () => now);
   await mux.load("key", async () => "stable");
@@ -135,6 +142,7 @@ test("cache pressure identifies access-heavy keys", () => {
 });
 
 test("cache pressure reports a request stampede", () => {
+  // 同一键在加载未完成期间出现 ≥3 个并发 miss,判定为惊群。
   const model = modelCachePressure([
     { key: "pair", at: 10, kind: "load" },
     { key: "pair", at: 11, kind: "miss" },
@@ -168,6 +176,7 @@ test("channel failures are isolated per provider", () => {
 
 test("an open provider becomes eligible for one half-open probe", () => {
   const router = new HealthAwareChannel();
+  // 冷却期过后只放行一个探测请求,探测在途期间通道仍不可选。
   router.recordFailure("primary", 1_000, 1);
   assert.equal(router.choose(["primary"], 1_100, 1, 500), undefined);
   assert.equal(router.choose(["primary"], 1_500, 1, 500), "primary");
@@ -182,6 +191,7 @@ test("channel selection rejects invalid thresholds", () => {
 });
 
 test("circuit timeline opens after consecutive failures", () => {
+  // 连续失败达阈值即熔断,熔断通道的得分低于健康通道。
   const timeline = simulateCircuitTimeline(["alpha", "beta"], [
     { at: 100, channel: "alpha", outcome: "failure" },
     { at: 110, channel: "beta", outcome: "success", latencyMs: 30 },

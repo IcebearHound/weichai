@@ -1,3 +1,7 @@
+/**
+ * 信号缓冲平台的公共导出入口。
+ * 统一从各模块 re-export 全部公开类型与函数,消费方只需从此处导入。
+ */
 export * from "./domain.js";
 export * from "./request-mux.js";
 export * from "./ordered-batch.js";

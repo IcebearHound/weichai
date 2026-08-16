@@ -1,3 +1,11 @@
+"""资金路由图:按需求在资金边构成的图上做最小成本路由。
+
+route 对每个 (目标账户, 需求) 用 Dijkstra(边成本带标签惩罚/奖励)求最短路径,
+按瓶颈容量分块分配,直到需求满足或无法再路由,并汇总未满足(unmet)需求、
+总成本与各边利用率;cut 计算保护节点集合的最小割候选边(按入边冗余度
+调整后的容量升序选取,覆盖不可达节点)。
+"""
+
 from __future__ import annotations
 
 import heapq
@@ -11,6 +19,11 @@ from .model import FundingEdge
 
 
 class FundingGraph:
+    """资金路由与割集分析。
+
+    route 做最小成本资金分配;cut 输出保护关键节点所需的最小容量边集。
+    """
+
     def route(
         self,
         edges: Sequence[FundingEdge],
@@ -19,6 +32,13 @@ class FundingGraph:
         currency: str,
         at: datetime,
     ) -> Mapping[str, object]:
+        """按需求在可用边网络上路由资金,返回分配结果(只读映射)。
+
+        过滤:仅保留指定币种、容量 > 0、且在 [available_from, available_until]
+        窗口内的边。需求按金额降序逐个处理;每次用 Dijkstra 求当前残量网络
+        下的最短路径(慢速边 +0.25 惩罚,preferred 边 -0.10 奖励),
+        按瓶颈(路径最小残量)分块划拨,直至满足或无可达路径。
+        """
         code = currency.upper()
         adjacency: dict[str, list[FundingEdge]] = defaultdict(list)
         for edge in edges:
@@ -28,6 +48,7 @@ class FundingGraph:
                 continue
             if not edge.available_from <= at <= edge.available_until:
                 continue
+            # 只保留当前可用的同币种正容量边
             adjacency[edge.source].append(edge)
         remaining_capacity = {(edge.source, edge.target): edge.capacity for edge in edges if edge.currency.upper() == code}
         allocations: list[Mapping[str, object]] = []
@@ -40,6 +61,7 @@ class FundingGraph:
                 predecessor: dict[str, FundingEdge] = {}
                 queue: list[tuple[Decimal, str]] = [(Decimal(0), source)]
                 visited: set[str] = set()
+                # Dijkstra:以调整后成本为权重,找当前残量网络下的最短路径
                 while queue:
                     cost, current = heapq.heappop(queue)
                     if current in visited:
@@ -52,6 +74,7 @@ class FundingGraph:
                         if residual <= 0:
                             continue
                         penalty = edge.cost
+                        # 标签调整:慢速边加罚,preferred 边减奖(但不为负)
                         if "slow" in edge.labels:
                             penalty += Decimal("0.25")
                         if "preferred" in edge.labels:
@@ -64,6 +87,7 @@ class FundingGraph:
                         heapq.heappush(queue, (proposed, edge.target))
                 if target not in predecessor:
                     break
+                # 沿前驱链回溯路径,guarded 防环
                 path: list[FundingEdge] = []
                 cursor = target
                 guarded: set[str] = set()
@@ -78,6 +102,7 @@ class FundingGraph:
                 if not path:
                     break
                 path.reverse()
+                # 瓶颈 = 需求与路径各边残量的最小值,按此分块划拨
                 bottleneck = min(
                     [remaining]
                     + [remaining_capacity[(edge.source, edge.target)] for edge in path]
@@ -128,6 +153,12 @@ class FundingGraph:
         currency: str,
         at: datetime,
     ) -> Mapping[str, object]:
+        """计算保护 protected 节点集所需的最小容量边集。
+
+        先做 BFS 求从 sources 出发可达的节点,不可达的保护节点列入
+        unreachable;再按"入边容量 / 入边冗余度"升序选取入边,覆盖所有
+        unreachable 节点,返回所选边的总容量与可达节点集合。
+        """
         code = currency.upper()
         outgoing: dict[str, list[FundingEdge]] = defaultdict(list)
         incoming: dict[str, list[FundingEdge]] = defaultdict(list)

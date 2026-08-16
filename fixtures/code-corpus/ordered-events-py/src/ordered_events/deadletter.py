@@ -81,6 +81,11 @@ class DeadLetterQueue:
         message_ids: Sequence[str],
         retain_terminal: bool = True,
     ) -> tuple[DeadLetter, ...]:
+        """按消息 ID 从队列中移除条目,返回被移除的条目。
+
+        retain_terminal=True(默认)时保留终态条目(不再重试的记录仍可查询);
+        使用 dict.fromkeys 对 message_ids 去重且保持顺序。返回按失败时间排序。
+        """
         removed: list[DeadLetter] = []
         for message_id in dict.fromkeys(message_ids):
             entry = self._entries.get(message_id)

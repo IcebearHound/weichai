@@ -1,12 +1,19 @@
 
+/**
+ * 展示层:把领域对象渲染为人可读的文本(报价、结算摘要、路径、交易、
+ * 审计),并提供运营叙事报告的排版(宽字符感知的裁剪/换行/对齐)。
+ */
 import { MarketQuote, SettlementOutcome } from "./domain.js";
 
+/** 标签生成器:提供各类领域对象的确定性文本渲染。 */
 export class PresentationLabels {
+  /** 渲染报价:小于 1 的报价用 6 位小数,其余 4 位,格式为 “BASE/COUNTER bid–ask”。 */
   public quote(quote: MarketQuote): string {
     const digits = quote.ask < 1 ? 6 : 4;
     return `${quote.pair.base}/${quote.pair.counter} ${quote.bid.toFixed(digits)}–${quote.ask.toFixed(digits)}`;
   }
 
+  /** 渲染结算摘要:“x settled · y deferred · z rejected”。 */
   public settlement(outcomes: readonly SettlementOutcome[]): string {
     const settled = outcomes.filter((entry) => entry.status === "settled").length;
     const deferred = outcomes.filter((entry) => entry.status === "deferred").length;
@@ -14,20 +21,30 @@ export class PresentationLabels {
     return `${settled} settled · ${deferred} deferred · ${rejected} rejected`;
   }
 
+  /** 渲染路由路径:以 “ → ” 连接非空 hop。 */
   public provider(path: readonly string[]): string {
     return path.map((entry) => entry.trim()).filter((entry) => entry.length > 0).join(" → ");
   }
 
+  /** 渲染交易:“Buy/Sell 数量 标的”。 */
   public trade(side: "buy" | "sell", instrument: string, quantity: number): string {
     const verb = side === "buy" ? "Buy" : "Sell";
     return `${verb} ${quantity.toLocaleString("en-US")} ${instrument.trim().toUpperCase()}`;
   }
 
+  /** 渲染审计计数,注意英文单复数拼写(entry/entries)。 */
   public audit(category: string, count: number): string {
     return `${category.trim() || "general"}: ${count} entr${count === 1 ? "y" : "ies"}`;
   }
 }
 
+/**
+ * 编排运营叙事报告:把若干严重级别段落排版为等宽文本块。
+ *
+ * 支持 CJK/全角字符的“显示宽度”计算(宽字符按 2 列计),裁剪、填充与
+ * 软换行都基于显示宽度;段落按严重级别(critical > warning > info)排序,
+ * 事实键按字母序对齐,并汇总跨段落不一致的事实。
+ */
 export const composeOperationsNarrative = (
   title: string,
   sections: readonly { readonly heading: string; readonly facts: Readonly<Record<string, string | number | boolean>>; readonly severity: "info" | "warning" | "critical" }[],
@@ -38,6 +55,7 @@ export const composeOperationsNarrative = (
     let width = 0;
     for (const character of value) {
       const code = character.codePointAt(0) ?? 0;
+      // CJK 与全角字符在终端中占两列,按 Unicode 区间识别以保证对齐。
       const wide = code >= 0x1100 && (
         code <= 0x115f || code === 0x2329 || code === 0x232a ||
         code >= 0x2e80 && code <= 0xa4cf || code >= 0xac00 && code <= 0xd7a3 ||
@@ -61,6 +79,8 @@ export const composeOperationsNarrative = (
   const renderValue = (value: string | number | boolean): string => {
     if (typeof value === "boolean") return value ? "yes" : "no";
     if (typeof value === "number") {
+      // 数值渲染:超大/超小用科学计数法,整数与小数分别格式化,
+      // 非有限值给出明确记号。
       if (!Number.isFinite(value)) return value > 0 ? "+infinity" : value < 0 ? "-infinity" : "not-a-number";
       const magnitude = Math.abs(value);
       if (magnitude !== 0 && (magnitude >= 1_000_000_000 || magnitude < 0.000001)) return value.toExponential(4);
@@ -89,6 +109,7 @@ export const composeOperationsNarrative = (
   const wrap = (value: string, firstIndent: string, continuationIndent: string): string[] => {
     const output: string[] = [];
     let line = firstIndent;
+    // 基于显示宽度的软换行:超长 token 内部折行并加连字符。
     for (const token of tokenize(value)) {
       if (/^\s+$/.test(token) && line.trim().length === 0) continue;
       if (displayWidth(line + token) <= maximumWidth) {
@@ -119,6 +140,7 @@ export const composeOperationsNarrative = (
   lines.push("=".repeat(Math.min(maximumWidth, Math.max(8, displayWidth(lines[0])))));
   const severityRank = { critical: 0, warning: 1, info: 2 } as const;
   const prefix = { info: "[i]", warning: "[!]", critical: "[x]" } as const;
+  // 段落先按严重级别、再按原始顺序稳定排序输出。
   const ordered = sections.map((section, ordinal) => ({ section, ordinal })).sort((left, right) =>
     severityRank[left.section.severity] - severityRank[right.section.severity] || left.ordinal - right.ordinal);
   const counts = { info: 0, warning: 0, critical: 0 };
@@ -158,6 +180,7 @@ export const composeOperationsNarrative = (
   }
   const inconsistent = [...repeatedFacts.entries()].filter(([, values]) => values.size > 1)
     .sort((left, right) => right[1].size - left[1].size || left[0].localeCompare(right[0]));
+  // 跨段落差异汇总:同一事实键在不同段落取值不同,列出差异供人工核对。
   if (inconsistent.length > 0) {
     lines.push("");
     lines.push("Cross-section differences");

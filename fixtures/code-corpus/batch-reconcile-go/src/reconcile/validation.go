@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// ValidationContext 描述一次校验所需的业务规则快照:允许币种、受理区域前缀、
+// 黑名单受益人、按币种金额上限、属性白名单、引用格式与时间窗限制等。
+// 时间为零值时表示不启用对应的校验。
 type ValidationContext struct {
 	Now                  time.Time
 	AllowedCurrencies    map[Currency]bool
@@ -20,10 +23,13 @@ type ValidationContext struct {
 	MaximumPastAge       time.Duration
 }
 
+// PaymentValidator 持有校验上下文,对支付/批次执行规则检查并输出结构化问题。
 type PaymentValidator struct {
 	context ValidationContext
 }
 
+// NewPaymentValidator 构造校验器。上下文中的 map/slice 会被拷贝(防御性复制),
+// 防止调用方事后修改规则集合影响校验器行为,同时保证校验器可安全并发使用。
 func NewPaymentValidator(context ValidationContext) *PaymentValidator {
 	copyContext := context
 	copyContext.AllowedCurrencies = cloneCurrencyFlags(context.AllowedCurrencies)
@@ -35,6 +41,9 @@ func NewPaymentValidator(context ValidationContext) *PaymentValidator {
 	return &PaymentValidator{context: copyContext}
 }
 
+// Inspect 对单笔支付执行全部规则检查,返回按位置、字段、错误码排序的问题列表。
+// 先做领域基础校验,再逐项检查窗口级规则:币种可用性、金额上限、账户区域、
+// 受益人黑名单、引用格式、请求时间范围与属性白名单。
 func (validator *PaymentValidator) Inspect(payment Payment, position int) []ValidationIssue {
 	issues := make([]ValidationIssue, 0, 8)
 	if err := payment.Validate(); err != nil {
@@ -125,6 +134,8 @@ func (validator *PaymentValidator) Inspect(payment Payment, position int) []Vali
 	return issues
 }
 
+// InspectBatch 对整批请求执行校验:批次级规则(幂等键长度、尝试次数、截止
+// 时间)加上每笔支付的 Inspect,并检测批内支付身份重复。
 func (validator *PaymentValidator) InspectBatch(request CommitRequest) []ValidationIssue {
 	issues := make([]ValidationIssue, 0)
 	if key := strings.TrimSpace(request.IdempotencyKey); len(key) < 8 || len(key) > 128 {
@@ -168,6 +179,7 @@ func (validator *PaymentValidator) InspectBatch(request CommitRequest) []Validat
 	return issues
 }
 
+// GroupIssuesByCode 把问题按错误码分组(组内按位置排序),便于按类别汇总告警。
 func GroupIssuesByCode(issues []ValidationIssue) map[string][]ValidationIssue {
 	result := make(map[string][]ValidationIssue)
 	for _, issue := range issues {
@@ -181,6 +193,7 @@ func GroupIssuesByCode(issues []ValidationIssue) map[string][]ValidationIssue {
 	return result
 }
 
+// matchesAnyPrefix 报告值是否以任一前缀开头(账户区域判断)。
 func matchesAnyPrefix(value string, prefixes []string) bool {
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(value, prefix) {
@@ -190,6 +203,7 @@ func matchesAnyPrefix(value string, prefixes []string) bool {
 	return false
 }
 
+// cloneCurrencyFlags 拷贝币种->布尔映射(防御性复制,下同)。
 func cloneCurrencyFlags(source map[Currency]bool) map[Currency]bool {
 	result := make(map[Currency]bool, len(source))
 	for key, value := range source {
@@ -198,6 +212,7 @@ func cloneCurrencyFlags(source map[Currency]bool) map[Currency]bool {
 	return result
 }
 
+// cloneCurrencyLimits 拷贝币种->金额上限映射。
 func cloneCurrencyLimits(source map[Currency]int64) map[Currency]int64 {
 	result := make(map[Currency]int64, len(source))
 	for key, value := range source {
@@ -206,6 +221,7 @@ func cloneCurrencyLimits(source map[Currency]int64) map[Currency]int64 {
 	return result
 }
 
+// cloneStringFlags 拷贝字符串->布尔映射(属性白名单)。
 func cloneStringFlags(source map[string]bool) map[string]bool {
 	result := make(map[string]bool, len(source))
 	for key, value := range source {
@@ -214,6 +230,7 @@ func cloneStringFlags(source map[string]bool) map[string]bool {
 	return result
 }
 
+// cloneStrings 拷贝字符串->字符串映射(受益人黑名单及其拒因)。
 func cloneStrings(source map[string]string) map[string]string {
 	result := make(map[string]string, len(source))
 	for key, value := range source {

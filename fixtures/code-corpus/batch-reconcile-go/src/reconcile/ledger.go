@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// LedgerPosting 是账户总账上的一笔分录:对收付双方各记一条(Account 为记账
+// 账户,Counterparty 为对手方),Direction 表示贷/借,Sequence 为同一账户流上
+// 的单调递增序号,用于防重放与审计排序。
 type LedgerPosting struct {
 	PostingID    string
 	ReceiptID    string
@@ -22,13 +25,17 @@ type LedgerPosting struct {
 	Sequence     uint64
 }
 
+// PostingDirection 表示分录的借贷方向。
 type PostingDirection string
 
+// 记账方向:credit 记入账户贷方(余额增加),debit 记入借方(余额减少)。
 const (
 	PostingCredit PostingDirection = "credit"
 	PostingDebit  PostingDirection = "debit"
 )
 
+// AccountBalance 是账户在某币种下的当前余额:Available 为可用余额,Pending
+// 为待清算金额,Revision 随每次变动递增,UpdatedAt 记录最后记账时间。
 type AccountBalance struct {
 	Account   string
 	Currency  Currency
@@ -38,6 +45,8 @@ type AccountBalance struct {
 	UpdatedAt time.Time
 }
 
+// LedgerJournal 是内存版账户总账。内部维护多条索引:按账户、按回执检索分录,
+// 按“账户+币种”保存余额与最新序号,rejectedPosting 记录被拒分录的拒因。
 type LedgerJournal struct {
 	mu              sync.RWMutex
 	postings        map[string]LedgerPosting
@@ -48,6 +57,8 @@ type LedgerJournal struct {
 	rejectedPosting map[string]string
 }
 
+// NewLedgerJournal 用期初余额初始化总账;同一“账户+币种”重复出现或字段
+// 非法时返回错误。
 func NewLedgerJournal(opening []AccountBalance) (*LedgerJournal, error) {
 	journal := &LedgerJournal{
 		postings:        make(map[string]LedgerPosting),
@@ -70,6 +81,9 @@ func NewLedgerJournal(opening []AccountBalance) (*LedgerJournal, error) {
 	return journal, nil
 }
 
+// Apply 把一条分录记入总账并更新对应账户余额。幂等语义:同一 PostingID
+// 重复提交时,若内容一致则返回当前余额而不重复入账;内容不一致或已被
+// Reject 则报错。Sequence 必须严格递增,防止乱序重放。
 func (journal *LedgerJournal) Apply(posting LedgerPosting) (AccountBalance, error) {
 	if err := validatePosting(posting); err != nil {
 		return AccountBalance{}, err
@@ -95,6 +109,7 @@ func (journal *LedgerJournal) Apply(posting LedgerPosting) (AccountBalance, erro
 	}
 	delta := posting.Amount.Minor
 	if posting.Direction == PostingDebit {
+		// 借方向表示资金流出,余额减少。
 		delta = -delta
 	}
 	next, addErr := Money{Currency: balance.Currency, Minor: balance.Available}.Add(Money{Currency: balance.Currency, Minor: delta})
@@ -112,6 +127,8 @@ func (journal *LedgerJournal) Apply(posting LedgerPosting) (AccountBalance, erro
 	return balance, nil
 }
 
+// Reject 记录一条被拒绝的分录(仅当该分录此前未入账也未登记过),供后续
+// 重放快速识别,返回是否登记成功。
 func (journal *LedgerJournal) Reject(postingID, reason string) bool {
 	postingID = strings.TrimSpace(postingID)
 	reason = strings.TrimSpace(reason)
@@ -130,6 +147,7 @@ func (journal *LedgerJournal) Reject(postingID, reason string) bool {
 	return true
 }
 
+// Balance 查询账户在某币种下的余额,账户不存在时返回 false。
 func (journal *LedgerJournal) Balance(account string, currency Currency) (AccountBalance, bool) {
 	journal.mu.RLock()
 	defer journal.mu.RUnlock()
@@ -137,6 +155,8 @@ func (journal *LedgerJournal) Balance(account string, currency Currency) (Accoun
 	return balance, exists
 }
 
+// AccountStatement 返回账户在 [from, until) 时间窗内的分录流水,按记账时间
+// (同时间按序号)排序,供对账与审计。
 func (journal *LedgerJournal) AccountStatement(account string, from, until time.Time) []LedgerPosting {
 	journal.mu.RLock()
 	defer journal.mu.RUnlock()
@@ -161,6 +181,8 @@ func (journal *LedgerJournal) AccountStatement(account string, from, until time.
 	return statement
 }
 
+// ReconcileReceipt 校验某笔回执对应的分录是否满足会计平衡:恰好两条(借/贷
+// 各一)、币种一致、借贷相等且金额等于回执金额。返回分录列表与问题清单。
 func (journal *LedgerJournal) ReconcileReceipt(receipt Receipt) ([]LedgerPosting, []string) {
 	journal.mu.RLock()
 	defer journal.mu.RUnlock()
@@ -194,6 +216,9 @@ func (journal *LedgerJournal) ReconcileReceipt(receipt Receipt) ([]LedgerPosting
 	return postings, issues
 }
 
+// BuildReceiptPostings 根据回执生成标准的一对会计分录:付款方记借方(资金
+// 流出)、收款方记贷方(资金流入),价值日取记账日的零点,序号由调用方提供
+// 的每账户最新序号递增而来。
 func BuildReceiptPostings(receipt Receipt, sequences map[string]uint64) ([]LedgerPosting, error) {
 	if err := receipt.Validate(); err != nil {
 		return nil, err
@@ -229,6 +254,8 @@ func BuildReceiptPostings(receipt Receipt, sequences map[string]uint64) ([]Ledge
 	return []LedgerPosting{debit, credit}, nil
 }
 
+// validatePosting 校验分录字段:身份与账户必填、借贷方不能相同、金额为正且
+// 币种受支持、方向合法、日期与序号已设置。
 func validatePosting(posting LedgerPosting) error {
 	if strings.TrimSpace(posting.PostingID) == "" || strings.TrimSpace(posting.ReceiptID) == "" {
 		return errors.New("posting and receipt identities are required")
@@ -254,6 +281,8 @@ func validatePosting(posting LedgerPosting) error {
 	return nil
 }
 
+// ledgerBalanceKey 生成“账户+币种”的复合键,用于余额与限额等映射的索引。
+// 使用不可打印的 NUL 字节分隔,避免账户名含分隔符导致键碰撞。
 func ledgerBalanceKey(account string, currency Currency) string {
 	return account + "\x00" + string(currency)
 }

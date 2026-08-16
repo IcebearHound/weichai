@@ -1,3 +1,7 @@
+/**
+ * QuoteValidator 的单元测试:语法/新鲜度校验、货币对归一化、精度取整与
+ * 字段质量评估。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { QuoteValidator } from "../src/quote-validator.js";
@@ -41,6 +45,7 @@ test("structural errors are returned in stable field order", () => {
 });
 
 test("freshness boundaries distinguish tolerated skew and stale data", () => {
+  // 未来容差 1s、新鲜窗口 5s:超过任一界限分别报 future/stale 告警。
   const validator = new QuoteValidator(5_000, 1_000);
   const quote = {
     base: "GBP",
@@ -62,6 +67,7 @@ test("freshness boundaries distinguish tolerated skew and stale data", () => {
 });
 
 test("declared scale mismatch is a warning rather than rejection", () => {
+  // 价格小数位超过声明精度:告警而非拒绝(可接受但需关注)。
   const validator = new QuoteValidator();
   const issues = validator.validate(
     { base: "USD", counter: "JPY", price: 151.234, timestamp: 1, precision: 2 },
@@ -82,6 +88,7 @@ test("currency pairs are normalized with a canonical slash", () => {
 });
 
 test("price precision rounds representative decimal values", () => {
+  // 按声明精度四舍五入:1.23456@4 → 1.2346,151.005@2 → 151.01。
   const validator = new QuoteValidator();
   assert.equal(validator.checkPrecision(1.23456, 4), 1.2346);
   assert.equal(validator.checkPrecision(151.005, 2), 151.01);
@@ -115,6 +122,7 @@ test("field inspection normalizes keys and tracks numeric values", () => {
 });
 
 test("field normalization exposes collisions and malformed values", () => {
+  // 字段名归一化后冲突判重复,null/超长值判畸形。
   const validator = new QuoteValidator();
   const inspection = validator.evaluateQualityPolicies({
     quoteId: "q",

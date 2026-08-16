@@ -13,7 +13,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
+/**
+ * SegmentJournal 的行为测试:写入/恢复/重开、密封排序、段轮转与容量、
+ * 尾部截断恢复、损坏段/缺失段拒绝、检查点修复与幂等关闭。
+ */
 final class JournalTest {
+    /** 汇总入口:运行全部用例,返回本类新增的断言数。 */
     static int run() throws Exception {
         int before = TestSupport.assertions();
         writesRecoversAndReopens();
@@ -33,6 +38,7 @@ final class JournalTest {
         return TestSupport.assertions() - before;
     }
 
+    /** 基本写入-恢复-重开-续写链路,回执与编号正确。 */
     private static void writesRecoversAndReopens() throws Exception {
         Path directory = TestSupport.temporaryDirectory("journal-basic");
         LedgerCodec codec = new LedgerCodec();
@@ -62,6 +68,7 @@ final class JournalTest {
         }
     }
 
+    /** 落盘前事件被密封排序,原始集合不被修改。 */
     private static void sealsEventsBeforePersistence() throws Exception {
         Path directory = TestSupport.temporaryDirectory("journal-sealed");
         try {
@@ -81,6 +88,7 @@ final class JournalTest {
         }
     }
 
+    /** 构造含大量属性的大批次,用于触发段轮转。 */
     private static AuditBatch largeBatch(long number, int events, int fields) {
         List<AuditEvent> rows = new ArrayList<>();
         for (int index = 0; index < events; index++) {
@@ -97,6 +105,7 @@ final class JournalTest {
         return new AuditBatch(number, TestSupport.BASE.plusSeconds(number), rows);
     }
 
+    /** 大帧应跨段轮转,每段不超容量,偏移连续且恢复完整。 */
     private static void rotatesAtConfiguredCapacity() throws Exception {
         Path directory = TestSupport.temporaryDirectory("journal-rotate");
         try {
@@ -126,6 +135,7 @@ final class JournalTest {
         }
     }
 
+    /** 段检查应暴露批次/事件/时间范围与逐批偏移。 */
     private static void inspectsSegmentsAndOffsets() throws Exception {
         Path directory = TestSupport.temporaryDirectory("journal-inspect");
         try {
@@ -153,6 +163,7 @@ final class JournalTest {
         }
     }
 
+    /** 末段追加的半帧垃圾应在恢复时被截断丢弃。 */
     private static void truncatesPartialFinalTail() throws Exception {
         Path directory = TestSupport.temporaryDirectory("journal-partial-tail");
         Path segment;
@@ -177,6 +188,7 @@ final class JournalTest {
         }
     }
 
+    /** 末帧损坏应被丢弃并截断到前一帧,批次号可复用。 */
     private static void truncatesCorruptFinalFrame() throws Exception {
         Path directory = TestSupport.temporaryDirectory("journal-corrupt-tail");
         try {
@@ -203,6 +215,7 @@ final class JournalTest {
         }
     }
 
+    /** 非末段(已封存段)损坏必须报错,不允许静默截断。 */
     private static void rejectsCorruptionInSealedSegment() throws Exception {
         Path directory = TestSupport.temporaryDirectory("journal-sealed-corruption");
         try {
@@ -227,6 +240,7 @@ final class JournalTest {
         }
     }
 
+    /** 中段文件缺失应导致构造失败并指出缺失编号。 */
     private static void rejectsMissingSegmentSequence() throws Exception {
         Path directory = TestSupport.temporaryDirectory("journal-missing-segment");
         try {
@@ -246,6 +260,7 @@ final class JournalTest {
         }
     }
 
+    /** 无效检查点不被信任,恢复用全量扫描并重写检查点。 */
     private static void repairsInvalidCheckpointThroughRecovery() throws Exception {
         Path directory = TestSupport.temporaryDirectory("journal-checkpoint-repair");
         try {
@@ -272,6 +287,7 @@ final class JournalTest {
         }
     }
 
+    /** 批次号错序与单帧超段容量应被拒绝,且失败不推进编号。 */
     private static void validatesBatchNumberAndFrameCapacity() throws Exception {
         Path directory = TestSupport.temporaryDirectory("journal-validation");
         try (SegmentJournal journal = new SegmentJournal(directory, 64 * 1024, new LedgerCodec(), new MutableClock(TestSupport.BASE))) {
@@ -288,6 +304,7 @@ final class JournalTest {
         }
     }
 
+    /** sync 与 close 幂等;关闭后写入/恢复/同步均报错。 */
     private static void synchronizesAndClosesIdempotently() throws Exception {
         Path directory = TestSupport.temporaryDirectory("journal-close");
         SegmentJournal journal = new SegmentJournal(directory, 64 * 1024, new LedgerCodec(), new MutableClock(TestSupport.BASE));
@@ -306,6 +323,7 @@ final class JournalTest {
         }
     }
 
+    /** 空日志:恢复为空,持有空当前段。 */
     private static void handlesEmptyJournal() throws Exception {
         Path directory = TestSupport.temporaryDirectory("journal-empty");
         try (SegmentJournal journal = new SegmentJournal(directory, 64 * 1024, new LedgerCodec(), new MutableClock(TestSupport.BASE))) {
@@ -320,6 +338,7 @@ final class JournalTest {
         }
     }
 
+    /** 段文件名必须匹配 前缀+编号+后缀 的严格格式。 */
     private static void parsesSegmentNamesStrictly() throws Exception {
         Path directory = TestSupport.temporaryDirectory("journal-names");
         try (SegmentJournal journal = new SegmentJournal(directory, 64 * 1024, new LedgerCodec(), new MutableClock(TestSupport.BASE))) {
@@ -333,6 +352,7 @@ final class JournalTest {
         }
     }
 
+    /** 检查点持久化最新提交:段/偏移/编号/摘要/签名全部一致。 */
     private static void checkpointTracksLatestCommit() throws Exception {
         Path directory = TestSupport.temporaryDirectory("journal-checkpoint");
         try (SegmentJournal journal = new SegmentJournal(directory, 128 * 1024, new LedgerCodec(), new MutableClock(TestSupport.BASE))) {

@@ -1,3 +1,9 @@
+/**
+ * OrderedMessagePump(有序消息泵)与 SettlementTelemetry(结算遥测)的单元测试。
+ *
+ * 前半覆盖投递顺序、按消息 ID 去重、失败不 ack、序号回退拒绝与投递评估;
+ * 后半覆盖遥测的有界采集、延迟分位、重试预算与吞吐策略评估。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -81,6 +87,7 @@ test("completed message IDs are deduplicated", async () => {
 
 test("same-account callers execute sequentially", async () => {
   const pump = new OrderedMessagePump();
+  // 同账户三消息并发投递:活跃 handler 数始终为 1,执行严格串行。
   const order: string[] = [];
   let active = 0;
   let maximumActive = 0;
@@ -114,6 +121,7 @@ test("same-account callers execute sequentially", async () => {
 
 test("different accounts are allowed to overlap", async () => {
   const pump = new OrderedMessagePump();
+  // 三个不同账户的通道相互独立,可同时执行(最大活跃数为 3)。
   let active = 0;
   let maximumActive = 0;
   const handler = async () => {
@@ -188,6 +196,7 @@ test("acknowledgement failure does not mark the message complete", async () => {
 
 test("account sequence regression is rejected before handling", async () => {
   const pump = new OrderedMessagePump(true);
+  // 序号低于账户高水位(10)的消息在 handler 执行前即被拒绝。
   await pump.dispatch(
     message("high", "a", 10),
     async () => undefined,
@@ -252,6 +261,7 @@ test("delivery inspection finds gaps, duplicates and malformed rows", () => {
 
 test("telemetry observes ordered bounded metric streams", () => {
   const telemetry = new SettlementTelemetry(8);
+  // 容量上限 8:写入 20 条后仅保留最近 8 条(延迟 12..19)。
   for (let index = 0; index < 20; index += 1) {
     telemetry.observe(metric("batch.commit", index, index % 3, true, index));
   }
@@ -284,6 +294,7 @@ test("telemetry rejects invalid and out-of-order metrics", () => {
 
 test("latency bands interpolate representative distributions", () => {
   const telemetry = new SettlementTelemetry();
+  // 5 个等距样本:p50=30,p90=46,p95=48,p99=49.6(线性插值)。
   for (const [index, latency] of [10, 20, 30, 40, 50].entries()) {
     telemetry.observe(metric("post", latency, 0, true, index));
   }
@@ -307,6 +318,7 @@ test("retry budget exposes allowance consumption and exhaustion", () => {
 
 test("throughput inspection reports outcome runs and latency quantiles", () => {
   const telemetry = new SettlementTelemetry();
+  // 成败序列 [fail,fail,ok,fail] 产生失败连续段 [2,1];错误预算消耗 0.75。
   const report = telemetry.evaluateThroughputPolicies({
     settlementMetricSet: " daily ",
     observedAt: 1,

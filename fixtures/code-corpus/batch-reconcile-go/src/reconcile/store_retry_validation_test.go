@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// storedReceipt 构造测试回执,金额按偏移量递增,供存储/归档测试复用。
 func storedReceipt(identity, batch string, offset time.Duration) Receipt {
 	return Receipt{
 		ReceiptID:      "store-receipt-" + identity,
@@ -26,6 +27,8 @@ func storedReceipt(identity, batch string, offset time.Duration) Receipt {
 	}
 }
 
+// TestMemoryReceiptStoreSavesOnceAndListsByCommitTime 验证存储:回执只入库一次、
+// 幂等重放不重复、按批次列出时按提交时间排序。
 func TestMemoryReceiptStoreSavesOnceAndListsByCommitTime(t *testing.T) {
 	store := NewMemoryReceiptStore()
 	receipts := []Receipt{
@@ -58,6 +61,8 @@ func TestMemoryReceiptStoreSavesOnceAndListsByCommitTime(t *testing.T) {
 	}
 }
 
+// TestMemoryReceiptStoreRejectsIncompatibleDuplicate 验证同一支付的关键内容
+// (批次、账户、金额)变化时,重复保存被拒绝且计数不变。
 func TestMemoryReceiptStoreRejectsIncompatibleDuplicate(t *testing.T) {
 	store := NewMemoryReceiptStore()
 	original := storedReceipt("duplicate", "batch-original", 0)
@@ -82,6 +87,8 @@ func TestMemoryReceiptStoreRejectsIncompatibleDuplicate(t *testing.T) {
 	}
 }
 
+// TestMemoryReceiptStoreInjectedFailuresAreScoped 验证故障注入按“操作+身份”
+// 精确生效、不影响无关操作,且清除后恢复可用。
 func TestMemoryReceiptStoreInjectedFailuresAreScoped(t *testing.T) {
 	store := NewMemoryReceiptStore()
 	receiptA := storedReceipt("failure-a", "failure-batch", 0)
@@ -107,6 +114,8 @@ func TestMemoryReceiptStoreInjectedFailuresAreScoped(t *testing.T) {
 	}
 }
 
+// TestMemoryReceiptStoreConcurrentSaveKeepsCanonicalReceipt 验证并发保存同一支付
+// 只产生一条回执(其余视为重放),无错误且计数为 1。
 func TestMemoryReceiptStoreConcurrentSaveKeepsCanonicalReceipt(t *testing.T) {
 	store := NewMemoryReceiptStore()
 	base := storedReceipt("concurrent", "concurrent-batch", 0)
@@ -148,6 +157,8 @@ func TestMemoryReceiptStoreConcurrentSaveKeepsCanonicalReceipt(t *testing.T) {
 	}
 }
 
+// TestBatchArchivePutReplayConflictAndClone 验证归档:创建返回副本、外部修改不
+// 污染存档、同指纹重放幂等、异指纹报冲突、空键被拒。
 func TestBatchArchivePutReplayConflictAndClone(t *testing.T) {
 	archive := NewBatchArchive()
 	receipt := storedReceipt("archive", "archive-key", 0)
@@ -182,6 +193,7 @@ func TestBatchArchivePutReplayConflictAndClone(t *testing.T) {
 	}
 }
 
+// TestBatchArchiveSummariesAreSortedByKey 验证归档汇总按键排序输出。
 func TestBatchArchiveSummariesAreSortedByKey(t *testing.T) {
 	archive := NewBatchArchive()
 	for _, key := range []string{"batch-zulu", "batch-alpha", "batch-middle"} {
@@ -203,6 +215,9 @@ func TestBatchArchiveSummariesAreSortedByKey(t *testing.T) {
 	}
 }
 
+// TestRetryPolicyValidationAndDeterministicSchedule 验证策略参数校验(负延迟、
+// 不一致延迟、乘数<1、抖动越界)与确定性退避序列(10/20/40ms 封顶 55ms),
+// 以及达到尝试上限时停止。
 func TestRetryPolicyValidationAndDeterministicSchedule(t *testing.T) {
 	invalid := []struct {
 		initial    time.Duration
@@ -239,6 +254,8 @@ func TestRetryPolicyValidationAndDeterministicSchedule(t *testing.T) {
 	}
 }
 
+// TestRetryPolicyStopsPermanentAndDisabledKinds 验证不可重试的类别(永久失败、
+// 白名单外类别、nil 失败)立即停止,且 Schedule 遇停止即截断。
 func TestRetryPolicyStopsPermanentAndDisabledKinds(t *testing.T) {
 	policy, _ := NewRetryPolicy(time.Millisecond, time.Second, 2, 0, 7)
 	permanent := &CommitFailure{Kind: FailurePermanent, Retryable: false, Message: "no"}
@@ -261,6 +278,8 @@ func TestRetryPolicyStopsPermanentAndDisabledKinds(t *testing.T) {
 	}
 }
 
+// TestWaitForRetryObservesContext 验证等待逻辑:零延迟直接返回、已取消的
+// context 立即返回取消错误、正常等待至少耗时达到请求时长。
 func TestWaitForRetryObservesContext(t *testing.T) {
 	if err := WaitForRetry(context.Background(), 0); err != nil {
 		t.Errorf("zero delay: %v", err)
@@ -279,6 +298,7 @@ func TestWaitForRetryObservesContext(t *testing.T) {
 	}
 }
 
+// validationContext 构造一套覆盖全部规则类型的校验上下文,供校验器测试复用。
 func validationContext() ValidationContext {
 	return ValidationContext{
 		Now:                  testEpoch,
@@ -293,6 +313,8 @@ func validationContext() ValidationContext {
 	}
 }
 
+// TestPaymentValidatorCollectsPolicyIssues 验证一笔同时违反币种、区域、黑名单、
+// 引用格式、时间与属性白名单等多条规则的支付,产出全部对应问题且位置正确。
 func TestPaymentValidatorCollectsPolicyIssues(t *testing.T) {
 	validator := NewPaymentValidator(validationContext())
 	payment := testPayment("inspect", "apac-source", "blocked-1", CurrencyGBP, 30_000, 5*time.Minute)
@@ -314,6 +336,7 @@ func TestPaymentValidatorCollectsPolicyIssues(t *testing.T) {
 	}
 }
 
+// TestPaymentValidatorAcceptsCompliantPayment 验证完全合规的支付不产生任何问题。
 func TestPaymentValidatorAcceptsCompliantPayment(t *testing.T) {
 	validator := NewPaymentValidator(validationContext())
 	payment := testPayment("compliant", "us-source", "beneficiary-ok", CurrencyUSD, 9_999, -time.Hour)
@@ -324,6 +347,8 @@ func TestPaymentValidatorAcceptsCompliantPayment(t *testing.T) {
 	}
 }
 
+// TestPaymentValidatorBatchFindsDuplicateAndEnvelopeIssues 验证批次校验同时覆盖
+// 批次级规则(键长、尝试次数、截止)与批内支付身份重复。
 func TestPaymentValidatorBatchFindsDuplicateAndEnvelopeIssues(t *testing.T) {
 	validator := NewPaymentValidator(validationContext())
 	payment := testPayment("duplicate-id", "eu-source", "beneficiary-ok", CurrencyEUR, 500, 0)
@@ -347,6 +372,8 @@ func TestPaymentValidatorBatchFindsDuplicateAndEnvelopeIssues(t *testing.T) {
 	}
 }
 
+// TestPaymentValidatorCopiesConfiguration 验证校验器持有上下文的防御性副本:
+// 构造后修改原上下文不影响校验结果。
 func TestPaymentValidatorCopiesConfiguration(t *testing.T) {
 	configuration := validationContext()
 	validator := NewPaymentValidator(configuration)

@@ -9,7 +9,13 @@ use crate::accumulator::BatchWriter;
 use crate::codec::JournalCodec;
 use crate::domain::{AppendReceipt, Durability, JournalRecord, SegmentDescriptor, SegmentState};
 
+/// 段文件:日志引擎的持久化单元。
+///
+/// 文件布局:64 字节固定头(魔数/版本/段 id/代际/创建时间/容量/持久化级别/校验和)
+/// + 若干追加的“信封”:24 字节信封头(长度/批次校验和/起始序列)+ 编码批次体。
+/// 追加时只允许 Active 状态;写满后自动封存(Sealed)。
 pub struct SegmentFile {
+    /// 段描述(含状态),跨线程共享。
     descriptor: Mutex<SegmentDescriptor>,
     codec: JournalCodec,
     durability: Durability,
@@ -23,6 +29,8 @@ impl BatchWriter for SegmentFile {
 }
 
 impl SegmentFile {
+    /// 打开(或新建)段文件。新文件写入 64 字节头并同步;
+    /// 已有文件则校验头(魔数、版本、id、代际、容量、校验和)。
     pub fn open(
         path: impl AsRef<Path>,
         segment_id: u64,
@@ -56,6 +64,7 @@ impl SegmentFile {
             .map_err(|error| format!("inspect segment {}: {error}", path.display()))?;
         let now = SystemTime::now();
         if metadata.len() == 0 {
+            // 新文件:构造 64 字节头。
             let mut header = Vec::with_capacity(64);
             header.extend_from_slice(b"BJSG");
             header.extend_from_slice(&2u16.to_le_bytes());
@@ -89,6 +98,7 @@ impl SegmentFile {
             }
             file.write_all(&header)
                 .map_err(|error| format!("write segment header {}: {error}", path.display()))?;
+            // 按持久化级别同步头部。
             if durability == Durability::FullSync {
                 file.sync_all()
                     .map_err(|error| format!("sync segment header {}: {error}", path.display()))?;
@@ -97,6 +107,7 @@ impl SegmentFile {
                     .map_err(|error| format!("sync segment data {}: {error}", path.display()))?;
             }
         } else {
+            // 已有文件:校验头完整性。
             if metadata.len() < 64 {
                 return Err(format!(
                     "existing segment {} is only {} bytes",
@@ -177,6 +188,7 @@ impl SegmentFile {
             last_sequence: 0,
             first_timestamp_ms: 0,
             last_timestamp_ms: 0,
+            // 逻辑字节 = 物理字节 - 头(64 字节),此时还没有记录。
             logical_bytes: physical_bytes.saturating_sub(64),
             physical_bytes,
             live_records: 0,
@@ -202,6 +214,9 @@ impl SegmentFile {
         })
     }
 
+    /// 追加一批记录:编码 → 预估空间 → 写信封(头+体)→ 按持久化级别同步 → 更新描述。
+    ///
+    /// 追加前若预估会超容量,先把段标记为 Sealed 并返回错误,让上层轮换新段。
     pub fn append(&self, records: &[JournalRecord]) -> Result<AppendReceipt, String> {
         if records.is_empty() {
             return Err("cannot append an empty journal batch".to_owned());
@@ -227,6 +242,7 @@ impl SegmentFile {
             .physical_bytes
             .checked_add(envelope_bytes_u64)
             .ok_or_else(|| "segment length overflow".to_owned())?;
+        // 超容量:封存本段,交由上层轮换。
         if projected > self.maximum_segment_bytes {
             descriptor.state = SegmentState::Sealed;
             descriptor.sealed_at = Some(SystemTime::now());
@@ -235,6 +251,7 @@ impl SegmentFile {
                 descriptor.segment_id, descriptor.physical_bytes, self.maximum_segment_bytes
             ));
         }
+        // 批次级校验和(信封头携带,恢复时据此发现损坏批次)。
         let mut batch_checksum = 0xd6e8feb86659fd93u64;
         for byte in &encoded {
             batch_checksum ^= *byte as u64;
@@ -243,6 +260,7 @@ impl SegmentFile {
                 .wrapping_mul(0xa0761d6478bd642f);
             batch_checksum ^= batch_checksum >> 31;
         }
+        // 序列分配:从 1 开始单调递增,绝不回退。
         let first_sequence = descriptor.last_sequence.saturating_add(1).max(1);
         let record_count_u64 = u64::try_from(records.len())
             .map_err(|_| "record count does not fit in a u64".to_owned())?;
@@ -260,6 +278,7 @@ impl SegmentFile {
                     descriptor.path.display()
                 )
             })?;
+        // 信封头:体长 + 批次校验和 + 起始序列。
         let mut envelope_header = Vec::with_capacity(24);
         envelope_header.extend_from_slice(&(encoded.len() as u64).to_le_bytes());
         envelope_header.extend_from_slice(&batch_checksum.to_le_bytes());
@@ -267,6 +286,7 @@ impl SegmentFile {
         file.write_all(&envelope_header)
             .and_then(|_| file.write_all(&encoded))
             .map_err(|error| format!("append segment {}: {error}", descriptor.path.display()))?;
+        // 按持久化级别同步。
         match self.durability {
             Durability::Buffered => {
                 file.flush().map_err(|error| {
@@ -285,6 +305,7 @@ impl SegmentFile {
             }
         }
         let committed_at = SystemTime::now();
+        // 更新描述:序列范围、字节、记录统计、时间戳范围、账户范围。
         if descriptor.first_sequence == 0 {
             descriptor.first_sequence = first_sequence;
         }
@@ -324,6 +345,7 @@ impl SegmentFile {
                 })
                 .or_insert((sequence, sequence));
         }
+        // 接近容量(余量不足 4 KiB)时提前封存。
         if projected.saturating_add(4_096) > self.maximum_segment_bytes {
             descriptor.state = SegmentState::Sealed;
             descriptor.sealed_at = Some(committed_at);
@@ -341,6 +363,10 @@ impl SegmentFile {
         })
     }
 
+    /// 扫描整个段文件,重建描述并报告损坏;可选截断损坏尾部(修复)。
+    ///
+    /// 逐信封读取:先验信封校验和,再解码批次;校验失败即停止向后扫描
+    /// (之后的字节不可信)。扫描结果写回描述,损坏尾部按策略截断或隔离。
     pub fn inspect_and_repair(
         &self,
         truncate_corrupt_tail: bool,
@@ -394,6 +420,7 @@ impl SegmentFile {
         let mut expected_sequence = 1u64;
         while cursor < physical_length {
             let remaining = physical_length - cursor;
+            // 尾部不足一个信封头(24 字节):必然是中断的写入。
             if remaining < 24 {
                 diagnostics.push(format!(
                     "{} trailing bytes cannot contain an envelope header",
@@ -476,6 +503,7 @@ impl SegmentFile {
                 diagnostics.push(format!("cannot read envelope body at {cursor}: {error}"));
                 break;
             }
+            // 信封校验和:不匹配即视为批次损坏,停止向后扫描。
             let mut actual_checksum = 0xd6e8feb86659fd93u64;
             for byte in &body {
                 actual_checksum ^= *byte as u64;
@@ -499,6 +527,7 @@ impl SegmentFile {
                 diagnostics.push(format!("envelope at byte {cursor} decoded no records"));
                 break;
             }
+            // 序列必须与期望严格衔接;回退说明数据错乱。
             if envelope_sequence != expected_sequence {
                 diagnostics.push(format!(
                     "sequence discontinuity at byte {cursor}: expected {expected_sequence}, found {envelope_sequence}"
@@ -510,6 +539,7 @@ impl SegmentFile {
             if first_sequence == 0 {
                 first_sequence = envelope_sequence;
             }
+            // 汇总本批记录统计。
             for (offset, record) in decoded.iter().enumerate() {
                 let sequence = envelope_sequence.saturating_add(offset as u64);
                 last_sequence = last_sequence.max(sequence);
@@ -536,6 +566,7 @@ impl SegmentFile {
             cursor = envelope_end;
             last_good_cursor = cursor;
         }
+        // 处理损坏尾部:截断或隔离。
         if last_good_cursor < physical_length {
             let corrupt_bytes = physical_length - last_good_cursor;
             if truncate_corrupt_tail {
@@ -562,6 +593,7 @@ impl SegmentFile {
                 ));
             }
         }
+        // 把扫描结果写回描述。
         descriptor.first_sequence = first_sequence;
         descriptor.last_sequence = last_sequence;
         descriptor.first_timestamp_ms = if minimum_timestamp == i64::MAX {
@@ -585,6 +617,7 @@ impl SegmentFile {
         descriptor.duplicate_records = duplicate_records;
         descriptor.checksum_failures = checksum_failures;
         descriptor.account_ranges = account_ranges;
+        // 根据剩余容量重估状态(仅当未隔离时)。
         if descriptor.state != SegmentState::Quarantined {
             if descriptor.physical_bytes.saturating_add(4_096) >= self.maximum_segment_bytes {
                 descriptor.state = SegmentState::Sealed;

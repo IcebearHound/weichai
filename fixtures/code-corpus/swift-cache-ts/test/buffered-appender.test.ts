@@ -1,3 +1,7 @@
+/**
+ * BufferedAppender 的单元测试:排序/分批、幂等去重、部分失败恢复、写串行化、
+ * 批量切分、行去重与持久性策略评估。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -12,6 +16,7 @@ const row = (id: string, timestamp: number): BufferedRecord => ({
 });
 
 test("flush sorts records and writes bounded batches", async () => {
+  // 记录按时间排序后以批大小切分,输出顺序确定。
   let now = 100;
   const appender = new BufferedAppender(() => now++);
   const written: string[][] = [];
@@ -56,6 +61,7 @@ test("duplicates in one request and prior writes are skipped", async () => {
 
 test("a partial failure records only confirmed batches", async () => {
   const appender = new BufferedAppender();
+  // 批次二失败后,已确认的批次一保持持久化,重试从批次二开始。
   const attempts: string[] = [];
   await assert.rejects(
     appender.flushNow(
@@ -85,6 +91,7 @@ test("a partial failure records only confirmed batches", async () => {
 
 test("concurrent callers never overlap writer execution", async () => {
   const appender = new BufferedAppender();
+  // 并发刷盘通过写链串行化:writer 执行绝不重叠。
   const order: string[] = [];
   let active = 0;
   let maximumActive = 0;
@@ -125,6 +132,7 @@ test("a failing caller releases the serialized write lane", async () => {
 });
 
 test("partitionBatches copies and freezes each group", () => {
+  // 切分组是冻结副本:修改输入不影响已切分组。
   const appender = new BufferedAppender();
   const input = [row("a", 1), row("b", 2), row("c", 3)];
   const groups = appender.partitionBatches(input, 2);
@@ -155,6 +163,7 @@ test("deduplicateRows retains the earliest record per id", () => {
 });
 
 test("durability inspection normalizes destinations and validates hints", () => {
+  // 目标归一化并去重,非法键列出,未来时刻被标记。
   const appender = new BufferedAppender(() => 1_000);
   const inspection = appender.evaluateDurabilityPolicies({
     streamId: " audit ",

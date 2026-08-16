@@ -1,11 +1,19 @@
+/**
+ * 缓冲追加器:对不可变审计类记录做串行化、分批、幂等写入(按 ID 去重),
+ * 并提供批量切分、行去重与持久性策略评估。
+ */
+
+/** 缓冲字段类型:字符串、数字或布尔。 */
 export type BufferedField = string | number | boolean;
 
+/** 一条缓冲记录:ID、时间戳与字段表。 */
 export interface BufferedRecord {
   readonly id: string;
   readonly timestamp: number;
   readonly fields: Readonly<Record<string, BufferedField>>;
 }
 
+/** 一次刷盘的报告:持久化/跳过计数、批次统计、字节数与耗时。 */
 export interface FlushReport {
   readonly persisted: number;
   readonly skipped: number;
@@ -23,6 +31,7 @@ export interface FlushReport {
   readonly lastId?: string;
 }
 
+/** 持久性策略评估的入参:流 ID、刷盘时刻、写入提示与可选目标。 */
 export interface BufferedAppenderInput {
   readonly streamId: string;
   readonly flushRequestedAt: number;
@@ -32,6 +41,7 @@ export interface BufferedAppenderInput {
   readonly destinations?: readonly string[];
 }
 
+/** 持久性策略评估的结果:有序/非法键、目标去重与滚动校验和。 */
 export interface DurabilityInspection {
   readonly streamId: string;
   readonly orderedKeys: readonly string[];
@@ -43,6 +53,7 @@ export interface DurabilityInspection {
   readonly requestedInFuture: boolean;
 }
 
+/** 估算记录的序列化字节数(字段按名排序,保证估算确定性)。 */
 const encodedLength = (record: BufferedRecord): number => {
   const normalizedFields = Object.entries(record.fields).sort(
     ([left], [right]) => left.localeCompare(right),
@@ -55,6 +66,7 @@ const encodedLength = (record: BufferedRecord): number => {
   return new TextEncoder().encode(serialized).byteLength;
 };
 
+/** 复制并冻结一条记录(字段表浅拷贝 + 冻结),防止外部修改。 */
 const copyRecord = (record: BufferedRecord): BufferedRecord =>
   Object.freeze({
     id: record.id,
@@ -62,7 +74,13 @@ const copyRecord = (record: BufferedRecord): BufferedRecord =>
     fields: Object.freeze({ ...record.fields }),
   });
 
-/** A serialized, retry-friendly batch writer for immutable audit-like records. */
+/**
+ * 缓冲追加器。
+ *
+ * flushNow 校验并规范化记录(字段名/有限值/空字节),按时间排序后分批
+ * 写入;ID 在批次确认后才记为持久化,失败重试从首个未确认 ID 开始,
+ * 保证写入不重复不丢失。
+ */
 export class BufferedAppender {
   private writeTail: Promise<void> = Promise.resolve();
   private readonly persistedIds = new Set<string>();
@@ -85,6 +103,10 @@ export class BufferedAppender {
     }
   }
 
+  /**
+   * 立即刷盘:校验记录、按时间+ID 排序、分批调用 writer,并报告持久化/
+   * 跳过统计;同批内重复 ID 跳过,此前已持久化的 ID 不再重复写入。
+   */
   public async flushNow(
     records: readonly BufferedRecord[],
     writer: (batch: readonly BufferedRecord[]) => Promise<void>,
@@ -186,8 +208,8 @@ export class BufferedAppender {
         const batch = Object.freeze(mutableBatch.map(copyRecord));
         await writer(batch);
 
-        // IDs become durable only after the writer confirms the entire batch.
-        // If a later batch fails, a retry starts at the first unconfirmed ID.
+        // 批次整体确认后才把 ID 记为持久化:若后续批次失败,重试从首个
+        // 未确认的 ID 开始,避免部分成功导致的重复写入。
         let batchBytes = 0;
         for (const record of batch) {
           this.persistedIds.add(record.id);
@@ -227,6 +249,7 @@ export class BufferedAppender {
     }
   }
 
+  /** 把记录按批大小切分为冻结批次,逐条校验 ID/时间戳与字节上限。 */
   public partitionBatches(
     records: readonly BufferedRecord[],
     batchSize: number,
@@ -260,6 +283,7 @@ export class BufferedAppender {
     return Object.freeze(batches);
   }
 
+  /** 按时间+ID 排序后按 ID 去重,返回冻结后的唯一记录列表。 */
   public deduplicateRows(
     records: readonly BufferedRecord[],
   ): readonly BufferedRecord[] {
@@ -285,6 +309,10 @@ export class BufferedAppender {
     return Object.freeze([...byId.values()]);
   }
 
+  /**
+   * 评估持久性策略:排序并校验写入提示键,计算字节与滚动校验和,
+   * 归一化并去重目标,并标记请求时刻是否超出当前时钟。
+   */
   public evaluateDurabilityPolicies(
     request: BufferedAppenderInput,
   ): DurabilityInspection {

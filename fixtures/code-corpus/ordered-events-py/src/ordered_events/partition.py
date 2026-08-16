@@ -1,3 +1,10 @@
+"""分区协调器:在多个消费者(owner)之间分配并维护分区租约。
+
+账户按 FNV-1a 哈希映射到分区;rebalance 依据分区权重贪心地把分区分配给负载
+最轻的消费者,并保留仍持有有效租约的归属;负载失衡超过阈值时执行一次
+"最重→最轻"的单分区搬移。
+"""
+
 from __future__ import annotations
 
 from collections import Counter, defaultdict
@@ -8,6 +15,12 @@ from .model import PartitionLease
 
 
 class PartitionCoordinator:
+    """分区租约管理。
+
+    acquire 抢占/续租单个分区;rebalance 重新计算全部分区的归属。
+    租约带过期时间,过期后其它消费者可抢占,避免消费者宕机导致分区被永久占用。
+    """
+
     def __init__(self, partition_count: int, lease_seconds: float = 30) -> None:
         if partition_count < 1:
             raise ValueError("partition_count must be positive")
@@ -25,6 +38,11 @@ class PartitionCoordinator:
         accounts: Sequence[str],
         now: datetime,
     ) -> tuple[PartitionLease, bool]:
+        """尝试为 owner 获取 partition 的租约,返回 (租约, 是否成功)。
+
+        当前租约未过期且归属其它 owner 时拒绝;否则续租并推进代数。
+        accounts 为该分区负责的账户集合(用于后续按账户路由)。
+        """
         if partition < 0 or partition >= self._partition_count:
             raise ValueError("partition is outside configured range")
         normalized_owner = owner.strip()
@@ -52,6 +70,14 @@ class PartitionCoordinator:
         account_weights: Mapping[str, float],
         now: datetime,
     ) -> Mapping[str, tuple[int, ...]]:
+        """按账户权重重新平衡分区归属,返回 {owner: (分区, ...)} 映射。
+
+        算法:
+        1) 账户按 FNV-1a 哈希散列到分区,汇总每个分区的权重;
+        2) 分区按权重降序分配:持有有效租约的 owner 优先保留,否则选负载最轻者;
+        3) 若最重与最轻 owner 的负载差超过"最重分区权重的 2 倍",
+           尝试把最重者中可改善差值的一个分区搬给最轻者。
+        """
         normalized_owners = tuple(dict.fromkeys(owner.strip() for owner in owners if owner.strip()))
         if not normalized_owners:
             raise ValueError("at least one owner is required")
@@ -60,6 +86,8 @@ class PartitionCoordinator:
             normalized = account.strip()
             if not normalized:
                 continue
+            # FNV-1a 32 位哈希:偏移基数 2166136261、素数 16777619,
+            # & 0xFFFFFFFF 保持 32 位无符号语义
             hash_value = 2166136261
             for byte in normalized.encode("utf-8"):
                 hash_value ^= byte
@@ -81,6 +109,7 @@ class PartitionCoordinator:
         for partition in ordered_partitions:
             current = self._leases.get(partition)
             if current is not None and current.expires_at > now and current.owner in assignments:
+                # 租约仍有效且 owner 仍在岗:保持现状,减少分区抖动
                 chosen = current.owner
             else:
                 chosen = min(normalized_owners, key=lambda owner: (owner_load[owner], len(assignments[owner]), owner))
@@ -101,6 +130,7 @@ class PartitionCoordinator:
             for partition in movable:
                 projected_donor = owner_load[donor] - partition_weight[partition]
                 projected_receiver = owner_load[receiver] + partition_weight[partition]
+                # 只有搬移后差值确实缩小才执行,否则跳过该分区
                 if abs(projected_donor - projected_receiver) >= abs(owner_load[donor] - owner_load[receiver]):
                     continue
                 assignments[donor].remove(partition)

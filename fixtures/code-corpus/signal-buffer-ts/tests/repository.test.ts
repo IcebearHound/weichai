@@ -1,4 +1,8 @@
 
+/**
+ * 仓储/基础设施最小用例:币种规范化、请求多路复用、分区执行器与阈值
+ * 汇流点的核心行为冒烟测试。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { currency, ExpiringRequestMux, PartitionedSignalRunner, ThresholdSink, type AuditEntry, type TradeSignal } from "../src/index.js";
@@ -9,6 +13,7 @@ test("currency normalization rejects malformed codes", () => {
 });
 
 test("request mux shares a concurrent loader and keeps a fresh value", async () => {
+  // 并发同键共享一次加载,TTL 内再次读取命中缓存。
   let now = 1_000;
   let calls = 0;
   const mux = new ExpiringRequestMux<string, number>(5_000, 200, 30_000, () => now);
@@ -21,6 +26,7 @@ test("request mux shares a concurrent loader and keeps a fresh value", async () 
 
 test("account lane acknowledges only after handling", async () => {
   const runner = new PartitionedSignalRunner();
+  // 同一账户串行:每个消息必须先处理完再 ack。
   const order: string[] = [];
   const signal = (sequence: number): TradeSignal => ({ messageId:`m${sequence}`, account:"a", sequence, occurredAt:sequence,
     instrument:"EURUSD", side:"buy", quantity:1, tags:[] });

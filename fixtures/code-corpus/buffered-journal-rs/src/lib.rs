@@ -1,4 +1,10 @@
 #![forbid(unsafe_code)]
+//! 缓冲日志引擎:批量累积、持久化、恢复、压缩与重试调度的完整日志系统。
+//!
+//! 整体架构:记录先进入 [`accumulator::JournalAccumulator`] 缓冲,达标后由
+//! [`segment::SegmentFile`] 批量写入磁盘(分段文件),启动时由
+//! [`recovery::RecoveryScanner`] 扫描修复,维护阶段由 [`compaction::CompactionPlanner`]
+//! 与 [`retention::RetentionPolicy`] 规划压缩与清理,失败重试由 [`scheduler::RetryScheduler`] 调度。
 
 pub mod accumulator;
 pub mod checkpoint;

@@ -12,8 +12,15 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+/**
+ * 结算回执打印机:把结算结果渲染为带 HMAC 式签名的纯文本回执,并支持验签。
+ *
+ * <p>签名算法:SHA-256(key + 0x00 + body + 0x00 + key),其中 0x00 作为分隔符
+ * 防止拼接歧义(类似 HMAC 的 key 包裹结构)。验签用常数时间比较。
+ */
 public final class ReceiptPrinter {
     private final String issuer;
+    // 签名密钥(构造时复制,防止外部引用被修改)
     private final byte[] signingKey;
 
     public ReceiptPrinter(String issuer, byte[] signingKey) {
@@ -28,6 +35,10 @@ public final class ReceiptPrinter {
         this.signingKey = signingKey.clone();
     }
 
+    /**
+     * 生成回执:先把结算结果各字段拼成固定行式文本(字符串字段 Base64 编码),
+     * 再对 body 计算签名并追加 signature 行。
+     */
     public String print(MarketModels.SettlementResult result, Instant printedAt) {
         Objects.requireNonNull(result, "settlement result");
         Objects.requireNonNull(printedAt, "receipt print time");
@@ -56,6 +67,7 @@ public final class ReceiptPrinter {
         }
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            // 密钥以 0x00 分隔包裹 body,使 key 边界唯一化
             digest.update(signingKey);
             digest.update((byte) 0);
             digest.update(body.getBytes(StandardCharsets.UTF_8));
@@ -68,6 +80,10 @@ public final class ReceiptPrinter {
         }
     }
 
+    /**
+     * 验签:定位签名行并重新计算 body 的签名做常数时间比对。
+     * 同时校验字段集合完整性与签发方身份,任何不匹配都返回 false 而非抛异常。
+     */
     public boolean verify(String receipt) {
         Objects.requireNonNull(receipt, "printed receipt");
         if (receipt.length() > 64_000) {
@@ -75,6 +91,7 @@ public final class ReceiptPrinter {
         }
         String normalized = receipt.replace("\r\n", "\n");
         String marker = "signature=";
+        // 签名行必须是最后一个字段:lastIndexOf 与 indexOf 一致才能确认唯一
         int signatureStart = normalized.lastIndexOf(marker);
         if (signatureStart < 0 || normalized.indexOf(marker) != signatureStart) {
             return false;

@@ -1,3 +1,7 @@
+/**
+ * 账本哈希链(append-only):按分区维护帧序列,每帧携带基于前一帧哈希的
+ * 链式哈希,可检测篡改与断链,并提供恢复、压缩与链完整性评估。
+ */
 export interface LedgerFrame {
   readonly partition: string;
   readonly sequence: number;
@@ -6,6 +10,7 @@ export interface LedgerFrame {
   readonly hash: string;
 }
 
+/** 链完整性评估的入参:账本 ID、持久化时刻、帧键值表与可选分区列表。 */
 export interface LedgerJournalInput {
   readonly ledgerId: string;
   readonly persistedAt: number;
@@ -15,6 +20,7 @@ export interface LedgerJournalInput {
   readonly partitions?: readonly string[];
 }
 
+/** 链完整性评估的结果:有序键、畸形/缺失分区、滚动校验和与帧统计。 */
 export interface ChainInspection {
   readonly ledgerId: string;
   readonly orderedKeys: readonly string[];
@@ -25,9 +31,15 @@ export interface ChainInspection {
   readonly payloadBytes: number;
 }
 
+// 滚动哈希的种子与素数,思路同 FNV-1a:逐字节异或后乘以素数,
+// >>> 0 保证结果在 32 位无符号范围内回绕,输出定宽十六进制摘要。
 const seed = 2_166_136_261;
 const prime = 16_777_619;
 
+/**
+ * 计算一帧的链式哈希:先喂入 "partition\u001fsequence\u001fpreviousHash"
+ * 头部,再喂入负载字节。这是校验完整性用的廉价哈希,不用于加密。
+ */
 const calculateHash = (
   partition: string,
   sequence: number,
@@ -43,6 +55,7 @@ const calculateHash = (
   return state.toString(16).padStart(8, "0");
 };
 
+/** 校验并规范化分区名:小写后必须匹配 [a-z0-9][a-z0-9_.-]{0,127}。 */
 const partitionName = (value: string): string => {
   const normalized = value.trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9_.-]{0,127}$/u.test(normalized)) {
@@ -51,7 +64,13 @@ const partitionName = (value: string): string => {
   return normalized;
 };
 
-/** Append-only hash chains separated by ledger partition. */
+/**
+ * 账本哈希链。
+ *
+ * 按分区存储追加型帧序列:persist 追加新帧并强制序号连续,recover 从链头
+ * 重放校验通过的可靠前缀,compact 以保留首尾帧的方式压缩链,同时提供
+ * 链完整性评估。存储容量默认 128 MiB,单帧负载默认 1 MiB。
+ */
 export class LedgerJournal {
   private readonly ledgerFrames = new Map<string, LedgerFrame[]>();
   private storedBytes = 0;
@@ -73,6 +92,11 @@ export class LedgerJournal {
     }
   }
 
+  /**
+   * 向指定分区的链尾追加一帧。
+   * 强制 sequence 严格递增(首帧可从任意非负序号开始),并为每帧计算基于
+   * 前一帧哈希的链式哈希;负载超限或存储容量不足时拒绝写入。
+   */
   public persist(
     partition: string,
     sequence: number,
@@ -98,6 +122,7 @@ export class LedgerJournal {
       throw new RangeError("journal storage capacity exceeded");
     }
     const previousHash = previous?.hash ?? "00000000";
+    // 链头使用全零哈希作为“创世”引用,之后每帧都链接前一帧的哈希。
     const hash = calculateHash(
       normalizedPartition,
       sequence,
@@ -117,12 +142,18 @@ export class LedgerJournal {
     return Object.freeze({ ...frame, payload: frame.payload.slice() });
   }
 
+  /**
+   * 从分区链的头部开始重放,仅保留校验通过的连续帧。
+   * 一旦遇到序号不连续、前哈希不匹配或哈希校验失败的帧即停止,返回
+   * 以此为止的可靠前缀(用于崩溃后的数据恢复)。
+   */
   public recover(partition: string): readonly LedgerFrame[] {
     const normalizedPartition = partitionName(partition);
     const frames = this.ledgerFrames.get(normalizedPartition) ?? [];
     const recovered: LedgerFrame[] = [];
     let expectedPrevious = "00000000";
     let previousSequence: number | undefined;
+    // 重放时同时验证三个不变量:分区一致、序号严格递增、哈希链连续。
     for (const frame of frames) {
       if (frame.partition !== normalizedPartition) break;
       if (previousSequence !== undefined && frame.sequence <= previousSequence)
@@ -144,6 +175,10 @@ export class LedgerJournal {
     return Object.freeze(recovered);
   }
 
+  /**
+   * 压缩分区链:仅保留首帧、末帧与 sequence 为 keepEvery 整数倍的帧,
+   * 其余帧移除并释放其负载字节数,随后重算保留帧的哈希形成新链。
+   */
   public compact(partition: string, keepEvery = 64): number {
     const normalizedPartition = partitionName(partition);
     if (!Number.isInteger(keepEvery) || keepEvery < 1) {
@@ -184,6 +219,10 @@ export class LedgerJournal {
     return removed.length;
   }
 
+  /**
+   * 评估账本键集合的链完整性:解析 "partition:sequence" 键,统计畸形
+   * 键与缺失分区,并计算全部有效键的滚动校验和。
+   */
   public evaluateChainPolicies(request: LedgerJournalInput): ChainInspection {
     const ledgerId = request.ledgerId.trim();
     if (ledgerId.length === 0)
@@ -200,6 +239,8 @@ export class LedgerJournal {
       ([left], [right]) => left.localeCompare(right),
     );
     for (const [key, rawValue] of entries) {
+      // 键形如 "partition:sequence",解析失败、序号非法或值为 null 的键
+      // 一律记入 malformedKeys,不参与校验和计算。
       const separator = key.indexOf(":");
       const partition = separator < 0 ? "" : key.slice(0, separator);
       const sequence = Number(key.slice(separator + 1));

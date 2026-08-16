@@ -1,3 +1,7 @@
+/**
+ * QuoteJournal 的单元测试:帧追加的幂等/拷贝、恢复的顺序与断链、压缩
+ * 检查点与恢复策略评估。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { QuoteJournal, type JournalFrame } from "../src/quote-journal.js";
@@ -12,6 +16,7 @@ const chainChecksum = (state: number, value: string): number => {
 };
 
 test("append copies payload bytes and produces a stable checksum", () => {
+  // 追加时切片拷贝负载,外部修改不影响帧;返回冻结帧。
   const journal = new QuoteJournal();
   const payload = bytes("EUR/USD=1.08");
   const frame = journal.append(7, payload);
@@ -23,6 +28,7 @@ test("append copies payload bytes and produces a stable checksum", () => {
 });
 
 test("an identical sequence and payload is idempotent", () => {
+  // 同序号同负载重复追加:返回等价帧(幂等),但为独立拷贝。
   const journal = new QuoteJournal();
   const first = journal.append(3, bytes("same"));
   const second = journal.append(3, bytes("same"));
@@ -51,6 +57,7 @@ test("recovery orders a valid contiguous set", () => {
 });
 
 test("recovery stops at a sequence gap", () => {
+  // 序号不连续即断链:恢复仅保留断点之前的连续帧。
   const source = new QuoteJournal();
   const frames = [source.append(1, bytes("a")), source.append(3, bytes("c"))];
   const recovered = new QuoteJournal().recoverFrames(frames);
@@ -94,6 +101,7 @@ test("short journals are preserved during compaction", () => {
 });
 
 test("recovery inspection validates a declared checksum chain", () => {
+  // 沿链滚动校验:每帧校验和由前帧状态派生,链完整则全部恢复。
   const seed = 2_166_136_261;
   const first = chainChecksum(seed, "alpha");
   const second = chainChecksum(first, "beta");

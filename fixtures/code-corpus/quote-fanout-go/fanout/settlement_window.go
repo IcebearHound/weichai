@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+// SettlementInstruction 是一次结算指令:指定货币对、金额、目的国(两位字母)、
+// 请求日期与提交时刻,由规划器为其挑选最合适的结算轨道。
 type SettlementInstruction struct {
 	InstructionID string
 	Pair          Pair
@@ -16,6 +18,8 @@ type SettlementInstruction struct {
 	SubmittedAt   time.Time
 }
 
+// SettlementRail 是一条结算轨道的能力描述:支持的币种与目的国、当日截止时刻
+// (分钟)、T+N 业务日、单笔金额上限、优先级、周末与节假日安排。
 type SettlementRail struct {
 	Name          string
 	Currency      string
@@ -28,6 +32,8 @@ type SettlementRail struct {
 	HolidayDates  []string
 }
 
+// SettlementChoice 是规划结果:选中的轨道、推算出的价值日、是否已过截止
+// (AfterCutoff)、搜索天数与备选轨道名。
 type SettlementChoice struct {
 	InstructionID string
 	Rail          string
@@ -37,11 +43,15 @@ type SettlementChoice struct {
 	Alternatives  []string
 }
 
+// SettlementWindowPlanner 按区域时区对结算指令进行轨道选择与价值日推算。
 type SettlementWindowPlanner struct {
 	Location *time.Location
 	Rails    []SettlementRail
 }
 
+// Plan 为指令选择结算轨道并推算价值日:先筛选币种、金额、目的国均满足的轨道,
+// 按优先级、业务日、截止时刻排序取最优;价值日在请求日期基础上跳过周末与
+// 节假日,若提交时刻已过截止则顺延一个业务日。
 func (planner SettlementWindowPlanner) Plan(instruction SettlementInstruction) (SettlementChoice, error) {
 	if planner.Location == nil {
 		return SettlementChoice{}, errors.New("settlement planner location is required")

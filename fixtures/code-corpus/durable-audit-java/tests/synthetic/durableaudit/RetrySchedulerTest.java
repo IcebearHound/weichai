@@ -14,7 +14,12 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * RetrySpool 与 FlushScheduler 的行为测试:到期投递、租约、退避与死信、
+ * 持久化重载/隔离、故障汇总,以及调度器的调用/停止/历史与生命周期。
+ */
 final class RetrySchedulerTest {
+    /** 汇总入口:运行全部用例,返回本类新增的断言数。 */
     static int run() throws Exception {
         int before = TestSupport.assertions();
         offersAndPollsAtDueTime();
@@ -36,10 +41,12 @@ final class RetrySchedulerTest {
         return TestSupport.assertions() - before;
     }
 
+    /** 测试替身工厂:固定初始延迟 2s、最大 2min。 */
     private static RetrySpool spool(Path directory, MutableClock clock, int attempts) throws IOException {
         return new RetrySpool(directory, clock, Duration.ofSeconds(2), Duration.ofMinutes(2), attempts);
     }
 
+    /** 票应在到期边界后才可投递,投递即出租。 */
     private static void offersAndPollsAtDueTime() throws Exception {
         Path directory = TestSupport.temporaryDirectory("retry-due");
         MutableClock clock = new MutableClock(TestSupport.BASE);
@@ -64,6 +71,7 @@ final class RetrySchedulerTest {
         }
     }
 
+    /** 同批次号重复登记应返回既有票,不覆盖首因、不产生新文件。 */
     private static void deduplicatesBatchOffers() throws Exception {
         Path directory = TestSupport.temporaryDirectory("retry-dedup");
         try {
@@ -81,6 +89,7 @@ final class RetrySchedulerTest {
         }
     }
 
+    /** 出租中的票不可重复投递;拒绝后释放租约并按退避改期。 */
     private static void leasesTicketUntilRejected() throws Exception {
         Path directory = TestSupport.temporaryDirectory("retry-lease");
         MutableClock clock = new MutableClock(TestSupport.BASE);
@@ -103,6 +112,7 @@ final class RetrySchedulerTest {
         }
     }
 
+    /** 退避间隔随尝试增长;达上限转死信并清理活动票。 */
     private static void backsOffAndMovesToDeadLetter() throws Exception {
         Path directory = TestSupport.temporaryDirectory("retry-dead");
         MutableClock clock = new MutableClock(TestSupport.BASE);
@@ -135,6 +145,7 @@ final class RetrySchedulerTest {
         }
     }
 
+    /** acknowledge 删除指定票与文件,未知 ID 幂等。 */
     private static void acknowledgesAndRemovesTicket() throws Exception {
         Path directory = TestSupport.temporaryDirectory("retry-ack");
         MutableClock clock = new MutableClock(TestSupport.BASE);
@@ -154,6 +165,7 @@ final class RetrySchedulerTest {
         }
     }
 
+    /** 重启后重载持久化票;租约跨进程重置。 */
     private static void reloadsPersistentTickets() throws Exception {
         Path directory = TestSupport.temporaryDirectory("retry-reload");
         MutableClock clock = new MutableClock(TestSupport.BASE);
@@ -174,6 +186,7 @@ final class RetrySchedulerTest {
         }
     }
 
+    /** 损坏的票文件应隔离到 .invalid,不影响其余票。 */
     private static void quarantinesMalformedTicketFiles() throws Exception {
         Path directory = TestSupport.temporaryDirectory("retry-invalid");
         try {
@@ -188,6 +201,7 @@ final class RetrySchedulerTest {
         }
     }
 
+    /** 失败类型分布与最老票年龄应准确;时钟倒退时年龄归零。 */
     private static void summarizesFailureTypesAndAge() throws Exception {
         Path directory = TestSupport.temporaryDirectory("retry-summary");
         MutableClock clock = new MutableClock(TestSupport.BASE);
@@ -208,6 +222,7 @@ final class RetrySchedulerTest {
         }
     }
 
+    /** 转义字段编解码往返;未闭合转义应报错。 */
     private static void roundTripsEscapedEventFields() throws Exception {
         Path directory = TestSupport.temporaryDirectory("retry-escaping");
         try {
@@ -224,6 +239,7 @@ final class RetrySchedulerTest {
         }
     }
 
+    /** 非法配置与空引用入参应被拒绝。 */
     private static void validatesRetryConfigurationAndInputs() throws Exception {
         Path directory = TestSupport.temporaryDirectory("retry-validation");
         MutableClock clock = new MutableClock(TestSupport.BASE);
@@ -248,6 +264,7 @@ final class RetrySchedulerTest {
         }
     }
 
+    /** 失败消息压单行、限长;Base64 辅助函数保持 UTF-8。 */
     private static void sanitizesFailureMessages() {
         TestSupport.equal("", RetrySpool.sanitizeMessage(null), "null failure message should become empty");
         TestSupport.equal("first second third", RetrySpool.sanitizeMessage(" first\nsecond\rthird "), "failure message should collapse line breaks");
@@ -257,6 +274,7 @@ final class RetrySchedulerTest {
         TestSupport.equal("东京 | newline\n", RetrySpool.fromBase64(encoded), "base64 helper should preserve UTF-8");
     }
 
+    /** 退避有界(不低于初始延迟、封顶附近)且同输入确定性抖动。 */
     private static void computesBoundedDeterministicBackoff() throws Exception {
         Path directory = TestSupport.temporaryDirectory("retry-backoff");
         try {
@@ -275,6 +293,7 @@ final class RetrySchedulerTest {
         }
     }
 
+    /** 调度器按间隔反复调用,停止后不再调用。 */
     private static void schedulerInvokesAndStops() throws Exception {
         AtomicInteger calls = new AtomicInteger();
         FlushScheduler scheduler = new FlushScheduler(Duration.ofMillis(5), calls::incrementAndGet);
@@ -295,6 +314,7 @@ final class RetrySchedulerTest {
         TestSupport.equal(0.0, scheduler.failureRate(), "successful scheduler failure rate should be zero");
     }
 
+    /** 回调异常不中断调度,失败被计数并记录。 */
     private static void schedulerRecordsCallbackFailures() throws Exception {
         AtomicInteger calls = new AtomicInteger();
         FlushScheduler scheduler = new FlushScheduler(Duration.ofMillis(4), () -> {
@@ -317,6 +337,7 @@ final class RetrySchedulerTest {
         TestSupport.check(scheduler.failureRate() > 0.25 && scheduler.failureRate() < 0.75, "alternating callback should have near-half failure rate");
     }
 
+    /** 历史有界(最多 64 条)且不可变。 */
     private static void schedulerBoundsHistory() {
         FlushScheduler scheduler = new FlushScheduler(Duration.ofHours(1), () -> { });
         for (int index = 0; index < 90; index++) {
@@ -329,6 +350,7 @@ final class RetrySchedulerTest {
         scheduler.close();
     }
 
+    /** 非法间隔、空回调、停止后重启应被拒绝。 */
     private static void schedulerValidatesLifecycle() {
         for (Duration interval : List.of(Duration.ZERO, Duration.ofNanos(1), Duration.ofMillis(-1))) {
             TestSupport.expectThrows(IllegalArgumentException.class, () -> new FlushScheduler(interval, () -> { }), "invalid scheduler interval should fail");

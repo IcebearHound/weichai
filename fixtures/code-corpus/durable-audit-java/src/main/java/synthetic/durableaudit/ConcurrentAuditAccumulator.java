@@ -20,22 +20,37 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
+/**
+ * 并发审计累加器:多线程安全地累积审计事件,按「事件数/字节数阈值或定时器」
+ * 异步批量落盘,并在失败时把批次回滚到待处理队列重试。
+ *
+ * <p>并发模型:状态锁(ReentrantLock)保护待处理队列与共享计数,单线程写入执行器
+ * 串行化磁盘写入,避免写放大;写失败不会丢事件(回滚重试)。
+ */
 public final class ConcurrentAuditAccumulator implements AutoCloseable {
     private final BatchWriter writer;
+    // 触发落盘的事件数阈值
     private final int eventThreshold;
+    // 触发落盘的字节数阈值
     private final long byteThreshold;
+    // 定时器间隔:周期内未达阈值也会强制刷盘
     private final Duration interval;
     private final Clock clock;
     private final ReentrantLock stateLock = new ReentrantLock();
+    // 空闲条件变量:等待「无进行中落盘且队列为空」
     private final Condition idle = stateLock.newCondition();
+    // 待落盘事件队列(队首最旧)
     private final ArrayDeque<AuditEvent> pending = new ArrayDeque<>();
     private final ExecutorService writerExecutor;
     private final FlushScheduler scheduler;
+    // 最近写入回执(用于追踪;超量后截断)
     private final List<WriteReceipt> recentReceipts = new ArrayList<>();
     private final AtomicLong accepted = new AtomicLong();
     private final AtomicLong persisted = new AtomicLong();
     private AccumulatorState state = AccumulatorState.NEW;
+    // 待处理队列预估字节数
     private long pendingBytes;
+    // 下一个批次的编号(启动时从恢复结果接续)
     private long nextBatchNumber;
     private long failedAttempts;
     private Throwable lastFailure;
@@ -83,6 +98,7 @@ public final class ConcurrentAuditAccumulator implements AutoCloseable {
         }
     }
 
+    /** 启动累加器:进入 OPEN 状态并启动定时刷盘。 */
     public void start() {
         stateLock.lock();
         try {
@@ -99,6 +115,11 @@ public final class ConcurrentAuditAccumulator implements AutoCloseable {
         }
     }
 
+    /**
+     * 接收一条事件:OPEN 状态下入队,达到阈值时触发异步落盘。
+     *
+     * @return 已接受为 true;累加器未 OPEN(关闭中/已关闭)时返回 false
+     */
     public boolean add(AuditEvent event) {
         Objects.requireNonNull(event, "event");
         stateLock.lock();
@@ -118,6 +139,10 @@ public final class ConcurrentAuditAccumulator implements AutoCloseable {
         }
     }
 
+    /**
+     * 阻塞直到所有已接收事件落盘完成,返回本次新产生的回执列表,并强制 fsync。
+     * 期间若有写失败且队列仍有残留,则抛出 IOException。
+     */
     public List<WriteReceipt> flush() throws IOException {
         CompletableFuture<Void> completion;
         int receiptStart;
@@ -150,6 +175,7 @@ public final class ConcurrentAuditAccumulator implements AutoCloseable {
         }
     }
 
+    /** 状态快照:计数、待处理队列、失败信息与最近回执摘要(前 8 条)。 */
     public AccumulatorSnapshot status() {
         stateLock.lock();
         try {
@@ -173,6 +199,10 @@ public final class ConcurrentAuditAccumulator implements AutoCloseable {
         }
     }
 
+    /**
+     * 关闭累加器:停止定时器、排空剩余事件、关闭写入器与线程池。
+     * 任何残留事件或失败都会以 IOException 形式报告(而非静默丢弃)。
+     */
     @Override
     public void close() throws IOException {
         CompletableFuture<Void> inFlight;
@@ -279,6 +309,7 @@ public final class ConcurrentAuditAccumulator implements AutoCloseable {
         }
     }
 
+    /** 等待累加器空闲(无进行中落盘且队列为空),带超时;返回是否达到空闲。 */
     boolean awaitIdle(Duration timeout) throws InterruptedException {
         Objects.requireNonNull(timeout, "timeout");
         long nanos = timeout.toNanos();
@@ -293,6 +324,7 @@ public final class ConcurrentAuditAccumulator implements AutoCloseable {
         }
     }
 
+    /** 待处理队列的只读副本(用于测试与诊断)。 */
     List<AuditEvent> pendingCopy() {
         stateLock.lock();
         try {
@@ -302,6 +334,10 @@ public final class ConcurrentAuditAccumulator implements AutoCloseable {
         }
     }
 
+    /**
+     * 在持有锁的前提下调度一次落盘:若已有落盘在跑则复用其 Future;
+     * 把排空任务提交到写入执行器。
+     */
     CompletableFuture<Void> scheduleDrainLocked() {
         if (drainRunning) {
             return drainCompletion;
@@ -324,6 +360,7 @@ public final class ConcurrentAuditAccumulator implements AutoCloseable {
         return completion;
     }
 
+    /** 落盘主循环:取批次 -> 写入 -> 记账,直到队列为空或写失败。 */
     void drainLoop(CompletableFuture<Void> completion) {
         try {
             while (true) {
@@ -381,6 +418,10 @@ public final class ConcurrentAuditAccumulator implements AutoCloseable {
         }
     }
 
+    /**
+     * 在持有锁的前提下从队列取出一个批次:按事件数与字节数双上限装箱,
+     * 队首事件总是会进批次(避免单事件超阈值时死循环)。
+     */
     AuditBatch takeNextBatchLocked() {
         List<AuditEvent> events = new ArrayList<>(Math.min(eventThreshold, pending.size()));
         long bytes = 64;
@@ -401,6 +442,7 @@ public final class ConcurrentAuditAccumulator implements AutoCloseable {
         return new AuditBatch(nextBatchNumber, clock.instant(), events);
     }
 
+    /** 写失败时把整批事件按原序恢复到队首,等待下次重试。 */
     void restoreFailedBatchLocked(AuditBatch batch) {
         List<AuditEvent> events = batch.events();
         for (int index = events.size() - 1; index >= 0; index--) {
@@ -411,6 +453,7 @@ public final class ConcurrentAuditAccumulator implements AutoCloseable {
         idle.signalAll();
     }
 
+    /** 结束一次落盘:复位标志并完成 Future(成功或异常)。 */
     void finishDrainLocked(CompletableFuture<Void> completion, Throwable failure) {
         drainRunning = false;
         idle.signalAll();
@@ -421,6 +464,7 @@ public final class ConcurrentAuditAccumulator implements AutoCloseable {
         }
     }
 
+    /** 定时器回调:OPEN 且队列非空时触发落盘。 */
     void timerElapsed() {
         stateLock.lock();
         try {
@@ -432,6 +476,7 @@ public final class ConcurrentAuditAccumulator implements AutoCloseable {
         }
     }
 
+    /** 写入线程未捕获异常的统一记录(防止线程死亡后无人知晓)。 */
     void rememberUnexpectedFailure(Throwable failure) {
         stateLock.lock();
         try {

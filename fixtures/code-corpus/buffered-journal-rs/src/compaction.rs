@@ -3,18 +3,33 @@ use std::time::{Duration, SystemTime};
 
 use crate::domain::{CompactionAction, CompactionPlan, SegmentDescriptor, SegmentState};
 
+/// 压缩规划器:决定哪些已封存段需要合并/重写/隔离,以及何时执行。
+///
+/// 策略:优先隔离损坏/隔离段;对健康段按序列与代际分组,
+/// 依据死记录占比(tombstone+duplicate)、碎片率与可回收字节数判定动作,
+/// 并生成 0-99 的紧急度用于排序(被阻塞的规划紧急度恒为 1)。
 pub struct CompactionPlanner {
     pub target_segment_bytes: u64,
+    /// 一次压缩最多合并的输入段数。
     pub maximum_input_segments: usize,
     pub minimum_reclaim_bytes: u64,
+    /// 死记录千分比阈值。
     pub tombstone_ratio_per_mille: u16,
+    /// 碎片千分比阈值。
     pub fragmentation_ratio_per_mille: u16,
+    /// 压缩前必须满足的副本确认数。
     pub required_replica_acks: usize,
+    /// 段封存后至少等待多久才能参与压缩。
     pub minimum_sealed_age: Duration,
+    /// 目标段的代际上限(防止无限叠加)。
     pub maximum_generation: u32,
 }
 
 impl CompactionPlanner {
+    /// 依据当前段列表与时间生成压缩规划。
+    ///
+    /// 输入会先做一致性校验(重复段 id、重复路径、倒置序列等),
+    /// 任何异常段都直接进入隔离规划,不参与分组压缩。
     pub fn plan(
         &self,
         segments: &[SegmentDescriptor],
@@ -51,6 +66,7 @@ impl CompactionPlanner {
                     descriptor.path.display()
                 ));
             }
+            // 汇总非致命异常(倒置序列、逻辑字节超过物理字节、代际超限)。
             if descriptor.first_sequence > descriptor.last_sequence && descriptor.last_sequence != 0
             {
                 diagnostics_by_segment
@@ -81,6 +97,7 @@ impl CompactionPlanner {
             }
         }
         let mut plans = Vec::new();
+        // 第一遍:隔离损坏段。
         for descriptor in segments {
             if descriptor.state == SegmentState::Quarantined
                 || descriptor.checksum_failures > 0
@@ -98,6 +115,7 @@ impl CompactionPlanner {
                         descriptor.checksum_failures
                     ));
                 }
+                // 从段 id 派生稳定的规划 id。
                 let mut hash = 0x517cc1b727220a95u64;
                 for byte in descriptor.segment_id.to_le_bytes() {
                     hash ^= byte as u64;
@@ -120,6 +138,7 @@ impl CompactionPlanner {
                 });
             }
         }
+        // 第二遍:对健康段做分组压缩。按序列起点排序后贪心扩展组。
         let mut eligible = segments
             .iter()
             .filter(|descriptor| {
@@ -153,6 +172,8 @@ impl CompactionPlanner {
             let mut latest_sequence = first.last_sequence;
             let first_generation = first.generation;
             let mut next = cursor + 1;
+            // 扩展条件:序列近邻(≤4096)或账户重叠、代际兼容(差≤1)、合并后不超目标尺寸的 1.5 倍;
+            // 序列重叠时强制合并以解决重叠。
             while next < eligible.len() && group.len() < self.maximum_input_segments {
                 let candidate = eligible[next];
                 let sequence_gap = candidate.first_sequence.saturating_sub(latest_sequence);
@@ -178,6 +199,7 @@ impl CompactionPlanner {
                     break;
                 }
             }
+            // 组级统计:死记录占比与碎片率决定动作。
             let total_live = group
                 .iter()
                 .map(|descriptor| descriptor.live_records)
@@ -212,6 +234,7 @@ impl CompactionPlanner {
                 .checked_div(total_physical)
                 .unwrap_or(0);
             let reclaimable_records = total_tombstones.saturating_add(total_duplicates);
+            // 按存活记录估算单条平均大小,进而估算可回收字节。
             let estimated_record_bytes = if total_records == 0 {
                 0
             } else {
@@ -220,6 +243,7 @@ impl CompactionPlanner {
             let estimated_reclaimed = total_physical
                 .saturating_sub(total_logical)
                 .saturating_add(estimated_record_bytes.saturating_mul(reclaimable_records as u64));
+            // 收集阻塞因素:活跃读者、法律保留、副本确认不足、封存时间不足。
             let mut blocked_by = Vec::new();
             let mut reasons = Vec::new();
             for descriptor in &group {
@@ -278,6 +302,7 @@ impl CompactionPlanner {
                     self.minimum_reclaim_bytes
                 ));
             }
+            // 动作决策:有阻塞 → Keep;多段 → Merge;否则按指标重写单段。
             let action = if !blocked_by.is_empty() {
                 CompactionAction::Keep
             } else if group.len() > 1 {
@@ -298,6 +323,7 @@ impl CompactionPlanner {
                     .unwrap_or(0)
                     .saturating_add(1)
                     .min(self.maximum_generation);
+                // 写入量估算:逻辑字节减去可回收记录对应的字节。
                 let estimated_write = total_logical.saturating_sub(
                     estimated_record_bytes.saturating_mul(reclaimable_records as u64),
                 );
@@ -321,6 +347,7 @@ impl CompactionPlanner {
                     hash = hash.rotate_left(17).wrapping_mul(0x9e3779b185ebca87);
                 }
                 hash ^= destination_generation as u64;
+                // 紧急度 = 回收占比(0-70)+ 死记录占比(0-30),无阻塞时封顶 99。
                 let reclaim_urgency = estimated_reclaimed
                     .saturating_mul(70)
                     .checked_div(total_physical)
@@ -349,6 +376,7 @@ impl CompactionPlanner {
             }
             cursor = if group.len() > 1 { next } else { cursor + 1 };
         }
+        // 按紧急度降序、起始序列升序排序,保证执行顺序稳定且最重要的事先做。
         plans.sort_by(|left, right| {
             right
                 .urgency
@@ -356,6 +384,7 @@ impl CompactionPlanner {
                 .then_with(|| left.earliest_sequence.cmp(&right.earliest_sequence))
                 .then_with(|| left.plan_id.cmp(&right.plan_id))
         });
+        // 可执行规划(非 Keep)的输入段必须互不重叠。
         let mut claimed = BTreeSet::new();
         for plan in &plans {
             if plan.action == CompactionAction::Keep {

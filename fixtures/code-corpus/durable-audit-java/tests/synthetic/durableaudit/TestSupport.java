@@ -20,17 +20,24 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * 无框架测试基础设施:全局断言计数、事件/批次/属性等测试数据工厂、
+ * 临时目录管理,以及可拨动时间的 MutableClock。
+ */
 final class TestSupport {
+    /** 固定基准时间,保证用例可复现。 */
     static final Instant BASE = Instant.parse("2026-07-13T09:00:00Z");
     private static final AtomicInteger ASSERTIONS = new AtomicInteger();
 
     private TestSupport() {
     }
 
+    /** 构造一个默认属性(时间随序号递增)的审计事件。 */
     static AuditEvent event(String tenant, String subject, long sequence) {
         return event(tenant, subject, sequence, BASE.plusMillis(sequence), Severity.INFO, null, null, Map.of());
     }
 
+    /** 构造完整字段可控的审计事件(事件 ID 由身份字符串确定性派生)。 */
     static AuditEvent event(
             String tenant,
             String subject,
@@ -55,6 +62,7 @@ final class TestSupport {
                 attributes);
     }
 
+    /** 构造带显式身份的事件,便于测试去重与排序。 */
     static AuditEvent eventWithId(String identity, String tenant, String subject, long sequence) {
         return new AuditEvent(
                 UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8)),
@@ -70,6 +78,7 @@ final class TestSupport {
                 Map.of("identity", identity, "desk", "synthetic"));
     }
 
+    /** 构造含 count 个事件的批次(跨租户/账户轮转)。 */
     static AuditBatch batch(long number, int count) {
         List<AuditEvent> events = new ArrayList<>();
         for (int index = 0; index < count; index++) {
@@ -87,10 +96,12 @@ final class TestSupport {
         return new AuditBatch(number, BASE.plusSeconds(number), events);
     }
 
+    /** 用显式事件集合构造批次。 */
     static AuditBatch batch(long number, Collection<AuditEvent> events) {
         return new AuditBatch(number, BASE.plusSeconds(number), events);
     }
 
+    /** 生成 count 个填充属性(用于撑大批次触发阈值/轮转)。 */
     static Map<String, String> attributes(int count, int valueLength) {
         Map<String, String> values = new LinkedHashMap<>();
         for (int index = 0; index < count; index++) {
@@ -100,10 +111,12 @@ final class TestSupport {
         return values;
     }
 
+    /** 创建带唯一前缀的临时目录。 */
     static Path temporaryDirectory(String name) throws IOException {
         return Files.createTempDirectory("durable-audit-" + name + "-");
     }
 
+    /** 递归删除目录树(子优先),聚合多个删除失败。 */
     static void deleteTree(Path root) throws IOException {
         if (root == null || !Files.exists(root)) {
             return;
@@ -128,6 +141,7 @@ final class TestSupport {
         }
     }
 
+    /** 断言计数(计入本类总断言)并校验条件。 */
     static void check(boolean condition, String message) {
         ASSERTIONS.incrementAndGet();
         if (!condition) {
@@ -135,6 +149,7 @@ final class TestSupport {
         }
     }
 
+    /** 断言值相等(计入总断言数)。 */
     static void equal(Object expected, Object actual, String message) {
         ASSERTIONS.incrementAndGet();
         if (!java.util.Objects.equals(expected, actual)) {
@@ -142,6 +157,7 @@ final class TestSupport {
         }
     }
 
+    /** 断言字节数组相等。 */
     static void arrayEqual(byte[] expected, byte[] actual, String message) {
         ASSERTIONS.incrementAndGet();
         if (!java.util.Arrays.equals(expected, actual)) {
@@ -149,6 +165,7 @@ final class TestSupport {
         }
     }
 
+    /** 断言操作抛出指定类型异常并返回它。 */
     static <T extends Throwable> T expectThrows(Class<T> type, ThrowingRunnable operation, String message) {
         ASSERTIONS.incrementAndGet();
         try {
@@ -162,6 +179,7 @@ final class TestSupport {
         throw new AssertionError(message + " expected " + type.getSimpleName());
     }
 
+    /** 轮询等待条件在超时前成立(用于异步场景)。 */
     static void eventually(Duration timeout, CheckedCondition condition, String message) throws Exception {
         Instant deadline = Instant.now().plus(timeout);
         Throwable recent = null;
@@ -183,6 +201,7 @@ final class TestSupport {
         throw error;
     }
 
+    /** 返回累计断言数(供套件统计增量)。 */
     static int assertions() {
         return ASSERTIONS.get();
     }
@@ -198,6 +217,9 @@ final class TestSupport {
     }
 }
 
+/**
+ * 可手动拨动时间的时钟:测试通过 advance/set 控制「当前时刻」。
+ */
 final class MutableClock extends Clock {
     private Instant current;
     private final ZoneId zone;
@@ -235,6 +257,9 @@ final class MutableClock extends Clock {
     }
 }
 
+/**
+ * 记录型写入器替身:记录写入的批次/恢复集/调用次数,不真正落盘。
+ */
 class RecordingWriter implements BatchWriter {
     final List<AuditBatch> batches = new ArrayList<>();
     final List<AuditBatch> recovered = new ArrayList<>();
@@ -279,6 +304,10 @@ class RecordingWriter implements BatchWriter {
     }
 }
 
+/**
+ * 可编程失败写入器:前 N 次 write 失败(或按开关让 sync/close 失败),
+ * 用于测试重试与故障聚合。
+ */
 final class FailingWriter extends RecordingWriter {
     private final AtomicInteger failuresRemaining;
     private final boolean failSync;
@@ -321,6 +350,9 @@ final class FailingWriter extends RecordingWriter {
     }
 }
 
+/**
+ * 阻塞写入器:write 时等待 release 信号,用于构造并发/超时场景。
+ */
 final class BlockingWriter extends RecordingWriter {
     final CountDownLatch entered = new CountDownLatch(1);
     final CountDownLatch release = new CountDownLatch(1);

@@ -18,20 +18,29 @@ use crate::scheduler::{RetryScheduler, SchedulerCommand, SchedulerOutcome};
 use crate::segment::SegmentFile;
 use crate::telemetry::{RuntimeTelemetry, TelemetryEvent};
 
+/// 引擎命令:所有对引擎的操作都通过该枚举以单命令方式提交。
 pub enum EngineCommand {
+    /// 追加记录(经累积器缓冲后落盘)。
     Append {
         records: Vec<JournalRecord>,
     },
+    /// 主动触发一次刷盘(定时器用)。
     FlushDue,
+    /// 推进重试调度器。
     Retry(SchedulerCommand),
+    /// 维护扫描:校验/修复段、规划压缩、评估保留。
     Maintain {
         repair: bool,
+        /// 磁盘压力千分比,影响保留策略。
         disk_pressure_per_mille: u16,
     },
+    /// 采集运行时快照。
     Snapshot,
+    /// 优雅停机:排空缓冲、提交检查点。
     Shutdown,
 }
 
+/// 引擎命令的执行结果。
 pub enum EngineOutcome {
     Append {
         accepted: usize,
@@ -47,12 +56,17 @@ pub enum EngineOutcome {
     },
 }
 
+/// 日志引擎:整合累积器、段文件、恢复、压缩、保留、检查点、重试调度与遥测。
+///
+/// 所有入口都通过 [`execute`](Self::execute) 单线程化地(或按命令类型加锁地)执行,
+/// 便于上层用消息循环驱动;同一时刻只有一个活跃段,写满后自动轮换。
 pub struct JournalEngine {
     directory: PathBuf,
     durability: Durability,
     maximum_segment_bytes: u64,
     codec: JournalCodec,
     accumulator: JournalAccumulator,
+    /// 当前活跃段(写满后轮换)。
     active_segment: Mutex<Arc<SegmentFile>>,
     next_segment_id: AtomicU64,
     recovery: RecoveryScanner,
@@ -64,6 +78,10 @@ pub struct JournalEngine {
 }
 
 impl JournalEngine {
+    /// 打开(或创建)位于 `directory` 的日志引擎。
+    ///
+    /// 启动时先扫描目录恢复段状态:优先续用现有 Active 段;
+    /// 若无,则尝试续用接近满载的 Sealed 段(节省新段),否则创建新段。
     pub fn open(
         directory: impl AsRef<Path>,
         durability: Durability,
@@ -92,11 +110,13 @@ impl JournalEngine {
             accept_generation: 0..=64,
         };
         let (descriptors, diagnostics) = recovery.scan(&directory, true)?;
+        // 优先挑选最年轻的 Active 段续写。
         let mut active_descriptor = descriptors
             .iter()
             .filter(|descriptor| descriptor.state == SegmentState::Active)
             .max_by_key(|descriptor| descriptor.segment_id);
         if active_descriptor.is_none() {
+            // 无 Active 段时,若某 Sealed 段还有足够空间则复用它。
             active_descriptor = descriptors
                 .iter()
                 .filter(|descriptor| {
@@ -118,6 +138,7 @@ impl JournalEngine {
                 descriptor.path.clone(),
             ),
             _ => {
+                // 全新段:id 在现有最大基础上 +1。
                 let id = highest_id
                     .checked_add(1)
                     .ok_or_else(|| "journal segment id space is exhausted".to_owned())?;
@@ -226,6 +247,7 @@ impl JournalEngine {
         })
     }
 
+    /// 执行一条引擎命令。
     pub fn execute(&self, command: EngineCommand) -> Result<EngineOutcome, String> {
         match command {
             EngineCommand::Append { records } => {
@@ -236,6 +258,7 @@ impl JournalEngine {
                     });
                 }
                 {
+                    // 先记录接受事件,再进入累积器。
                     let mut telemetry = self
                         .telemetry
                         .lock()
@@ -277,6 +300,7 @@ impl JournalEngine {
                             durable,
                         })
                     }
+                    // 活跃段写满:轮换新段后重试排空。
                     Err(error) if error.contains("beyond maximum") => {
                         let next_id = self.next_segment_id.fetch_add(1, Ordering::SeqCst);
                         if next_id == u64::MAX {
@@ -371,6 +395,7 @@ impl JournalEngine {
                 disk_pressure_per_mille,
             } => {
                 let started_at = SystemTime::now();
+                // 1. 扫描/修复段 → 2. 规划压缩 → 3. 加载检查点 → 4. 评估保留。
                 let (descriptors, mut scan_diagnostics) =
                     self.recovery.scan(&self.directory, repair)?;
                 let plans = self.compaction.plan(&descriptors, started_at)?;
@@ -394,6 +419,7 @@ impl JournalEngine {
                 let mut retained = 0usize;
                 let mut delete_candidates = 0usize;
                 let mut bytes_reclaimed = 0u64;
+                // 把扫描诊断按严重性分流到警告/动作。
                 for diagnostic in scan_diagnostics.drain(..) {
                     if diagnostic.contains("failed") || diagnostic.contains("corrupt") {
                         warnings.push(diagnostic);
@@ -401,6 +427,7 @@ impl JournalEngine {
                         actions.push(diagnostic);
                     }
                 }
+                // 汇总压缩规划为可读动作/警告(本实现只报告,不实际执行压缩)。
                 for plan in &plans {
                     match plan.action {
                         CompactionAction::Quarantine => {
@@ -433,6 +460,7 @@ impl JournalEngine {
                         CompactionAction::DropExpired => {}
                     }
                 }
+                // 汇总保留决策。
                 for (segment_id, decision, reason) in decisions {
                     match decision {
                         RetentionDecision::Delete => {
@@ -467,6 +495,7 @@ impl JournalEngine {
                             state: descriptor.state,
                             physical_bytes: descriptor.physical_bytes,
                         });
+                    // 被取代段占用的空间视为潜在回收量。
                     if descriptor.state == SegmentState::Superseded {
                         bytes_reclaimed = bytes_reclaimed.saturating_add(
                             descriptor
@@ -540,6 +569,7 @@ impl JournalEngine {
                     .lock()
                     .map_err(|_| "active segment lock is poisoned".to_owned())?
                     .clone();
+                // 1. 关闭模式排空缓冲 → 2. 检查活跃段完整性 → 3. 合并账户位置并提交检查点。
                 let durable = self.accumulator.drain(&[], true, active.as_ref())?;
                 let (descriptor, diagnostics) = active.inspect_and_repair(false)?;
                 if !diagnostics.is_empty() {
@@ -563,6 +593,7 @@ impl JournalEngine {
                     CheckpointOutcome::Missing => (Some(0), BTreeMap::new()),
                     _ => (None, BTreeMap::new()),
                 };
+                // 把活跃段的账户序列范围并入检查点位置(只前进不回退)。
                 for (account, range) in &descriptor.account_ranges {
                     positions
                         .entry(account.clone())

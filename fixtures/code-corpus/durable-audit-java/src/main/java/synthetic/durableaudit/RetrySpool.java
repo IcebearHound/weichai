@@ -23,6 +23,13 @@ import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.locks.ReentrantLock;
 
+/**
+ * 重试队列(磁盘持久化):失败的审计批次被登记为重试票,按退避策略(指数退避 + 抖动)
+ * 到期后重新投递;每张票落盘,进程重启后可从磁盘恢复。
+ *
+ * <p>租约(lease)机制防止同一票被多个消费者同时处理;超过最大尝试次数后
+ * 转入死信文件(.dead)并移出队列。
+ */
 public final class RetrySpool {
     private final Path directory;
     private final Clock clock;
@@ -30,7 +37,9 @@ public final class RetrySpool {
     private final Duration maximumDelay;
     private final int maximumAttempts;
     private final ReentrantLock lock = new ReentrantLock();
+    // 按 到期时间/票ID 排序的索引,便于快速取到期票
     private final TreeMap<RetryKey, RetryTicket> due = new TreeMap<>();
+    // 票ID -> 票(内存主表)
     private final Map<UUID, RetryTicket> tickets = new LinkedHashMap<>();
 
     public RetrySpool(
@@ -57,6 +66,9 @@ public final class RetrySpool {
         loadFromDisk();
     }
 
+    /**
+     * 登记一次失败:同一批次号只保留一张票(幂等),票先落盘再入内存索引。
+     */
     public RetryTicket offer(AuditBatch batch, Throwable failure) throws IOException {
         Objects.requireNonNull(batch, "batch");
         Objects.requireNonNull(failure, "failure");
@@ -88,6 +100,10 @@ public final class RetrySpool {
         }
     }
 
+    /**
+     * 取出到期且未出租的票(最多 limit 张),并把它们标记为已出租。
+     * 出租状态持久化,防止崩溃后重复投递。
+     */
     public List<RetryTicket> pollDue(int limit) {
         if (limit <= 0) {
             throw new IllegalArgumentException("limit must be positive");
@@ -113,6 +129,7 @@ public final class RetrySpool {
         }
     }
 
+    /** 确认票已成功处理:从队列与磁盘删除。 */
     public void acknowledge(UUID ticketId) throws IOException {
         Objects.requireNonNull(ticketId, "ticketId");
         lock.lock();
@@ -128,6 +145,10 @@ public final class RetrySpool {
         }
     }
 
+    /**
+     * 拒绝票(处理失败):重试次数未达上限则按退避重排下次到期;
+     * 已达上限则转入死信文件。返回更新后的票(达上限时为 empty)。
+     */
     public Optional<RetryTicket> reject(UUID ticketId, Throwable failure) throws IOException {
         Objects.requireNonNull(ticketId, "ticketId");
         Objects.requireNonNull(failure, "failure");
@@ -163,6 +184,7 @@ public final class RetrySpool {
         }
     }
 
+    /** 当前队列中的票数。 */
     int size() {
         lock.lock();
         try {
@@ -172,6 +194,7 @@ public final class RetrySpool {
         }
     }
 
+    /** 按失败类型统计的票数分布。 */
     Map<String, Integer> failureTypes() {
         lock.lock();
         try {
@@ -185,6 +208,7 @@ public final class RetrySpool {
         }
     }
 
+    /** 队列中最老票的年龄(从未有票时返回 0)。 */
     Duration oldestAge() {
         lock.lock();
         try {
@@ -199,6 +223,7 @@ public final class RetrySpool {
         }
     }
 
+    /** 启动时从磁盘加载全部 .retry 票文件;格式损坏的票隔离到 .invalid 文件。 */
     void loadFromDisk() throws IOException {
         try (var paths = Files.list(directory)) {
             List<Path> ticketFiles = paths
@@ -219,6 +244,7 @@ public final class RetrySpool {
         }
     }
 
+    /** 入队:写入主表与到期索引(已有同票时先移除旧索引)。 */
     void insert(RetryTicket ticket) {
         RetryTicket previous = tickets.put(ticket.ticketId(), ticket);
         if (previous != null) {
@@ -227,12 +253,14 @@ public final class RetrySpool {
         due.put(new RetryKey(ticket.nextAttemptAt(), ticket.ticketId()), ticket);
     }
 
+    /** 替换票:同步更新主表与到期索引中的键。 */
     void replace(RetryTicket previous, RetryTicket replacement) {
         due.remove(new RetryKey(previous.nextAttemptAt(), previous.ticketId()));
         tickets.put(replacement.ticketId(), replacement);
         due.put(new RetryKey(replacement.nextAttemptAt(), replacement.ticketId()), replacement);
     }
 
+    /** 落盘:先写临时文件再原子移动,避免写一半的票文件。 */
     void persist(RetryTicket ticket) throws IOException {
         Path temporary = directory.resolve(ticket.ticketId() + ".tmp");
         Path destination = ticketPath(ticket.ticketId());
@@ -251,6 +279,7 @@ public final class RetrySpool {
         }
     }
 
+    /** 编码为行式文本(事件字段 Base64),供磁盘持久化。 */
     List<String> encode(RetryTicket ticket) {
         List<String> lines = new ArrayList<>();
         lines.add("ticket=" + ticket.ticketId());
@@ -268,6 +297,7 @@ public final class RetrySpool {
         return lines;
     }
 
+    /** 从行式文本还原票对象;字段缺失/计数不一致即报错。 */
     RetryTicket decode(List<String> lines) {
         Map<String, List<String>> fields = new LinkedHashMap<>();
         for (String line : lines) {
@@ -307,6 +337,7 @@ public final class RetrySpool {
                 false);
     }
 
+    /** 解析事件编码字段(与 AuditEvent.encodeFields 的转义格式对应)。 */
     AuditEvent parseEventFields(String encoded) {
         List<String> values = splitEscaped(encoded);
         if (values.size() < 11) {
@@ -336,6 +367,7 @@ public final class RetrySpool {
                 attributes);
     }
 
+    /** 按反斜杠转义规则拆分 | 分隔的字段。 */
     static List<String> splitEscaped(String encoded) {
         List<String> fields = new ArrayList<>();
         StringBuilder current = new StringBuilder();
@@ -360,6 +392,7 @@ public final class RetrySpool {
         return fields;
     }
 
+    /** 已达最大尝试次数:把票连同最终失败信息写入 .dead 死信文件。 */
     void moveToDeadLetter(RetryTicket ticket, Throwable failure, int attempts) throws IOException {
         Path dead = directory.resolve(ticket.ticketId() + ".dead");
         List<String> lines = new ArrayList<>(encode(ticket));
@@ -370,6 +403,10 @@ public final class RetrySpool {
         Files.write(dead, lines, StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
     }
 
+    /**
+     * 指数退避:延迟 = min(初始延迟 * 2^attempts, 上限) + 基于票 ID 的确定性抖动。
+     * 溢出时取上限;结果不小于初始延迟。
+     */
     Duration backoff(int attempts, UUID ticketId) {
         long multiplier = 1L << Math.min(30, attempts);
         long baseNanos;
@@ -389,6 +426,7 @@ public final class RetrySpool {
         return directory.resolve(ticketId + ".retry");
     }
 
+    /** 把失败消息压成单行并限长 512(防止写坏行式文件)。 */
     static String sanitizeMessage(String message) {
         if (message == null) {
             return "";

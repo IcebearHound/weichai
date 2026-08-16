@@ -2,12 +2,15 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::domain::RetryClass;
 
+/// 重试票据:调度器中的等待中或已租出的条目。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RetryTicket {
+    /// 等待到期:到 `ready_at_ms` 后才可被调度。
     Waiting {
         identity: String,
         account: String,
         class: RetryClass,
+        /// 已尝试次数(下次执行时的尝试号)。
         attempt: u32,
         submitted_at_ms: u64,
         ready_at_ms: u64,
@@ -15,6 +18,7 @@ pub enum RetryTicket {
         payload: Vec<u8>,
         last_error: String,
     },
+    /// 已租出:被某个消费者领走执行,`lease_until_ms` 前需归还。
     Leased {
         identity: String,
         account: String,
@@ -28,7 +32,9 @@ pub enum RetryTicket {
     },
 }
 
+/// 调度器命令。
 pub enum SchedulerCommand {
+    /// 登记(或重排)一条重试。
     Schedule {
         now_ms: u64,
         identity: String,
@@ -40,38 +46,48 @@ pub enum SchedulerCommand {
         payload: Vec<u8>,
         last_error: String,
     },
+    /// 提取到期任务(最多 `capacity` 条,每账户最多 `maximum_per_account` 条),租出 `lease_ms`。
     Poll {
         now_ms: u64,
         capacity: usize,
         maximum_per_account: usize,
         lease_ms: u64,
     },
+    /// 完成一条重试(成功,移除条目)。
     Complete {
         identity: String,
     },
+    /// 归还一条租出任务用于再次重试(失败)。
     Release {
         now_ms: u64,
         identity: String,
         class: RetryClass,
         error: String,
     },
+    /// 取消一条重试。
     Cancel {
         identity: String,
     },
+    /// 回收过期条目(租约超时/等待超时)。
     ReclaimExpired {
         now_ms: u64,
     },
+    /// 查看调度器快照。
     Inspect,
 }
 
+/// 调度器命令的结果。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SchedulerOutcome {
     Scheduled {
         identity: String,
         ready_at_ms: u64,
+        /// 是否覆盖了同 identity 的旧条目。
         replaced: bool,
     },
+    /// Poll 返回的租出任务列表。
     Dispatch(Vec<RetryTicket>),
+    /// Complete/Cancel 是否真移除了条目。
     Completed(bool),
     Released {
         identity: String,
@@ -89,19 +105,29 @@ pub enum SchedulerOutcome {
     },
 }
 
+/// 重试调度器:基于时间线(BTreeMap<就绪时刻, 身份集合>)的延迟执行队列。
+///
+/// 要点:
+/// - 退避 = 类别基数 × 2^attempt,叠加确定性 jitter,并受最小/最大延迟约束;
+/// - Poll 公平分配:每账户最多取 `maximum_per_account` 条,超出部分延迟到下轮;
+/// - 租约机制:取出即标记 Leased,消费者需在期限内 Complete/Release/Reclaim。
 pub struct RetryScheduler {
     pub maximum_entries: usize,
     pub maximum_payload_bytes: usize,
     pub minimum_delay_ms: u64,
     pub maximum_delay_ms: u64,
+    /// 身份 → 票据。
     pub entries: BTreeMap<String, RetryTicket>,
+    /// 就绪时刻 → 身份集合(到期索引)。
     pub timeline: BTreeMap<u64, BTreeSet<String>>,
+    /// 账户 → 该账户在队列中的任务数(用于公平限制)。
     pub account_depth: BTreeMap<String, usize>,
     pub recent_events: VecDeque<String>,
     pub event_capacity: usize,
 }
 
 impl RetryScheduler {
+    /// 执行一条调度器命令。
     pub fn advance(&mut self, command: SchedulerCommand) -> Result<SchedulerOutcome, String> {
         if self.maximum_entries == 0 {
             return Err("retry scheduler maximum entries must be greater than zero".to_owned());
@@ -156,6 +182,7 @@ impl RetryScheduler {
                         self.entries.len()
                     ));
                 }
+                // 指数退避:类别基数 × 2^attempt,指数封顶 20 防溢出。
                 let exponent = attempt.min(20);
                 let base = match class {
                     RetryClass::Immediate => 0,
@@ -171,7 +198,9 @@ impl RetryScheduler {
                 let requested = requested_delay_ms
                     .max(self.minimum_delay_ms)
                     .min(self.maximum_delay_ms);
+                // 最终延迟取指数退避与显式请求的较大者,再钳制到上下限。
                 let nominal = exponential.max(requested).min(self.maximum_delay_ms);
+                // 用身份/账户/尝试次数派生确定性 jitter(±20%),保证可复现。
                 let mut hash = 0xcbf29ce484222325u64;
                 for byte in identity.as_bytes().iter().chain(account.as_bytes()) {
                     hash ^= *byte as u64;
@@ -201,6 +230,7 @@ impl RetryScheduler {
                         deadline_ms.unwrap_or(ready_at_ms)
                     ));
                 }
+                // 覆盖旧条目时,清理其时间线与账户深度记账。
                 let replacement = self.entries.remove(&identity);
                 if let Some(previous) = &replacement {
                     let (previous_account, previous_ready) = match previous {
@@ -270,6 +300,7 @@ impl RetryScheduler {
                 if lease_ms == 0 {
                     return Err("retry lease duration must be greater than zero".to_owned());
                 }
+                // 收集所有已到期的身份(按时间线顺序)。
                 let due_times = self
                     .timeline
                     .range(..=now_ms)
@@ -290,6 +321,7 @@ impl RetryScheduler {
                     let ticket = match self.entries.remove(&identity) {
                         Some(ticket @ RetryTicket::Waiting { .. }) => ticket,
                         Some(ticket @ RetryTicket::Leased { .. }) => {
+                            // 已租出(理论上时间线里不会出现),原样放回。
                             self.entries.insert(identity, ticket);
                             continue;
                         }
@@ -329,6 +361,7 @@ impl RetryScheduler {
                             unreachable!("leased tickets were returned above")
                         }
                     };
+                    // 超过截止时间的任务直接丢弃(不再重试)。
                     if deadline_ms.is_some_and(|deadline| deadline <= now_ms) {
                         if let Some(depth) = self.account_depth.get_mut(&account) {
                             *depth = depth.saturating_sub(1);
@@ -340,6 +373,7 @@ impl RetryScheduler {
                             .push_back(format!("expired {ticket_identity} for account {account}"));
                         continue;
                     }
+                    // 容量或每账户限额不足:推迟到下一轮(原就绪时刻)。
                     let account_selected = *per_account.get(&account).unwrap_or(&0usize);
                     if selected.len() >= capacity || account_selected >= maximum_per_account {
                         deferred.push((
@@ -361,6 +395,7 @@ impl RetryScheduler {
                     let lease_until_ms = now_ms
                         .checked_add(lease_ms)
                         .ok_or_else(|| "retry lease time overflowed".to_owned())?;
+                    // 租出:转为 Leased 重新入 entries,交给消费者。
                     let leased = RetryTicket::Leased {
                         identity: ticket_identity.clone(),
                         account: account.clone(),
@@ -379,6 +414,7 @@ impl RetryScheduler {
                     ));
                     selected.push(leased);
                 }
+                // 被推迟的任务重新进入时间线与 entries。
                 for (ready, ticket) in deferred {
                     let identity = match &ticket {
                         RetryTicket::Waiting { identity, .. } => identity.clone(),
@@ -395,6 +431,7 @@ impl RetryScheduler {
             SchedulerCommand::Complete { identity } => {
                 let removed = self.entries.remove(&identity);
                 if let Some(ticket) = &removed {
+                    // 清理时间线(Waiting)与账户深度记账。
                     let account = match ticket {
                         RetryTicket::Waiting {
                             account,
@@ -441,6 +478,7 @@ impl RetryScheduler {
                         ..
                     } => (account, attempt.saturating_add(1), deadline_ms, payload),
                     waiting @ RetryTicket::Waiting { .. } => {
+                        // 只能释放已租出的任务。
                         let ready_at_ms = match &waiting {
                             RetryTicket::Waiting { ready_at_ms, .. } => *ready_at_ms,
                             RetryTicket::Leased { .. } => unreachable!("matched waiting retry"),
@@ -453,6 +491,7 @@ impl RetryScheduler {
                         return Err(format!("retry {identity} is waiting, not leased"));
                     }
                 };
+                // 再次退避:类别基数(释放用更大基数)× 2^attempt。
                 let base = match class {
                     RetryClass::Immediate => self.minimum_delay_ms,
                     RetryClass::Transient => 50,
@@ -460,6 +499,7 @@ impl RetryScheduler {
                     RetryClass::ProviderUnavailable => 500,
                     RetryClass::StorageBusy => 1_000,
                     RetryClass::Permanent => {
+                        // 永久失败:从队列中移除并报错。
                         if let Some(depth) = self.account_depth.get_mut(&account) {
                             *depth = depth.saturating_sub(1);
                         }
@@ -536,6 +576,7 @@ impl RetryScheduler {
                 Ok(SchedulerOutcome::Cancelled(removed.is_some()))
             }
             SchedulerCommand::ReclaimExpired { now_ms } => {
+                // 回收两类过期条目:租约超时、等待超截止时间。
                 let expired = self
                     .entries
                     .iter()
@@ -565,6 +606,7 @@ impl RetryScheduler {
                             last_error,
                             ..
                         } => {
+                            // 租约超时:若未过截止时间则重新排队(最小延迟),否则丢弃。
                             if deadline_ms.is_some_and(|deadline| deadline <= now_ms) {
                                 if let Some(depth) = self.account_depth.get_mut(&account) {
                                     *depth = depth.saturating_sub(1);
@@ -600,6 +642,7 @@ impl RetryScheduler {
                             ready_at_ms,
                             ..
                         } => {
+                            // 等待中已过截止时间:移除并清理记账。
                             if let Some(identities) = self.timeline.get_mut(&ready_at_ms) {
                                 identities.remove(&identity);
                                 if identities.is_empty() {
@@ -622,6 +665,7 @@ impl RetryScheduler {
                 Ok(SchedulerOutcome::Reclaimed(reclaimed))
             }
             SchedulerCommand::Inspect => {
+                // 汇总等待/租出数量、按账户与按类别分布。
                 let mut waiting = 0usize;
                 let mut leased = 0usize;
                 let mut by_class = BTreeMap::new();

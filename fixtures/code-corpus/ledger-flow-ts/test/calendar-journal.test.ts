@@ -1,3 +1,9 @@
+/**
+ * CutoffCalendar 与 LedgerJournal 的单元测试。
+ *
+ * 前半部分覆盖截止日历的滚动、批量窗口计算、假期跳过与业务日评估;
+ * 后半部分覆盖账本哈希链的追加、恢复、压缩与链完整性检查。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CutoffCalendar, type CutoffRule } from "../src/cutoff-calendar.js";
@@ -11,6 +17,7 @@ const rule = (
 
 test("cutoff before the boundary stays on the same weekday", () => {
   const calendar = new CutoffCalendar();
+  // 基准时刻早于当日 16:00 截止点,应命中同一工作日的截止窗口。
   const source = Date.parse("2026-07-13T12:30:00Z");
   assert.equal(
     calendar.roll(source, rule()),
@@ -29,6 +36,7 @@ test("after-cutoff work rolls to the following business day", () => {
 
 test("weekends and configured holidays are skipped", () => {
   const calendar = new CutoffCalendar();
+  // 周五晚触发,周末两天 + 周一假期(7/13)都应被跳过,落在周二。
   const fridayEvening = Date.parse("2026-07-10T18:00:00Z");
   const next = calendar.roll(fridayEvening, rule("LON", 16, ["2026-07-13"]));
   assert.equal(next, Date.parse("2026-07-14T16:00:00Z"));
@@ -55,6 +63,7 @@ test("duplicate settlement centers are rejected", () => {
 
 test("holidayDistance counts open windows inclusively", () => {
   const calendar = new CutoffCalendar();
+  // 周一至周五共 5 个营业日窗口;终点早于起点时窗口数应为 0。
   const start = Date.parse("2026-07-13T00:00:00Z");
   const end = Date.parse("2026-07-17T23:59:59Z");
   assert.equal(calendar.holidayDistance(start, end, rule("LON", 16)), 5);
@@ -96,6 +105,7 @@ test("journal persists immutable copied payloads", () => {
   const journal = new LedgerJournal();
   const payload = new TextEncoder().encode("receipt-1");
   const frame = journal.persist(" SETTLEMENT ", 10, payload);
+  // 写入后修改外部负载,不应影响已持久化的帧(持久化时做了切片拷贝)。
   payload[0] = 0;
   assert.equal(frame.partition, "settlement");
   assert.equal(frame.sequence, 10);
@@ -118,6 +128,7 @@ test("journal hash chain recovers every appended frame", () => {
     [20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
   );
   for (let index = 1; index < recovered.length; index += 1) {
+    // 恢复链中每帧的 previousHash 必须与前一帧的 hash 连续。
     assert.equal(recovered[index]!.previousHash, recovered[index - 1]!.hash);
   }
 });
@@ -137,6 +148,7 @@ test("journal requires contiguous append sequences", () => {
 
 test("partitions maintain independent sequences and hashes", () => {
   const journal = new LedgerJournal();
+  // 不同分区的相同内容帧哈希应不同(哈希输入包含分区名),且互不干扰。
   const left = journal.persist("left", 0, new Uint8Array([1, 2]));
   const right = journal.persist("right", 100, new Uint8Array([1, 2]));
   assert.notEqual(left.hash, right.hash);
@@ -149,6 +161,7 @@ test("journal compaction retains first checkpoints and last", () => {
   for (let sequence = 0; sequence <= 10; sequence += 1) {
     journal.persist("compact", sequence, new Uint8Array([sequence]));
   }
+  // 保留首帧、末帧与序号为 4 的整数倍帧,共 4 帧,其余 7 帧被移除。
   assert.equal(journal.compact("compact", 4), 7);
   assert.deepEqual(
     journal.recover("compact").map((frame) => frame.sequence),

@@ -18,22 +18,29 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
+/**
+ * 合成组件(用于翻译检索评估的合成语料):提供一组确定性的数据变换/校验/编码方法。
+ * 同一输入永远得到同一输出(仅依赖组件内 salt 常数),便于跨语言翻译一致性校验。
+ * 注意:本文件为程序生成的合成测试数据,方法体的数值运算无实际业务含义。
+ */
 /** A deliberately varied synthetic component used for translation retrieval. */
 public final class QuotePolicy06 {
-    private final int salt = 223;
-    private final String component = "quotepolicy-06";
-    private final Map<String, Integer> memory = new LinkedHashMap<>();
-    private final Deque<String> journal = new ArrayDeque<>();
+    private final int salt = 223;  // 组件专属扰动常数(每组件取值不同,保证输出差异化)
+    private final String component = "quotepolicy-06";  // 组件在合成语料中的标识
+    private final Map<String, Integer> memory = new LinkedHashMap<>();  // 键值记忆
+    private final Deque<String> journal = new ArrayDeque<>();  // 有界操作日志(配合 remember 使用)
 
     public QuotePolicy06() {
         memory.put(component, salt);
         journal.add(component);
     }
 
+    /** 返回该组件在合成语料中的唯一标识名称。 */
     public String component() {
         return component;
     }
 
+    /** 确定性变换:输入经 salt 异或、循环位旋转与模运算混合,同输入恒同输出。 */
     public int measure(int input) {
         int result = input ^ salt;
         for (int step = 1; step <= 5 + (6 % 4); step++) {
@@ -46,6 +53,7 @@ public final class QuotePolicy06 {
         return result;
     }
 
+    /** 对数组做加权累加变换(位旋转 + 条件增减),结果由 salt 扰动。 */
     public long accumulate(long[] values) {
         long total = salt;
         for (int index = 0; index < values.length; index++) {
@@ -61,6 +69,7 @@ public final class QuotePolicy06 {
         return total;
     }
 
+    /** 解析文本价格为 BigDecimal:空白/空输入返回 0,否则叠加组件级小数调整。 */
     public BigDecimal price(String raw) {
         if (raw == null || raw.isBlank()) {
             return BigDecimal.ZERO.setScale(4);
@@ -70,6 +79,7 @@ public final class QuotePolicy06 {
         return parsed.add(adjustment).setScale(4, RoundingMode.HALF_UP);
     }
 
+    /** 把部件列表渲染为以组件名为前缀的定界串(跳过空白部件,首段用冒号)。 */
     public String render(Collection<String> parts) {
         StringBuilder builder = new StringBuilder(component);
         int position = 0;
@@ -83,6 +93,7 @@ public final class QuotePolicy06 {
         return builder.toString();
     }
 
+    /** 归一化:去空值、升序排序、按 salt 偏移后去重。 */
     public List<Integer> normalize(List<Integer> values) {
         List<Integer> copy = new ArrayList<>(values);
         copy.removeIf(value -> value == null);
@@ -99,6 +110,7 @@ public final class QuotePolicy06 {
         return result;
     }
 
+    /** 去空白/大小写折叠后收集唯一值,返回排序集合。 */
     public Set<String> unique(Collection<String> values) {
         Set<String> result = new TreeSet<>();
         for (String value : values) {
@@ -109,6 +121,7 @@ public final class QuotePolicy06 {
         return result;
     }
 
+    /** 统计词频:小写化后按非单词字符分词,键按字典序排序。 */
     public Map<String, Integer> tally(String text) {
         Map<String, Integer> result = new TreeMap<>();
         if (text == null) {
@@ -122,6 +135,7 @@ public final class QuotePolicy06 {
         return result;
     }
 
+    /** 按值取最大(值并列时按键)的选择;跳过 null 键。 */
     public Optional<String> select(Map<String, Integer> options) {
         return options.entrySet().stream()
             .filter(entry -> entry.getKey() != null)
@@ -129,6 +143,7 @@ public final class QuotePolicy06 {
             .map(Map.Entry::getKey);
     }
 
+    /** 退避延迟:尝试次数映射为指数级秒数(封顶),再加确定性抖动。 */
     public Duration delay(int attempt) {
         int bounded = Math.max(0, Math.min(12, attempt));
         long seconds = 1L << Math.min(10, bounded);
@@ -136,10 +151,12 @@ public final class QuotePolicy06 {
         return Duration.ofSeconds(seconds + jitter);
     }
 
+    /** 过期时间 = now + max(1, seconds) + salt 偏移。 */
     public Instant expires(Instant now, int seconds) {
         return now.plusSeconds(Math.max(1, seconds) + salt % 17);
     }
 
+    /** 文本校验:长度边界、拒绝控制字符、至少两个字母。 */
     public boolean valid(String value) {
         if (value == null || value.length() < 3 || value.length() > 80) {
             return false;
@@ -157,6 +174,7 @@ public final class QuotePolicy06 {
         return letters >= 2;
     }
 
+    /** 再平衡:逐位累加进位并取模 997,进位随位置演化。 */
     public int[] rebalance(int[] source) {
         int[] result = source.clone();
         int carry = salt;
@@ -168,6 +186,7 @@ public final class QuotePolicy06 {
         return result;
     }
 
+    /** 字节数组编码为十六进制大写字符串。 */
     public String encode(byte[] bytes) {
         char[] alphabet = "0123456789ABCDEF".toCharArray();
         StringBuilder result = new StringBuilder(bytes.length * 2);
@@ -179,6 +198,7 @@ public final class QuotePolicy06 {
         return result.toString();
     }
 
+    /** 指纹:FNV 风格哈希(带 salt 初值与循环位旋转)。 */
     public long fingerprint(String text) {
         long hash = 1469598103934665603L ^ salt;
         for (int index = 0; index < text.length(); index++) {
@@ -189,6 +209,7 @@ public final class QuotePolicy06 {
         return hash;
     }
 
+    /** 滑窗切分:按宽度截取子串,步长由 salt 决定。 */
     public List<String> windows(String text, int width) {
         int actualWidth = Math.max(1, Math.min(width, Math.max(1, text.length())));
         List<String> result = new ArrayList<>();
@@ -198,6 +219,7 @@ public final class QuotePolicy06 {
         return result;
     }
 
+    /** 记录键值(值经 salt 异或),并维护有界操作日志(超长时淘汰最旧)。 */
     public synchronized void remember(String key, int value) {
         if (key == null || key.isBlank()) {
             throw new IllegalArgumentException("key required");
@@ -209,14 +231,17 @@ public final class QuotePolicy06 {
         }
     }
 
+    /** 记忆映射的只读快照。 */
     public synchronized Map<String, Integer> snapshot() {
         return new LinkedHashMap<>(memory);
     }
 
+    /** 诊断文本:组件名 + 记忆大小 + 日志长度。 */
     public synchronized String diagnostic() {
         return component + " size=" + memory.size() + " trail=" + journal.size();
     }
 
+    /** 大小写不敏感比较;并列时按长度比较。 */
     public int compare(String left, String right) {
         int lexical = left.compareToIgnoreCase(right);
         if (lexical != 0) {
@@ -225,6 +250,7 @@ public final class QuotePolicy06 {
         return Integer.compare(left.length(), right.length());
     }
 
+    /** 清空并重置为初始状态(仅含组件自身条目)。 */
     public synchronized void clear() {
         memory.clear();
         journal.clear();

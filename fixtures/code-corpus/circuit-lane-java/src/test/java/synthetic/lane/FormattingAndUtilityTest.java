@@ -12,10 +12,15 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
+/**
+ * 格式化与工具类的行为测试:报价文本往返、路由编码往返、回执签名/验签、
+ * CPI 计算与权重归一化、对数缓冲区编解码、追踪采样器的确定性与配额。
+ */
 final class FormattingAndUtilityTest {
     private FormattingAndUtilityTest() {
     }
 
+    /** 汇总入口:顺序执行全部用例。 */
     static void run() {
         quotationFormatterRoundTripsQuoteAndTags();
         quotationFormatterRejectsMalformedAndNonCanonicalValues();
@@ -33,6 +38,7 @@ final class FormattingAndUtilityTest {
         traceSamplerRejectsBackwardAndMalformedTrace();
     }
 
+    /** 报价渲染/解析应无损往返(含标签与 unicode 值)。 */
     private static void quotationFormatterRoundTripsQuoteAndTags() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         MarketModels.QuoteEnvelope quote = new MarketModels.QuoteEnvelope(
@@ -65,6 +71,7 @@ final class FormattingAndUtilityTest {
         TestSupport.equal(quote.tags(), parsed.tags(), "parsed quotation should preserve every tag");
     }
 
+    /** 非法或不规范的报价文本(版本、字段、数值、未知字段)应被拒绝。 */
     private static void quotationFormatterRejectsMalformedAndNonCanonicalValues() {
         TestSupport.ManualClock clock = new TestSupport.ManualClock();
         QuotationFormatter formatter = new QuotationFormatter(6);
@@ -103,6 +110,7 @@ final class FormattingAndUtilityTest {
         );
     }
 
+    /** 路由格式与解析应保持跳点顺序,且输出确定、不可变。 */
     private static void quoteRouteFormatterRoundTripsOrderedHops() {
         QuoteRouteFormatter formatter = new QuoteRouteFormatter("quotes", 8);
         List<String> hops = List.of("edge gateway", "risk-check", "pricing@venue");
@@ -120,6 +128,7 @@ final class FormattingAndUtilityTest {
         TestSupport.equal(route, again, "route formatting should be deterministic");
     }
 
+    /** 重复跳点、超容量、未知查询字段等非法路由应被拒绝。 */
     private static void quoteRouteFormatterRejectsDuplicateOrUnknownSyntax() {
         QuoteRouteFormatter formatter = new QuoteRouteFormatter("quotes", 3);
         TestSupport.failure(
@@ -176,6 +185,7 @@ final class FormattingAndUtilityTest {
         );
     }
 
+    /** 回执应能被签发方验证,且相同输入输出确定。 */
     private static void receiptPrinterSignsAndVerifiesSettlementResult() {
         ReceiptPrinter printer = new ReceiptPrinter("currency-platform", TestSupport.keyMaterial());
         Instant printedAt = Instant.parse("2026-01-16T16:31:00Z");
@@ -189,6 +199,7 @@ final class FormattingAndUtilityTest {
         TestSupport.equal(receipt, repeated, "receipt output should be deterministic for same inputs");
     }
 
+    /** 篡改字段、换签发方/密钥或缺失签名都应导致验签失败。 */
     private static void receiptPrinterDetectsTamperingAndWrongIssuer() {
         ReceiptPrinter printer = new ReceiptPrinter("currency-platform", TestSupport.keyMaterial());
         String receipt = printer.print(settlementResult(), Instant.parse("2026-01-16T16:31:00Z"));
@@ -225,6 +236,7 @@ final class FormattingAndUtilityTest {
         );
     }
 
+    /** 基准篮子应得 100,价格变化后按权重折算得到预期指数。 */
     private static void consumerPriceIndexCalculatesWeightedRelativeValue() {
         ConsumerPriceIndex index = priceIndex();
         BigDecimal base = index.value(
@@ -247,6 +259,7 @@ final class FormattingAndUtilityTest {
         TestSupport.equal(new BigDecimal("111.750000"), inflated, "weighted relatives should produce expected index");
     }
 
+    /** 任意权重归一化后总和应精确等于 1,最后一个商品取余量。 */
     private static void consumerPriceIndexNormalizesRawWeights() {
         ConsumerPriceIndex index = priceIndex();
         Map<String, BigDecimal> normalized = index.normalize(Map.of(
@@ -266,6 +279,7 @@ final class FormattingAndUtilityTest {
         );
     }
 
+    /** 观测覆盖不全、含非法价格或早于基准日都应被拒绝。 */
     private static void consumerPriceIndexRejectsIncompleteObservations() {
         ConsumerPriceIndex index = priceIndex();
         TestSupport.failure(
@@ -311,6 +325,7 @@ final class FormattingAndUtilityTest {
         );
     }
 
+    /** 对数编码/解码应无损往返,且返回列表不可变。 */
     private static void logarithmBufferRoundTripsPositiveValues() {
         LogarithmBuffer buffer = new LogarithmBuffer(10.0, 100);
         List<Double> values = List.of(0.01, 0.5, 1.0, 2.0, 10.0, 1234.5, 1_000_000.0);
@@ -329,6 +344,7 @@ final class FormattingAndUtilityTest {
         );
     }
 
+    /** 数据损坏、底数不一致、非法输入或超容量都应被检出。 */
     private static void logarithmBufferDetectsCorruptionAndWrongBase() {
         LogarithmBuffer buffer = new LogarithmBuffer(Math.E, 10);
         byte[] encoded = buffer.compute(List.of(1.0, 2.0, 3.0));
@@ -362,6 +378,7 @@ final class FormattingAndUtilityTest {
         );
     }
 
+    /** 采样决策应确定(同输入同结果),并遵守概率与窗口配额。 */
     private static void traceSamplerIsDeterministicAndHonorsQuota() {
         byte[] salt = "trace-sampling-synthetic-key-32b".getBytes(StandardCharsets.UTF_8);
         TraceSampler first = new TraceSampler(0.37, 100, Duration.ofMinutes(1), salt);
@@ -388,6 +405,7 @@ final class FormattingAndUtilityTest {
         TestSupport.falsity(quota.accept("audit", "trace-00000004", time, true), "quota should override forced flag");
     }
 
+    /** 新时间窗口到来时,该服务的采样配额应重置。 */
     private static void traceSamplerResetsQuotaAtNewWindow() {
         TraceSampler sampler = new TraceSampler(
                 0.0,
@@ -406,6 +424,7 @@ final class FormattingAndUtilityTest {
         TestSupport.equal(1L, observed.get("settlement.accepted"), "accepted counter should represent current window");
     }
 
+    /** 时间倒退、trace 长度/字符非法、参数非法都应被拒绝。 */
     private static void traceSamplerRejectsBackwardAndMalformedTrace() {
         TraceSampler sampler = new TraceSampler(
                 1.0,

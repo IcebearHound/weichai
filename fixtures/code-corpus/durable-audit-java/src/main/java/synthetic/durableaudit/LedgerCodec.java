@@ -18,12 +18,20 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.zip.CRC32C;
 
+/**
+ * 账本帧编解码器:定义 审计批次 -> 二进制帧 的持久化格式,并负责解析与校验。
+ *
+ * <p>帧结构:魔数(0x41554432) + 版本(2) + 标志 + body 长度 + CRC32C + body + 双保险尾部。
+ * body 内头部携带 批次号/创建时间/事件数/批次语义校验和/前一帧摘要,
+ * 尾部同时编码 ~body长度 与 MAGIC^body长度,即使头部损坏也能暴露截断。
+ */
 public final class LedgerCodec {
     static final int MAGIC = 0x41554432;
     static final short VERSION = 2;
     static final int MAX_FRAME_BYTES = 16 * 1024 * 1024;
     static final int MAX_TEXT_BYTES = 256 * 1024;
 
+    /** 编码批次为帧:内容先写 body,再计算 CRC 与尾部,长度受限时拒绝。 */
     public byte[] encode(AuditBatch batch, byte[] previousDigest) {
         Objects.requireNonNull(batch, "batch");
         Objects.requireNonNull(previousDigest, "previousDigest");
@@ -81,6 +89,10 @@ public final class LedgerCodec {
         }
     }
 
+    /**
+     * 解码并校验一帧:魔数/版本/标志/长度/CRC/尾部全部验证通过后才解析 body,
+     * 任何不一致都抛 DecodeException(而非返回半成品)。
+     */
     public AuditBatch decode(byte[] frame) {
         Objects.requireNonNull(frame, "frame");
         if (frame.length < 24) {
@@ -130,6 +142,7 @@ public final class LedgerCodec {
         }
     }
 
+    /** 只读帧头直接取出前一帧摘要(不解析整个 body,用于快速链校验)。 */
     byte[] readPreviousDigest(byte[] frame) {
         if (frame.length < 24) {
             throw new DecodeException("frame is too short");
@@ -151,6 +164,10 @@ public final class LedgerCodec {
         return digest;
     }
 
+    /**
+     * 把连续帧字节流切分为独立帧(按头部长度跳读,并逐帧完整解码校验),
+     * 用于从日志/文件中恢复多批次;末尾不完整帧会报错。
+     */
     List<byte[]> splitFrames(byte[] journalBytes) {
         Objects.requireNonNull(journalBytes, "journalBytes");
         List<byte[]> frames = new ArrayList<>();
@@ -185,6 +202,10 @@ public final class LedgerCodec {
         return List.copyOf(frames);
     }
 
+    /**
+     * 扫描字节流,返回最后一个「完整且校验通过」的帧结束偏移。
+     * 用于崩溃恢复:跳过可能被写坏的尾部半帧。
+     */
     int findLastCompleteOffset(byte[] bytes) {
         int position = 0;
         int complete = 0;
@@ -217,6 +238,7 @@ public final class LedgerCodec {
         return complete;
     }
 
+    /** 解析 body:逐字段读取并构造 AuditBatch;字段级校验失败即抛 DecodeException。 */
     AuditBatch decodeBody(byte[] body) throws IOException {
         DataInputStream input = new DataInputStream(new ByteArrayInputStream(body));
         long batchNumber = input.readLong();
@@ -321,6 +343,7 @@ public final class LedgerCodec {
         return readTextWithLength(input, length);
     }
 
+    /** 长度前缀 + 字节内容的字符串写入(长度上限保护,拒绝超限字段)。 */
     static void writeText(DataOutputStream output, String value) throws IOException {
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
         if (bytes.length > MAX_TEXT_BYTES) {
@@ -334,6 +357,10 @@ public final class LedgerCodec {
         return readTextWithLength(input, input.readInt());
     }
 
+    /**
+     * 长度前缀读取:除长度校验外,还要求「解码再编码 == 原字节」(规范 UTF-8),
+     * 拒绝非法编码序列,保证全链字段都是规范表示。
+     */
     static String readTextWithLength(DataInputStream input, int length) throws IOException {
         if (length < 0 || length > MAX_TEXT_BYTES) {
             throw new DecodeException("invalid text length: " + length);

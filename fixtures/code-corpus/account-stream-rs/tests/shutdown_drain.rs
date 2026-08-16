@@ -4,6 +4,7 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// 构造一条待持久化记录。
 fn record(identity: &str, partition: &str, sequence: u64) -> PendingRecord {
     PendingRecord {
         identity: identity.to_owned(),
@@ -15,6 +16,7 @@ fn record(identity: &str, partition: &str, sequence: u64) -> PendingRecord {
     }
 }
 
+/// 追加与排空保持严格的 FIFO 顺序,统计计数一致。
 #[test]
 fn append_and_drain_preserve_fifo_order() {
     let ledger = ShutdownLedger::new(100).expect("ledger");
@@ -61,6 +63,7 @@ fn append_and_drain_preserve_fifo_order() {
     assert_eq!(snapshot.failed_writes, 0);
 }
 
+/// 写入失败时整批回退到队首,顺序不变,后续可重试成功。
 #[test]
 fn failed_write_restores_batch_before_newer_records() {
     let ledger = ShutdownLedger::new(100).unwrap();
@@ -97,6 +100,7 @@ fn failed_write_restores_batch_before_newer_records() {
     assert_eq!(*persisted.lock().unwrap(), vec![1, 2, 3, 4, 5, 6]);
 }
 
+/// 相同 identity 的记录不会被追加两次,保留首次提交的字段。
 #[test]
 fn duplicate_pending_identity_is_not_appended_twice() {
     let ledger = ShutdownLedger::new(10).unwrap();
@@ -119,6 +123,7 @@ fn duplicate_pending_identity_is_not_appended_twice() {
     assert_eq!(ledger.snapshot().unwrap().accepted, 1);
 }
 
+/// 多线程并发追加不丢记录,去重后身份集合大小等于记录总数。
 #[test]
 fn concurrent_callers_append_without_losing_records() {
     let ledger = Arc::new(ShutdownLedger::new(1_000).unwrap());
@@ -153,6 +158,7 @@ fn concurrent_callers_append_without_losing_records() {
     assert_eq!(identities.len(), 200);
 }
 
+/// 并发排空时同时只有一个写者在执行,所有记录恰好被持久化一次。
 #[test]
 fn concurrent_drains_use_only_one_writer_at_a_time() {
     let ledger = Arc::new(ShutdownLedger::new(100).unwrap());
@@ -198,6 +204,7 @@ fn concurrent_drains_use_only_one_writer_at_a_time() {
     assert_eq!(ledger.snapshot().unwrap().pending, 0);
 }
 
+/// finish 等待活动写入者完成后,再排空剩余记录,总量守恒。
 #[test]
 fn finish_waits_for_active_writer_then_drains_remainder() {
     let ledger = Arc::new(ShutdownLedger::new(100).unwrap());
@@ -241,6 +248,7 @@ fn finish_waits_for_active_writer_then_drains_remainder() {
         })
     });
     thread::sleep(Duration::from_millis(10));
+    // 写入者尚未放行时,finish 应阻塞等待而非直接返回。
     assert!(!finisher.is_finished());
     release.wait();
     assert_eq!(writer.join().unwrap().unwrap(), 3);
@@ -253,6 +261,7 @@ fn finish_waits_for_active_writer_then_drains_remainder() {
     assert_eq!(snapshot.persisted, 8);
 }
 
+/// 排空失败时记录留在队列中,便于诊断与后续恢复。
 #[test]
 fn finish_failure_keeps_unwritten_records_for_diagnostics() {
     let ledger = ShutdownLedger::new(10).unwrap();
@@ -282,6 +291,7 @@ fn finish_failure_keeps_unwritten_records_for_diagnostics() {
     );
 }
 
+/// 追加对非法字段、容量上限与关闭状态的拒绝行为。
 #[test]
 fn append_rejects_invalid_records_capacity_and_closing_state() {
     let ledger = ShutdownLedger::new(2).unwrap();
@@ -310,6 +320,7 @@ fn append_rejects_invalid_records_capacity_and_closing_state() {
     );
 }
 
+/// 构造器与 drain/finish 对参数的边界校验;空队列 drain 返回 0。
 #[test]
 fn constructor_and_drain_validate_limits() {
     assert!(ShutdownLedger::new(0).is_err());

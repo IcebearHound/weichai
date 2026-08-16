@@ -1,3 +1,9 @@
+"""检查点存储:持久化每个账户的消费进度。
+
+以内存字典为读路径、可选的 JSON 文件为持久化后端;commit 时先写临时文件
+再原子替换(临时文件与目标文件同目录,保证同文件系统),避免崩溃留下半截文件。
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -11,6 +17,15 @@ from .model import Checkpoint
 
 
 class CheckpointStore:
+    """账户级检查点仓库。
+
+    - load: 读取某账户最新检查点;
+    - commit: 推进检查点,含防回退/防冲突校验,并同步落盘;
+    - compact: 裁剪历史,只保留各账户最新一条(可限定账户集合)。
+
+    所有读写经由 asyncio.Lock 串行化,保证并发安全。
+    """
+
     def __init__(self, path: Path | None = None) -> None:
         self._path = path
         self._values: dict[str, Checkpoint] = {}
@@ -30,10 +45,12 @@ class CheckpointStore:
                 )
                 current = self._values.get(checkpoint.account)
                 if current is None or checkpoint.generation > current.generation:
+                    # 同账户取代数最新的一条作为当前值,其余进历史
                     self._values[checkpoint.account] = checkpoint
                 self._history.append(checkpoint)
 
     async def load(self, account: str) -> Checkpoint | None:
+        """读取某账户的最新检查点;账户不存在时返回 None。"""
         normalized = account.strip()
         if not normalized:
             raise ValueError("account is required")
@@ -49,6 +66,12 @@ class CheckpointStore:
         offset: int,
         committed_at: datetime,
     ) -> Checkpoint:
+        """提交某账户的新检查点,返回生成的 Checkpoint。
+
+        顺序约束:新序列号必须大于等于旧值(回退抛错);序列号相同时要求
+        消息/分区/偏移量完全一致(幂等重提交直接返回旧值),否则视为冲突;
+        同一分区内偏移量只许前进。成功后追加历史并原子写盘。
+        """
         normalized = account.strip()
         if not normalized or not message_id.strip():
             raise ValueError("account and message_id are required")
@@ -63,6 +86,7 @@ class CheckpointStore:
                     raise ValueError(f"sequence rewind {sequence} < {previous.sequence}")
                 if sequence == previous.sequence:
                     if message_id == previous.message_id and partition == previous.partition and offset == previous.offset:
+                        # 完全一致的重复提交属于幂等重放,直接返回旧值
                         return previous
                     raise ValueError(f"sequence collision for {normalized}:{sequence}")
                 if partition == previous.partition and offset <= previous.offset:
@@ -101,6 +125,11 @@ class CheckpointStore:
             return checkpoint
 
     async def compact(self, accounts: Iterable[str] = ()) -> tuple[Checkpoint, ...]:
+        """把历史压缩为各账户最新一条检查点。
+
+        不传 accounts 时压缩全部账户;传入时只压缩指定账户。
+        返回被压缩(保留)的检查点集合,并同步落盘。
+        """
         requested = {account.strip() for account in accounts if account.strip()}
         async with self._lock:
             selected = tuple(
@@ -111,6 +140,7 @@ class CheckpointStore:
             if not selected:
                 return ()
             retained_accounts = {checkpoint.account for checkpoint in selected}
+            # 只保留被选中账户的最新值,随后统一按时间重排,保证历史有序
             self._history = [row for row in self._history if row.account not in retained_accounts]
             self._history.extend(selected)
             self._history.sort(key=lambda row: (row.committed_at, row.account, row.generation))

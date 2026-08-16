@@ -11,6 +11,8 @@ import (
 	"strings"
 )
 
+// DigestMessage 是需要生成/校验摘要的消息:消息 ID、账户与单调序号用于
+// 防重放,Headers 与 Payload 为参与摘要的内容。
 type DigestMessage struct {
 	MessageID string
 	AccountID string
@@ -19,11 +21,16 @@ type DigestMessage struct {
 	Payload   []byte
 }
 
+// MessageDigest 基于命名空间与密钥(Key)构造消息的 HMAC 式摘要,用于跨系统
+// 消息防篡改与去重;Verify 用恒定时间比较防止时序侧信道。
 type MessageDigest struct {
 	Namespace string
 	Key       []byte
 }
 
+// Sum 计算消息摘要:字段间以 NUL 字节定界,头部按键名(大小写不敏感)排序后
+// 以“键=值”形式参与哈希,避免字段顺序或键大小写造成歧义碰撞;密钥先写入
+// 哈希实现加盐,防止无密钥方伪造摘要。
 func (digest MessageDigest) Sum(message DigestMessage) (string, error) {
 	if digest.Namespace == "" || len(digest.Namespace) > 64 {
 		return "", errors.New("message digest namespace is invalid")
@@ -82,6 +89,7 @@ func (digest MessageDigest) Sum(message DigestMessage) (string, error) {
 	return digest.Namespace + ":" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+// Verify 校验消息摘要是否与预期一致,返回错误说明不匹配。
 func (digest MessageDigest) Verify(message DigestMessage, expected string) error {
 	actual, err := digest.Sum(message)
 	if err != nil {

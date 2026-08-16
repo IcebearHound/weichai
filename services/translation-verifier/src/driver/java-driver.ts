@@ -124,19 +124,34 @@ export function javaLiteral(value: TypedValue): string {
 }
 
 function javaLiteralType(values: TypedValue[]): string {
-  const first = values.find((v) => v.type !== "null");
-  if (!first) return "Object";
-  switch (first.type) {
+  const nonNull = values.filter((v) => v.type !== "null");
+  if (nonNull.length === 0) return "Object";
+  return nonNull.map(elementType).reduce(commonType);
+}
+
+function elementType(value: TypedValue): string {
+  switch (value.type) {
     case "string": return "String";
-    case "number": return Number.isInteger(first.value) ? "Integer" : "Double";
+    case "number": return Number.isInteger(value.value) ? "Integer" : "Double";
     case "boolean": return "Boolean";
-    case "list": return `List<${javaLiteralType(first.value)}>`;
+    case "null": return "Object";
+    case "list": return `List<${javaLiteralType(value.value)}>`;
     case "map": {
-      const keys = Object.keys(first.value);
-      if (keys.length === 0) return "Map<String, Object>";
-      return `Map<String, ${javaLiteralType(Object.values(first.value))}>`;
+      const values = Object.values(value.value);
+      if (values.length === 0) return "Map<String, Object>";
+      return `Map<String, ${javaLiteralType(values)}>`;
     }
   }
+}
+
+function commonType(a: string, b: string): string {
+  if (a === b) return a;
+  if (isNumberType(a) && isNumberType(b)) return "Number";
+  return "Object";
+}
+
+function isNumberType(t: string): boolean {
+  return t === "Integer" || t === "Double" || t === "Number";
 }
 
 function javaNumberLiteral(value: number): string {

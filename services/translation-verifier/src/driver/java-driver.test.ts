@@ -441,3 +441,137 @@ describe("fix round 2:boolean 返回值输出 JSON boolean(非字符串)", () =>
     }
   }, 60_000);
 });
+
+describe("fix round 3:异构 null 集合公共类型推导", () => {
+  it("[null, 1, 2.5] 生成 Arrays.<Number>asList(null, 1, 2.5)", () => {
+    expect(
+      javaLiteral({
+        type: "list",
+        value: [
+          { type: "null", value: null },
+          { type: "number", value: 1 },
+          { type: "number", value: 2.5 },
+        ],
+      }),
+    ).toBe("Arrays.<Number>asList(null, 1, 2.5)");
+  });
+
+  it('[null, 1, "a"] 生成 Arrays.<Object>asList(null, 1, "a")', () => {
+    expect(
+      javaLiteral({
+        type: "list",
+        value: [
+          { type: "null", value: null },
+          { type: "number", value: 1 },
+          { type: "string", value: "a" },
+        ],
+      }),
+    ).toBe('Arrays.<Object>asList(null, 1, "a")');
+  });
+
+  it('{a: 42, b: null, c: true} 生成 new java.util.HashMap<String, Object> 且含 put("c", true)', () => {
+    const lit = javaLiteral({
+      type: "map",
+      value: {
+        a: { type: "number", value: 42 },
+        b: { type: "null", value: null },
+        c: { type: "boolean", value: true },
+      },
+    });
+    expect(lit).toContain("new java.util.HashMap<String, Object>()");
+    expect(lit).toContain('put("c", true)');
+  });
+
+  it("[1, 2.5](无 null)仍生成 List.of(1, 2.5)", () => {
+    expect(
+      javaLiteral({
+        type: "list",
+        value: [
+          { type: "number", value: 1 },
+          { type: "number", value: 2.5 },
+        ],
+      }),
+    ).toBe("List.of(1, 2.5)");
+  });
+
+  it("真实 javac 编译运行:异构 null 集合(3 个场景)零错误且 stdout 可 JSON.parse", () => {
+    const desc = validDescription({
+      target: {
+        language: "Java",
+        className: "Util",
+        method: "echo",
+        isStatic: true,
+        constructorArgs: [],
+      },
+      cases: [
+        {
+          id: "list-num",
+          inputs: [
+            {
+              type: "list",
+              value: [
+                { type: "null", value: null },
+                { type: "number", value: 1 },
+                { type: "number", value: 2.5 },
+              ],
+            },
+          ],
+          expected: { kind: "return", value: { type: "null", value: null } },
+        },
+        {
+          id: "list-mixed",
+          inputs: [
+            {
+              type: "list",
+              value: [
+                { type: "null", value: null },
+                { type: "number", value: 1 },
+                { type: "string", value: "a" },
+              ],
+            },
+          ],
+          expected: { kind: "return", value: { type: "null", value: null } },
+        },
+        {
+          id: "map-mixed",
+          inputs: [
+            {
+              type: "map",
+              value: {
+                a: { type: "number", value: 42 },
+                b: { type: "null", value: null },
+                c: { type: "boolean", value: true },
+              },
+            },
+          ],
+          expected: { kind: "return", value: { type: "null", value: null } },
+        },
+      ],
+    });
+    const driverClass = driverClassName(desc);
+    const dir = mkdtempSync(join(tmpdir(), "wc-java-driver-"));
+    try {
+      const outDir = join(dir, "out");
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(join(dir, "Util.java"), "public class Util { public static Object echo(Object value) { return value; } }\n");
+      writeFileSync(join(dir, `${driverClass}.java`), generateJavaDriver(desc));
+      execFileSync("javac", ["-d", outDir, join(dir, "Util.java"), join(dir, `${driverClass}.java`)], {
+        stdio: "pipe",
+      });
+      const stdout = execFileSync("java", ["-cp", outDir, driverClass], { encoding: "utf8" });
+      const parsed = JSON.parse(stdout) as {
+        results: Array<{ caseId: string; returnValue: { type: string; value: unknown } }>;
+      };
+      expect(parsed.results).toHaveLength(3);
+      const [listNum, listMixed, mapMixed] = parsed.results;
+      expect(listNum.caseId).toBe("list-num");
+      expect(listNum.returnValue.type).toBe("list");
+      expect(listMixed.caseId).toBe("list-mixed");
+      expect(listMixed.returnValue.type).toBe("list");
+      expect(mapMixed.caseId).toBe("map-mixed");
+      expect(mapMixed.returnValue.type).toBe("map");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+});

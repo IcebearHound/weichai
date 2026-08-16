@@ -1,10 +1,5 @@
-import { createHash } from "node:crypto";
-import { canonicalDescriptionJson, type TestDescription, type TypedValue } from "../description.js";
-
-export function driverClassName(description: TestDescription): string {
-  const hash = createHash("sha256").update(canonicalDescriptionJson(description), "utf8").digest("hex");
-  return `Driver_${hash.slice(0, 8)}`;
-}
+import { type TestDescription, type TypedValue } from "../description.js";
+import { driverClassName } from "./driver-codegen.js";
 
 export function generateJavaDriver(description: TestDescription): string {
   const className = driverClassName(description);

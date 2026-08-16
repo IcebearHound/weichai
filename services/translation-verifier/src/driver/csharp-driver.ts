@@ -1,5 +1,5 @@
 import { canonicalDescriptionJson, type TestDescription, type TypedValue } from "../description.js";
-import { driverClassName } from "./java-driver.js";
+import { driverClassName } from "./driver-codegen.js";
 
 /**
  * 生成完整 .cs 驱动源码(public class Driver_<hash>,内嵌 JsonWriter 与字面量 helper)。

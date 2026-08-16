@@ -5,7 +5,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalDescriptionJson, type TestDescription } from "../description.js";
-import { driverClassName, generateJavaDriver, javaLiteral } from "./java-driver.js";
+import { driverClassName } from "./driver-codegen.js";
+import { generateJavaDriver, javaLiteral } from "./java-driver.js";
 
 function validDescription(overrides: Partial<TestDescription> = {}): TestDescription {
   return {

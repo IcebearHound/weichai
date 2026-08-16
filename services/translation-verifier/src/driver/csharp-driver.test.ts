@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalDescriptionJson, type TestDescription } from "../description.js";
-import { driverClassName } from "./java-driver.js";
+import { driverClassName } from "./driver-codegen.js";
 import { csharpLiteral, csharpValueTypeName, generateCSharpDriver } from "./csharp-driver.js";
 
 function validDescription(overrides: Partial<TestDescription> = {}): TestDescription {
@@ -53,7 +53,7 @@ describe("generateCSharpDriver 确定性", () => {
   });
 });
 
-describe("driverClassName 复用(从 ./java-driver.js)与类名", () => {
+describe("driverClassName 复用(从 ./driver-codegen.js)与类名", () => {
   it("Driver_<sha256(canonical).slice(0,8)> 与 canonical hash 一致", () => {
     const desc = validDescription();
     const hash = createHash("sha256").update(canonicalDescriptionJson(desc), "utf8").digest("hex");

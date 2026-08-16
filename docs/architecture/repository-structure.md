@@ -45,7 +45,7 @@ the SeekDB HTTP adapter.
 | `services/code-indexer` | Repository and symbol indexing |
 | `services/retrieval-service` | SeekDB storage, candidate retrieval, and ranking |
 | `services/adaptation-service` | Translation, mapping, patching, validation |
-| `fixtures` | Synthetic benchmark inputs and expected results |
+| `fixtures` | Target workspaces and cross-language code corpus fixtures |
 
 Package public APIs are exported from each package's `src/index.ts`. Consumers
 should not import private files through relative paths across package

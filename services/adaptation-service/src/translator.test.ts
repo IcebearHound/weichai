@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   repairTranslation,
+  TranslatorAgent,
   translateJavaToCSharp,
   translateWithAnalysis,
   translatorInternals,
@@ -46,7 +47,7 @@ function modelRequest(
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Translator Agent", () => {
-  it("consumes target context and AnalysisReport in a separate system/user model call", async () => {
+  it("sends target context and AnalysisReport through DeepSeek Chat Completions", async () => {
     const request = fixture("translator-direct");
     const calls: Array<Record<string, unknown>> = [];
 
@@ -57,12 +58,30 @@ describe("Translator Agent", () => {
 
     expect(result.generatedCode).toContain(request.targetContext.targetSignature);
     expect(result.interfaceMappings).toEqual(request.analysisReport.contractMapping);
+    expect(calls[0]?.model).toBe("deepseek-v4-flash");
+    expect(calls[0]?.response_format).toEqual({ type: "json_object" });
     const messages = calls[0]?.messages as Array<{ role: string; content: string }>;
     expect(messages.map(({ role }) => role)).toEqual(["system", "user"]);
-    expect(messages[0]?.content).toContain("immutable target contract");
+    expect(messages[0]?.content).toContain("Translator Agent");
     expect(messages[1]?.content).toContain("ICalculationCache.GetAsync");
     expect(messages[1]?.content).toContain("ANALYSIS_REPORT_JSON");
-    expect(calls[0]?.response_format).toEqual({ type: "json_object" });
+  });
+
+  it("runs as an independent agent and receives only the AnalysisReport handoff", async () => {
+    const request = fixture("translator-direct");
+    const calls: Array<Record<string, unknown>> = [];
+    const agent = new TranslatorAgent({
+      apiKey: "test-key",
+      request: modelRequest(resultFor(request), calls),
+    });
+
+    await expect(agent.translate(request)).resolves.toEqual(resultFor(request));
+
+    const messages = calls[0]?.messages as Array<{ content: string }>;
+    const transcript = messages.map((message) => message.content).join("\n");
+    expect(transcript).toContain("ANALYSIS_REPORT_JSON");
+    expect(transcript).not.toContain("You are the Analyzer Agent");
+    expect(transcript).not.toContain("[RETRIEVED CANDIDATE]");
   });
 
   it("stops before generation when Analyzer rejects the candidate", async () => {

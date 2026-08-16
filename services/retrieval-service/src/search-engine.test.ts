@@ -101,6 +101,37 @@ describe('SeekDbSearchEngine', () => {
       50,
     );
   });
+
+  it('applies a small multiplicative class prior to the PDF RRF score', () => {
+    const classDocument: RetrievedCodeDocument = {
+      ...baseDocument,
+      id: 'class-candidate',
+      title: 'UploadParser',
+      kind: 'class',
+    };
+    const results = searchInternals.mergeResults(
+      [baseDocument, classDocument],
+      [],
+      'class',
+    );
+
+    expect(results[0]?.id).toBe('class-candidate');
+    expect(results[0]?.hybridScore).toBeCloseTo((0.65 / 62) * 1.02, 10);
+  });
+
+  it('uses an exact recall limit when configured for PDF reranking', async () => {
+    const store = fakeStore();
+    const engine = new SeekDbSearchEngine(store, embeddings, 20);
+
+    await engine.search({ ...request, topK: 4 });
+
+    expect(store.semanticSearch).toHaveBeenCalledWith(
+      [1, 0, 0],
+      expect.anything(),
+      20,
+    );
+    expect(store.textSearch).toHaveBeenCalledWith(expect.any(String), expect.anything(), 20);
+  });
 });
 
 describe('search internals', () => {

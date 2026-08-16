@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
 const defaultProjectPath = fileURLToPath(
-  new URL("../../../fixtures/target-system/forexplore-csharp-workspace", import.meta.url),
+  new URL("../../../fixtures/target-system/commons-fileupload-java-skeleton", import.meta.url),
 );
 
 export interface AdaptationServiceConfig {

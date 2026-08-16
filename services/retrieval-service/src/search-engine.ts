@@ -31,6 +31,20 @@ function expandedLimit(topK: number): number {
   return Math.min(250, Math.max(50, topK * 5));
 }
 
+const CLASS_RRF_BOOST = 0.02;
+
+function hybridScore(
+  reciprocalRank: number,
+  targetKind: SearchRequest['target']['kind'] | undefined,
+  candidateKind: IndexedCodeDocument['kind'],
+): number {
+  const classBoost =
+    targetKind === 'class' && candidateKind === 'class'
+      ? 1 + CLASS_RRF_BOOST
+      : 1;
+  return reciprocalRank * classBoost;
+}
+
 function queryText(request: SearchRequest): string {
   const raw = [
     request.target.name,
@@ -59,6 +73,7 @@ function documentText(document: IndexedCodeDocument): string {
 function mergeResults(
   semantic: RetrievedCodeDocument[],
   text: RetrievedCodeDocument[],
+  targetKind?: SearchRequest['target']['kind'],
 ): RetrievedCodeDocument[] {
   const merged = new Map<
     string,
@@ -84,8 +99,11 @@ function mergeResults(
   add(semantic, 0.65, 'semanticScore');
   add(text, 0.35, 'textScore');
   return [...merged.values()]
-    .sort((left, right) => right.reciprocalRank - left.reciprocalRank)
-    .map(({ document }) => document);
+    .map(({ document, reciprocalRank }) => ({
+      ...document,
+      hybridScore: hybridScore(reciprocalRank, targetKind, document.kind),
+    }))
+    .sort((left, right) => (right.hybridScore ?? 0) - (left.hybridScore ?? 0));
 }
 
 function overallScore(
@@ -139,6 +157,7 @@ function candidate(
       semantic,
       symbol,
       contract,
+      hybrid: document.hybridScore,
     },
     preview: document.preview,
     dependencies: document.dependencies,
@@ -151,6 +170,7 @@ export class SeekDbSearchEngine implements SearchEngine {
   constructor(
     private readonly store: SearchStore,
     private readonly embeddings: EmbeddingProvider,
+    private readonly candidateLimitOverride?: number,
   ) {}
 
   async search(request: SearchRequest): Promise<SearchCandidate[]> {
@@ -160,14 +180,14 @@ export class SeekDbSearchEngine implements SearchEngine {
       repositories: repositoryScopes(request.repositoryScopes),
       languages,
     };
-    const candidateLimit = expandedLimit(request.topK);
+    const candidateLimit = this.candidateLimitOverride ?? expandedLimit(request.topK);
     const [embedding] = await this.embeddings.embed([text]);
     if (!embedding) throw new Error('Embedding provider returned no query vector.');
     const [semantic, fullText] = await Promise.all([
       this.store.semanticSearch(embedding, filters, candidateLimit),
       this.store.textSearch(text, filters, candidateLimit),
     ]);
-    const documents = mergeResults(semantic, fullText);
+    const documents = mergeResults(semantic, fullText, request.target.kind);
 
     const allowedLanguages = new Set(languages);
     return documents
@@ -176,7 +196,10 @@ export class SeekDbSearchEngine implements SearchEngine {
           allowedLanguages.size === 0 || allowedLanguages.has(document.language),
       )
       .map((document) => candidate(document, request))
-      .sort((left, right) => right.score.overall - left.score.overall)
+      .sort((left, right) => {
+        const hybridDelta = (right.score.hybrid ?? 0) - (left.score.hybrid ?? 0);
+        return hybridDelta || right.score.overall - left.score.overall;
+      })
       .slice(0, request.topK);
   }
 }

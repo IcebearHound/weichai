@@ -10,6 +10,8 @@ export type { IndexedCodeDocument } from '@forexplore/contracts';
 export interface RetrievedCodeDocument extends IndexedCodeDocument {
   semanticScore?: number;
   textScore?: number;
+  /** Weighted reciprocal-rank fusion score, after any retrieval prior. */
+  hybridScore?: number;
 }
 
 export interface SearchFilters {

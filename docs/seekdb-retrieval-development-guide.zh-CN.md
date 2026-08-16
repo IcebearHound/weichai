@@ -244,7 +244,7 @@ const workflowPorts = retrievalApiUrl
 
 | 文件 | 职责 |
 | --- | --- |
-| `services/adaptation-service/src/translator.ts` | 调用 DeepSeek OpenAI-compatible API 做 Java→C# 翻译和编译错误修复 |
+| `services/adaptation-service/src/translator.ts` | 独立 Translator Agent 调用 DeepSeek 做 Java→C# 翻译和编译错误修复 |
 | `services/adaptation-service/src/compiler.ts` | 使用 .NET SDK 或 csc 做独立编译 |
 | `services/adaptation-service/src/adaptation-adapter.ts` | 编排翻译、最多 3 轮修复、映射和 FilePatch |
 | `services/adaptation-service/src/backfill-adapter.ts` | 将 FilePatch 写回指定项目根目录 |
@@ -374,9 +374,8 @@ Manifest 存在但 JSON 或元数据错误时会直接中止索引，不再静�
 - 为每个符号保留签名、注释摘要、源码片段、路径和行号。
 - 将 camelCase、路径词和正文一起写入全文搜索字段。
 
-注意：当前 `extractor.ts` 已包含 C# 声明正则，但 `fileExtensions` 尚未注册
-`.cs -> C#`，所以 `.cs` 文件实际不会进入扫描。这是已知集成缺口；正式启用 C#
-语料索引时需同时补充扩展名和单元测试。
+`fileExtensions` 已注册 `.cs -> C#`，并由索引器单元测试覆盖。C# 语料会和其他
+manifest 声明的语言一样进入扫描；声明提取仍基于正则，复杂 C# 语法需要额外验证。
 
 符号 ID 格式：
 
@@ -792,10 +791,9 @@ Invoke-RestMethod http://127.0.0.1:8787/health
 
 - 运行时 C# 目标工作区仍是手工静态树，源码变化不会自动同步元数据。
 - Web 只接入了真实检索；真实 adaptation/backfill 模块尚未组合进 UI。
-- adaptation 只支持 DeepSeek Java→C# translate。
+- adaptation 使用 DeepSeek 跨语言翻译；Claude Code 通过 DeepSeek 的 Anthropic 兼容端点作为外层 MCP Agent Host。
 - 集成编译仍是占位实现，BackfillAdapter 也只适合受信任的本地 POC。
 - 源码索引器不是完整语法解析器，复杂多行声明、嵌套声明和部分语言特性可能漏检。
-- C# extractor 有声明规则但漏注册 `.cs` 文件扩展名。
 - 动态模块树扫描器目前只解析 TypeScript/TSX，且不是当前 C# runtime 数据源。
 - 索引是全量目录扫描和逐符号 upsert，没有 Git 增量索引。
 - HTTP API 没有鉴权、租户隔离、速率限制和结构化日志。

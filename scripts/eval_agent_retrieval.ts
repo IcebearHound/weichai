@@ -4,6 +4,7 @@
 // 注册获取 API Key: https://platform.deepseek.com/api_keys
 
 import * as fs from 'fs';
+import * as path from 'path';
 
 // ---- 语料库仓库摘要（注入到 prompt 中，无需工具调用）----
 const CORPUS_PREVIEWS: Record<string, string> = {};
@@ -29,7 +30,7 @@ function loadCorpusPreviews(): void {
 
 function listSourceFiles(dir: string, lang: string): string[] {
   const exts: Record<string, string[]> = {
-    TypeScript: ['.ts'], Python: ['.py'], Java: ['.java'], Go: ['.go'], Rust: ['.rs'],
+    TypeScript: ['.ts'], Python: ['.py'], Java: ['.java'], 'C#': ['.cs'], Go: ['.go'], Rust: ['.rs'],
   };
   const validExts = exts[lang] || [];
   const result: string[] = [];
@@ -207,8 +208,12 @@ async function main() {
   loadCorpusPreviews();
   console.log(`  ${Object.keys(CORPUS_PREVIEWS).length} repos indexed`);
 
-  const tasks = loadTasks('fixtures/benchmark/tasks.jsonl');
-  const relevance = loadRelevance('fixtures/benchmark/relevance.jsonl');
+  const benchmarkDirectory = process.env.BENCHMARK_DIR?.trim();
+  if (!benchmarkDirectory) {
+    throw new Error('BENCHMARK_DIR must point to a directory containing tasks.jsonl and relevance.jsonl.');
+  }
+  const tasks = loadTasks(path.join(benchmarkDirectory, 'tasks.jsonl'));
+  const relevance = loadRelevance(path.join(benchmarkDirectory, 'relevance.jsonl'));
   const gt = buildGroundTruthMap(relevance);
 
   console.log('='.repeat(80));
@@ -342,9 +347,10 @@ function loadRelevance(fp: string) {
 }
 function buildGroundTruthMap(rel: any[]) {
   const m = new Map<string, Map<string, number>>();
+  const relevanceWeight = { high: 3, medium: 2, low: 1, distractor: 0 } as const;
   for (const r of rel) {
     if (!m.has(r.taskId)) m.set(r.taskId, new Map());
-    const w = { high: 3, medium: 2, low: 1, distractor: 0 }[r.relevance] ?? 0;
+    const w = relevanceWeight[r.relevance as keyof typeof relevanceWeight] ?? 0;
     m.get(r.taskId)!.set(`${r.candidateRepository}::${r.candidateSymbol}`, w);
   }
   return m;

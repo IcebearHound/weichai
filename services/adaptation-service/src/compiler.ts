@@ -1,6 +1,5 @@
 /**
- * C# 编译校验器
- * 调用 dotnet build 或 csc 检查代码是否能通过编译。
+ * C# and Java compiler validation helpers.
  */
 
 import { execFileSync, execSync } from "node:child_process";
@@ -145,7 +144,7 @@ function findDotnet(): string | null {
 
 export function isCompilerUnavailable(result: CompileResult): boolean {
   return result.errors.some((error) =>
-    /(?:\.NET SDK|C# compiler).*(?:not installed|not available)/i.test(error),
+    /(?:\.NET SDK|C# compiler|JDK|javac).*(?:not installed|not available)/i.test(error),
   );
 }
 
@@ -297,20 +296,25 @@ function isOutsideProject(projectRoot: string, sourcePath: string): boolean {
 function replaceTargetMethod(source: string, generatedCode: string): string {
   const code = generatedCode
     .trim()
-    .replace(/^```(?:csharp|cs)?\s*/i, "")
+    .replace(/^```(?:csharp|cs|java)?\s*/i, "")
     .replace(/\s*```$/, "")
     .trim();
   const openingBrace = code.indexOf("{");
-  if (openingBrace < 0) throw new Error("Generated C# code must contain a method body.");
+  if (openingBrace < 0) throw new Error("Generated code must contain a method body.");
 
-  const declarations = [...code.slice(0, openingBrace).matchAll(/([A-Za-z_]\w*)\s*\(/g)];
-  const methodName = declarations.at(-1)?.[1];
-  if (!methodName) throw new Error("Unable to determine the generated C# method name.");
+  const generatedDeclarations = [...code.slice(0, openingBrace).matchAll(/([A-Za-z_]\w*)\s*\(/g)];
+  const methodName = generatedDeclarations.at(-1)?.[1];
+  if (!methodName) throw new Error("Unable to determine the generated method name.");
 
-  const declaration = new RegExp(
+  const declarationPattern = new RegExp(
     `^[\\t ]*(?:(?:public|private|protected|internal|static|abstract|virtual|override|sealed|async|extern|unsafe|new|partial)\\s+)+[^\\n;=]*\\b${escapeRegExp(methodName)}\\s*\\(`,
-    "m",
-  ).exec(source);
+    "gm",
+  );
+  const expectedParameters = parameterList(code, 0);
+  const sourceDeclarations = [...source.matchAll(declarationPattern)];
+  const declaration = sourceDeclarations.find(
+    (candidate) => parameterList(source, candidate.index ?? 0) === expectedParameters,
+  ) ?? sourceDeclarations[0];
   if (declaration?.index === undefined) {
     throw new Error(`Target method ${methodName} was not found in the skeleton source.`);
   }
@@ -376,6 +380,20 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function parameterList(source: string, start: number): string {
+  const opening = source.indexOf("(", start);
+  if (opening < 0) return "";
+  let depth = 0;
+  for (let index = opening; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "(") depth += 1;
+    else if (character === ")" && --depth === 0) {
+      return source.slice(opening + 1, index).replace(/\s+/g, " ").trim();
+    }
+  }
+  return "";
+}
+
 // ---- Java 编译 ----
 
 function findJavac(): string | null {
@@ -392,6 +410,26 @@ function findJavac(): string | null {
       return candidate;
     } catch {
       // Continue to next candidate.
+    }
+  }
+  return null;
+}
+
+function findMaven(): string | null {
+  const candidates = [
+    process.env.MAVEN_COMMAND?.trim(),
+    process.env.MAVEN_HOME ? join(process.env.MAVEN_HOME, "bin", "mvn") : null,
+    process.env.M2_HOME ? join(process.env.M2_HOME, "bin", "mvn") : null,
+    "mvn",
+    "mvn.cmd",
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const candidate of candidates) {
+    try {
+      execFileSync(candidate, ["--version"], { stdio: "ignore" });
+      return candidate;
+    } catch {
+      // Continue to the next known installation location.
     }
   }
   return null;
@@ -440,7 +478,8 @@ export function compileJavaStandalone(
 
 /**
  * 集成编译 — 在临时副本中替换目标方法并编译完整 Java skeleton 项目。
- * 尝试用 javac + classpath 编译，如果项目有 Maven/Gradle 也会尝试。
+ * Maven projects are compiled through their declared dependency graph; bare
+ * source trees fall back to javac.
  */
 export function compileJavaIntegrated(
   javaCode: string,
@@ -494,6 +533,23 @@ export function compileJavaIntegrated(
     const temporaryTarget = join(temporaryProject, relativeTarget);
     const original = readFileSync(temporaryTarget, "utf8");
     writeFileSync(temporaryTarget, replaceTargetMethod(original, javaCode), "utf8");
+
+    const maven = existsSync(join(temporaryProject, "pom.xml")) ? findMaven() : null;
+    if (maven) {
+      try {
+        const stdout = execFileSync(maven, ["-q", "-DskipTests", "compile"], {
+          cwd: temporaryProject,
+          encoding: "utf-8",
+          maxBuffer: 10 * 1024 * 1024,
+          timeout: 90_000,
+          stdio: "pipe",
+        });
+        return { success: true, errors: [], output: stdout };
+      } catch (error: unknown) {
+        const errOutput = collectErrorOutput(error);
+        return { success: false, errors: parseJavaErrors(errOutput), output: errOutput };
+      }
+    }
 
     const javaFiles = collectJavaFilesRecursive(temporaryProject);
     try {

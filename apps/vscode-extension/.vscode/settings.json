@@ -1,0 +1,8 @@
+{
+  "forexplore.executionMode": "real",
+  "forexplore.retrievalApiUrl": "http://127.0.0.1:8787",
+  "forexplore.adaptationApiUrl": "http://127.0.0.1:8788",
+  "forexplore.repositoryPaths": [
+    "E:/CS/devsys/weichai/fixtures/code-corpus"
+  ]
+}

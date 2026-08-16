@@ -1,11 +1,17 @@
 // scripts/eval_seekdb_retrieval.ts
 import * as fs from 'fs';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const REPO_ROOT = path.resolve(__dirname, '..');
+const REPO_ROOT = path.resolve(process.cwd());
+const benchmarkDirectory = process.env.BENCHMARK_DIR?.trim();
+if (!benchmarkDirectory) {
+  throw new Error('BENCHMARK_DIR must point to a directory containing tasks.jsonl and relevance.jsonl.');
+}
+const BENCHMARK_DIR = path.resolve(REPO_ROOT, benchmarkDirectory);
+const RESULTS_DIR = path.resolve(
+  REPO_ROOT,
+  process.env.RETRIEVAL_RESULTS_DIR || 'results/seekdb',
+);
 
 interface RelevanceRecord {
   taskId: string;
@@ -28,6 +34,7 @@ interface TaskRecord {
   targetPath: string;
   requirement: string;
   constraints: string[];
+  targetLanguage?: string;
 }
 
 const RELEVANCE_WEIGHT: Record<string, number> = {
@@ -148,7 +155,7 @@ async function searchSeekDB(task: TaskRecord): Promise<SearchCandidate[]> {
       name: task.targetSymbol.split('.').pop()!,
       kind: 'function',
       path: task.targetPath,
-      language: 'TypeScript',
+      language: task.targetLanguage || 'TypeScript',
       signature: `${task.targetSymbol.split('.').pop()!}(...): Promise<any>`,
     },
     requirement: task.requirement,
@@ -168,8 +175,8 @@ async function searchSeekDB(task: TaskRecord): Promise<SearchCandidate[]> {
 }
 
 async function main() {
-  const tasks = loadTasks(path.join(REPO_ROOT, 'fixtures/benchmark/tasks.jsonl'));
-  const relevance = loadRelevance(path.join(REPO_ROOT, 'fixtures/benchmark/relevance.jsonl'));
+  const tasks = loadTasks(path.join(BENCHMARK_DIR, 'tasks.jsonl'));
+  const relevance = loadRelevance(path.join(BENCHMARK_DIR, 'relevance.jsonl'));
   const gt = buildGroundTruthMap(relevance);
 
   console.log('='.repeat(80));
@@ -242,7 +249,7 @@ async function main() {
 
   // aggregate
   console.log('\n' + '='.repeat(80));
-  console.log('AGGREGATE METRICS (macro-average across 5 tasks)');
+  console.log(`AGGREGATE METRICS (macro-average across ${allMetrics.length} tasks)`);
   console.log('='.repeat(80));
 
   const avg = (key: string) => allMetrics.reduce((s, m) => s + m[key], 0) / allMetrics.length;
@@ -259,17 +266,16 @@ async function main() {
   console.log(`  High-Hit@10 Rate: ${allMetrics.filter(m => m.highHit10).length}/${allMetrics.length}`);
 
   // save results to specified paths
-  const resultsDir = path.join(REPO_ROOT, 'results/seekdb');
-  fs.mkdirSync(resultsDir, { recursive: true });
+  fs.mkdirSync(RESULTS_DIR, { recursive: true });
 
-  fs.writeFileSync(`${resultsDir}/seekdb_eval.json`, JSON.stringify(allMetrics, null, 2));
-  console.log(`\nMetrics saved to ${resultsDir}/seekdb_eval.json`);
+  fs.writeFileSync(`${RESULTS_DIR}/seekdb_eval.json`, JSON.stringify(allMetrics, null, 2));
+  console.log(`\nMetrics saved to ${RESULTS_DIR}/seekdb_eval.json`);
 
-  fs.writeFileSync(`${resultsDir}/seekdb_top10.json`, JSON.stringify(allTop10, null, 2));
-  console.log(`Top-10 results saved to ${resultsDir}/seekdb_top10.json`);
+  fs.writeFileSync(`${RESULTS_DIR}/seekdb_top10.json`, JSON.stringify(allTop10, null, 2));
+  console.log(`Top-10 results saved to ${RESULTS_DIR}/seekdb_top10.json`);
 
-  fs.writeFileSync(`${resultsDir}/seekdb_top20.json`, JSON.stringify(allTop20, null, 2));
-  console.log(`Top-20 results saved to ${resultsDir}/seekdb_top20.json`);
+  fs.writeFileSync(`${RESULTS_DIR}/seekdb_top20.json`, JSON.stringify(allTop20, null, 2));
+  console.log(`Top-20 results saved to ${RESULTS_DIR}/seekdb_top20.json`);
 }
 
 main().catch((error) => {

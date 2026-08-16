@@ -13,7 +13,7 @@ const languageByLanguageId: Record<string, Language> = {
   go: 'Go',
 };
 
-const supportedLanguageIds = new Set(['csharp']);
+const supportedLanguageIds = new Set(['java']);
 
 export function languageFromLanguageId(languageId: string): Language | null {
   return languageByLanguageId[languageId.toLowerCase()] ?? null;
@@ -73,9 +73,9 @@ const MAX_SIGNATURE_LENGTH = 240;
  */
 export function buildModuleTarget(input: EditorSelectionInput): ModuleTarget | null {
   const language = languageFromLanguageId(input.languageId);
-  // The actual adaptation service is deliberately limited to Java → C#.
-  // The selected editor code is the C# target, not source code to translate.
-  if (language !== 'C#') return null;
+  // The selected editor code is the Java target. Candidates may come from any
+  // supported corpus language and are translated into this Java contract.
+  if (language !== 'Java') return null;
   const relativePath = path.relative(input.workspaceRoot, input.filePath);
   if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
     return null;

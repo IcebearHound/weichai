@@ -13,6 +13,7 @@ const extensions: Record<string, Language> = {
   '.ts': 'TypeScript',
   '.py': 'Python',
   '.java': 'Java',
+  '.cs': 'C#',
   '.rs': 'Rust',
   '.go': 'Go',
 };
@@ -224,11 +225,12 @@ export function extractSymbols(source: string, language: Language): SymbolMatch[
   const lines = source.replace(/\r\n?/g, '\n').split('\n');
   const symbols: SymbolMatch[] = [];
   let braceDepth = 0;
-  const typeScopes: Array<{ depth: number; name: string }> = [];
+  const typeScopes: Array<{ depth: number; name: string; pending?: boolean }> = [];
 
   for (let index = 0; index < lines.length; index += 1) {
     while (
       typeScopes.length > 0 &&
+      !typeScopes.at(-1)?.pending &&
       braceDepth < (typeScopes.at(-1)?.depth ?? 0)
     ) {
       typeScopes.pop();
@@ -236,7 +238,7 @@ export function extractSymbols(source: string, language: Language): SymbolMatch[
     const line = lines[index] ?? '';
     const currentType = typeScopes.at(-1);
     const atTypeMemberLevel =
-      currentType !== undefined && braceDepth === currentType.depth;
+      currentType !== undefined && !currentType.pending && braceDepth === currentType.depth;
     const match = declaration(
       line,
       language,
@@ -267,6 +269,13 @@ export function extractSymbols(source: string, language: Language): SymbolMatch[
       braceDepth > previousDepth
     ) {
       typeScopes.push({ depth: braceDepth, name: match.name });
+    } else if (match?.kind === 'class' && language !== 'Python') {
+      // C# and Java often place the opening brace on the next line. Keep the
+      // type scope until that brace arrives so its members remain indexable.
+      typeScopes.push({ depth: braceDepth + 1, name: match.name, pending: true });
+    } else if (currentType?.pending && braceDepth > previousDepth) {
+      currentType.depth = braceDepth;
+      currentType.pending = false;
     }
   }
   return symbols;

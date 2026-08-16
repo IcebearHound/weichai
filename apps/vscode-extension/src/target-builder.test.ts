@@ -45,26 +45,26 @@ describe('kindFromSignature', () => {
 describe('buildModuleTarget', () => {
   const workspaceRoot = '/workspace';
 
-  it('builds a workspace-relative C# target from a saved editor selection', () => {
+  it('builds a workspace-relative Java target from a saved editor selection', () => {
     const target = buildModuleTarget({
-      languageId: 'csharp',
-      selectedText: 'public async Task<Quote> GetQuoteAsync(QuoteRequest request)\n{\n}',
-      filePath: '/workspace/Quotes/QuoteService.cs',
-      fileBaseName: 'QuoteService.cs',
+      languageId: 'java',
+      selectedText: 'public List<FileItem> parseRequest(RequestContext ctx) throws FileUploadException {',
+      filePath: '/workspace/src/FileUploadBase.java',
+      fileBaseName: 'FileUploadBase.java',
       workspaceRoot,
       startLine: 12,
     });
     expect(target).toMatchObject({
-      name: 'GetQuoteAsync',
+      name: 'parseRequest',
       kind: 'function',
-      language: 'C#',
+      language: 'Java',
       line: 13,
-      path: 'Quotes/QuoteService.cs',
+      path: 'src/FileUploadBase.java',
     });
-    expect(target?.id).toBe('workspace://Quotes/QuoteService.cs#L13');
+    expect(target?.id).toBe('workspace://src/FileUploadBase.java#L13');
   });
 
-  it('rejects source languages outside the Java-to-C# MVP target boundary', () => {
+  it('rejects non-Java editor targets', () => {
     expect(
       buildModuleTarget({
         languageId: 'python',
@@ -80,10 +80,10 @@ describe('buildModuleTarget', () => {
   it('rejects an editor file outside the workspace root', () => {
     expect(
       buildModuleTarget({
-        languageId: 'csharp',
-        selectedText: 'public void Run() {}',
-        filePath: '/other/Service.cs',
-        fileBaseName: 'Service.cs',
+        languageId: 'java',
+        selectedText: 'public void run() {}',
+        filePath: '/other/Service.java',
+        fileBaseName: 'Service.java',
         workspaceRoot,
         startLine: 0,
       }),

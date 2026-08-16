@@ -11,6 +11,12 @@ weighted reciprocal-rank fusion, and applies the deterministic contract-aware
 score. It retrieves a broader, bounded candidate pool before returning the
 requested result count. Optional LLM reranking can run after this hybrid recall.
 
+When LLM reranking is enabled, the workflow follows the integration design:
+hybrid RRF produces exactly 20 candidates, the reranker scores those candidates,
+and the service returns the requested final count (the UI default is 4). For a
+class target, a class candidate receives a small 1.02 RRF multiplier; function
+targets are unchanged.
+
 The schema uses SeekDB's `VECTOR`, `VECTOR INDEX ... TYPE=hnsw`,
 `FULLTEXT INDEX`, and `ORDER BY cosine_distance(...) APPROXIMATE` features.
 All query values and filters are parameterized; only validated SQL identifiers

@@ -21,11 +21,10 @@ print(">>> Step 3: 调用 DeepSeek API...")
 try:
     client = OpenAI(api_key=key, base_url="https://api.deepseek.com/v1")
     resp = client.chat.completions.create(
-        model="deepseek-chat",
+        model=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
         messages=[{"role": "user", "content": "回复'API连通成功'这6个字"}],
         temperature=0.1,
     )
-    msg = resp.choices[0].message.content
-    print(f">>> Step 3: 成功! DeepSeek 返回: {msg}")
+    print(f">>> Step 3: 成功! DeepSeek 返回: {resp.choices[0].message.content}")
 except Exception as e:
     print(f">>> Step 3 失败: {e}")

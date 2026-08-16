@@ -1,6 +1,6 @@
 # Adaptation Service (Module 3)
 
-Java → C# code adaptation: LLM translation → compile validation → limited auto-fix → protected patch generation.
+Supported candidate language → Java code adaptation: DeepSeek translation → Java compile validation → protected patch generation.
 
 ## Analyzer-driven Translator Agent
 
@@ -19,9 +19,11 @@ const result = await translateWithAnalysis(
 );
 ```
 
-The model receives target module context and `AnalysisReport v1` in a separate
-system/user call. Its decision order is fixed to target contract, requirement,
-analysis report, then candidate details. The response is parsed as a structured
+`AnalyzerAgent` and `TranslatorAgent` are independent, stateless DeepSeek
+agents. The Analyzer receives the target facts, requirement, and candidate and
+returns `AnalysisReport v1`. The Translator starts a fresh model interaction;
+it receives its own target prompt plus that validated report, never Analyzer
+messages or conversation history. Its response is parsed as a structured
 `TranslationResult` containing generated code, mappings, completed plan steps,
 and unresolved items.
 
@@ -32,7 +34,8 @@ into using/namespace/enclosing-type changes. The existing
 legacy callers. The HTTP adapter now runs the integrated sequence:
 
 ```text
-collectTargetContext -> AnalyzerAgent.analyze -> translateWithAnalysis
+collectTargetContext -> AnalyzerAgent.analyze -> AnalysisReport artifact
+  -> TranslatorAgent.translate
   -> compile validation -> repairTranslation (at most three rounds)
 ```
 
@@ -59,23 +62,23 @@ A passing feedback result is idempotent and performs no model request. Failed
 feedback must contain structured syntax, contract, dependency, or behavior
 issues. Fixed member-C samples live in `testdata/translator-*.json`.
 
-`AdaptationAdapter` accepts only the `translate` strategy with a Java candidate
-and a `C#` target. Unsupported language pairs are rejected before any LLM
-request is made.
+`AdaptationAdapter` accepts the `translate` strategy for both Java → C# and
+Any supported candidate language → Java. The VS Code extension writes into the Commons
+FileUpload Java target workspace; unsupported language pairs are rejected
+before any LLM request is made.
 
 When `skeletonProjectPath` is configured, integration validation copies the
-delivered C# skeleton to a temporary directory, replaces only the target
-method, and runs `dotnet build`. The real workspace is never modified during
-validation. Compiler errors drive at most three model repair attempts; a
-missing compiler stops the repair loop, produces required `unverified`
-evidence, and blocks protected write-back.
+target skeleton to a temporary directory and replaces only the target method.
+The Java direction uses `javac` validation; the real workspace is never
+modified during validation. The Java → C# branch retains its repair loop; the
+candidate language → Java branch returns an explicitly reviewed patch and compiler evidence.
 
-The model endpoint and model name are loaded by `src/model-config.ts` so the
-translator does not own provider configuration. `DEEPSEEK_MODEL` defaults to
+The DeepSeek endpoint and model name are loaded by `src/model-config.ts` so the
+agents do not own provider configuration. `DEEPSEEK_MODEL` defaults to
 `deepseek-v4-flash`; `DEEPSEEK_API_BASE` can override the compatible endpoint.
-Callers must still pass the API key to `AdaptationAdapter`.
+Callers must still pass the server-side DeepSeek API key to `AdaptationAdapter`.
 
-## Web demo quick start
+## Extension service quick start
 
 The browser calls this service through `POST /v1/adapt`. The DeepSeek key stays
 in this Node process; it is never included in the Vite environment or browser
@@ -85,28 +88,25 @@ bundle.
 cp services/adaptation-service/.env.example services/adaptation-service/.env
 # Edit the copied file and set DEEPSEEK_API_KEY.
 
-# Required for real standalone and integrated C# validation. Under WSL the
-# service also auto-detects C:\Program Files\dotnet\dotnet.exe.
-dotnet --version || '/mnt/c/Program Files/dotnet/dotnet.exe' --version
+# Required for Java validation.
+javac --version
 
 npm install
 npm run dev:adaptation
 ```
 
-In another terminal, start retrieval and Web together:
+In another terminal, start retrieval and the VS Code extension:
 
 ```bash
-npm run dev
+npm run dev:extension
 ```
 
-The checked-in Web environment example points to `http://127.0.0.1:8788`.
 Verify the adaptation service before the demo with:
 
 ```bash
 curl http://127.0.0.1:8788/health
 ```
 
-The Web demo uses the real service only for Java method → C# method translation.
 `POST /v1/backfill` is intentionally disabled. A bare HTTP client is not an
 approval authority; the VS Code extension host owns the selected target,
 original hash, validation gate, user confirmation and recovery point before it
@@ -129,19 +129,19 @@ python poc/e2e_pipeline.py
 ```
 code-indexer (module 1) → retrieval-service (module 2) → adaptation-service (module 3)
                                                               ↑
-                                              /v1/search → candidates → LLM → C#
+                                              /v1/search → candidates → DeepSeek → Java
 ```
 
 ## Architecture
 
 | File | Role |
 |------|------|
-| `src/translator.ts` | AnalysisReport-driven Translator, contract guards, structured output and repair |
+| `src/translator.ts` | Independent TranslatorAgent, AnalysisReport handoff, contract guards, structured output and repair |
 | `src/translator.test.ts` | Translator parsing, rejection, contract, planning and repair tests |
 | `testdata/translator-*.json` | direct/adapt/reject member-C fixtures |
 | `src/context-collector.ts` | Collects bounded target-module facts and direct dependencies |
 | `src/analyzer.ts` | Independent Analyzer Agent that returns validated `AnalysisReport` JSON |
-| `src/compiler.ts` | C# compile check (dotnet build) |
+| `src/compiler.ts` | C# and Java compiler checks |
 | `src/model-config.ts` | Isolated temporary model provider configuration |
 | `src/adaptation-adapter.ts` | Main adapter, orchestrates context → analyze → translate → compile → repair |
 | `src/backfill-adapter.ts` | Backfill results into corpus |
@@ -156,7 +156,7 @@ explicit `REQ:` constraints. It returns a bounded `TargetModuleContext`; paths
 inside the context are project-relative and the collector rejects traversal
 outside `projectRoot`.
 
-`new AnalyzerAgent({ apiKey }).analyze(request)` makes a separate model call
+`new AnalyzerAgent({ apiKey }).analyze(request)` makes a separate DeepSeek call
 with target facts, the user requirement, and one retrieval candidate. The
 response must be `AnalysisReport` schema version `1.0`; markdown fences are
 accepted for compatibility, but every field and enum is validated before the

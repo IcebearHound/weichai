@@ -13,6 +13,8 @@
     "dev:web": "npm run dev --workspace @forexplore/workflow-web",
     "dev:retrieval": "npm run dev --workspace @forexplore/retrieval-service",
     "dev:adaptation": "npm run dev --workspace @forexplore/adaptation-service",
+    "dev:mcp": "npm run dev --workspace @forexplore/adaptation-mcp-server",
+    "claude:deepseek": "bash scripts/run-claude-deepseek.sh",
     "dev:extension": "powershell -ExecutionPolicy Bypass -File scripts/run-vscode-extension.ps1",
     "build": "npm run build:extension",
     "build:web": "npm run build --workspace @forexplore/workflow-web",
@@ -20,6 +22,7 @@
     "package:extension": "npm run package --workspace forexplore-vscode",
     "build:retrieval": "npm run build --workspace @forexplore/retrieval-service",
     "build:adaptation": "npm run build --workspace @forexplore/adaptation-service",
-    "test": "npm run test --workspace @forexplore/workspace-adapters && npm run test --workspace @forexplore/workflow-core && npm run test --workspace @forexplore/code-indexer && npm run test --workspace @forexplore/seekdb-adapter && npm run test --workspace @forexplore/adaptation-http-adapter && npm run test --workspace @forexplore/retrieval-service && npm run test --workspace @forexplore/adaptation-service && npm run test --workspace @forexplore/workflow-web && npm run test --workspace forexplore-vscode"
+    "build:mcp": "npm run build --workspace @forexplore/adaptation-mcp-server",
+    "test": "npm run test --workspace @forexplore/workspace-adapters && npm run test --workspace @forexplore/workflow-core && npm run test --workspace @forexplore/code-indexer && npm run test --workspace @forexplore/seekdb-adapter && npm run test --workspace @forexplore/adaptation-http-adapter && npm run test --workspace @forexplore/retrieval-service && npm run test --workspace @forexplore/adaptation-service && npm run test --workspace @forexplore/adaptation-mcp-server && npm run test --workspace @forexplore/workflow-web && npm run test --workspace forexplore-vscode"
   }
 }

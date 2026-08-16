@@ -108,17 +108,17 @@ async function startTranslation(
 ): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
-    void vscode.window.showInformationMessage('请先打开并选中一个 C# 目标方法。');
+    void vscode.window.showInformationMessage('请先打开并选中一个 Java 目标方法。');
     return;
   }
   if (editor.selection.isEmpty) {
-    void vscode.window.showWarningMessage('请先选中待实现的 C# 目标方法或其签名。');
+    void vscode.window.showWarningMessage('请先选中待实现的 Java 目标方法或其签名。');
     return;
   }
 
   const document = editor.document;
   if (document.uri.scheme !== 'file') {
-    void vscode.window.showErrorMessage('仅支持工作区中的本地 C# 文件。');
+    void vscode.window.showErrorMessage('仅支持工作区中的本地 Java 文件。');
     return;
   }
   if (document.isDirty) {
@@ -141,7 +141,7 @@ async function startTranslation(
   });
   if (!target) {
     void vscode.window.showErrorMessage(
-      `当前翻译流程仅支持 Java → C#：请在工作区内选择 C# 目标方法（当前为 ${document.languageId}）。`,
+      `当前翻译流程写入 Java 目标：请在工作区内选择 Java 目标方法（当前为 ${document.languageId}）。`,
     );
     return;
   }
@@ -195,7 +195,7 @@ async function showPanel(
     await startTranslation(context, services, health);
     return;
   }
-  void vscode.window.showInformationMessage('请先在 C# 文件中选中待实现的目标方法。');
+  void vscode.window.showInformationMessage('请先在 Java 文件中选中待实现的目标方法。');
 }
 
 async function handlePanelMessage(
@@ -244,10 +244,9 @@ async function startSearch(
       // which repositories were indexed. An empty scope means its configured
       // authorized index, not a fake "configured-repositories" filter.
       repositoryScopes: [],
-      candidateLanguages: ['Java'],
     });
     run.requirement = message.requirement.trim();
-    run.candidates = candidates.filter((candidate) => candidate.language === 'Java');
+    run.candidates = candidates;
     run.selectedCandidateId = null;
     run.adaptation = null;
     publish({ type: 'SEARCH_RESULT', candidates: run.candidates });
@@ -260,8 +259,8 @@ function selectCandidate(candidateId: string): void {
   try {
     const run = requireActiveRun();
     const candidate = run.candidates.find((item) => item.id === candidateId);
-    if (!candidate || candidate.language !== 'Java') {
-      throw new Error('该候选不属于当前检索结果，或不满足 Java -> C# 的迁移边界。');
+    if (!candidate) {
+      throw new Error('该候选不属于当前检索结果。');
     }
     // This is deliberately the only operation that changes this field. A
     // retrieval ranking never becomes consent by itself.
@@ -307,7 +306,7 @@ async function applyCurrentRun(context: vscode.ExtensionContext): Promise<void> 
     }
     await assertTargetUnchanged(run);
     const choice = await vscode.window.showWarningMessage(
-      '将把已预览的补丁写入当前选中的 C# 文件，并创建可恢复检查点。确认继续？',
+      '将把已预览的补丁写入当前选中的 Java 文件，并创建可恢复检查点。确认继续？',
       { modal: true },
       '应用补丁',
     );
@@ -401,8 +400,8 @@ function validateHostOwnedResult(
   const failures: string[] = [];
   let files: FilePatch[] = result.files;
 
-  if (result.strategy !== 'translate' || result.targetLanguage !== 'C#') {
-    failures.push('服务返回的策略或目标语言超出 Java → C# translate MVP。');
+  if (result.strategy !== 'translate' || result.targetLanguage !== 'Java') {
+    failures.push('服务返回的策略或目标语言超出任意候选语言 → Java translate 边界。');
   }
   if (files.length !== 1) {
     failures.push('写回只接受当前目标文件的一个修改补丁。');
@@ -472,16 +471,16 @@ function deduplicateValidation(records: ValidationRecord[]): ValidationRecord[] 
 }
 
 function requireActiveRun(): ActiveMigrationRun {
-  if (!activeRun) throw new Error('请先从已保存的 C# 目标方法启动一次迁移。');
+  if (!activeRun) throw new Error('请先从已保存的 Java 目标方法启动一次迁移。');
   return activeRun;
 }
 
 function selectedRunCandidate(run: ActiveMigrationRun): SearchCandidate {
   if (!run.selectedCandidateId) {
-    throw new Error('请先明确点击并选择一个 Java 候选实现。');
+    throw new Error('请先明确点击并选择一个候选实现。');
   }
   const candidate = run.candidates.find((item) => item.id === run.selectedCandidateId);
-  if (!candidate || candidate.language !== 'Java') {
+  if (!candidate) {
     throw new Error('当前候选已失效；请重新检索并明确选择。');
   }
   return candidate;

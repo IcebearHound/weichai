@@ -53,7 +53,7 @@ export class RerankingSearchEngine implements SearchEngine {
 
   /**
    * Merge LLM scores back into candidates, sort by rerank score (ties broken
-   * by the original overall score), and truncate to `topK`.
+   * by the hybrid RRF score), and truncate to `topK`.
    *
    * Candidates that were not scored by the LLM are pushed to the end with a
    * rerank score of 0 so they are never fully lost.
@@ -79,7 +79,7 @@ export class RerankingSearchEngine implements SearchEngine {
       const aScore = a.score.rerank ?? 0;
       const bScore = b.score.rerank ?? 0;
       if (bScore !== aScore) return bScore - aScore;
-      return b.score.overall - a.score.overall;
+      return (b.score.hybrid ?? b.score.overall) - (a.score.hybrid ?? a.score.overall);
     });
 
     return reranked.slice(0, topK);

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { loadAdaptationModelConfig } from "./model-config";
+import { loadDeepSeekModelConfig } from "./model-config";
 
 describe("adaptation model config", () => {
-  it("uses the current low-latency DeepSeek model by default", () => {
-    expect(loadAdaptationModelConfig({})).toEqual({
+  it("uses the DeepSeek chat-completions model by default", () => {
+    expect(loadDeepSeekModelConfig({})).toEqual({
       apiBase: "https://api.deepseek.com/v1",
       model: "deepseek-v4-flash",
     });
@@ -11,7 +11,7 @@ describe("adaptation model config", () => {
 
   it("accepts server-side endpoint and model overrides", () => {
     expect(
-      loadAdaptationModelConfig({
+      loadDeepSeekModelConfig({
         DEEPSEEK_API_BASE: "https://example.test/v1/",
         DEEPSEEK_MODEL: "deepseek-v4-pro",
       }),

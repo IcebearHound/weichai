@@ -15,7 +15,7 @@ from openai import OpenAI
 # 配置
 # ============================================================
 SEARCH_API = "http://127.0.0.1:8787/v1/search"
-MODEL = "deepseek-chat"
+MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 MAX_RETRIES = 3
 
 # ============================================================
@@ -35,7 +35,6 @@ def search_candidates(query: str, top_k: int = 5) -> list[dict]:
         "requirement": query,
         "topK": top_k,
         "repositoryScopes": [],
-        "candidateLanguages": ["Java"],
     }
     req = urllib.request.Request(
         SEARCH_API,
@@ -53,8 +52,7 @@ def search_candidates(query: str, top_k: int = 5) -> list[dict]:
 # ============================================================
 def translate_java_to_csharp(java_source: str, csharp_signature: str,
                               requirement: str) -> str:
-    client = OpenAI(api_key=os.environ["DEEPSEEK_API_KEY"],
-                    base_url="https://api.deepseek.com/v1")
+    client = OpenAI(api_key=os.environ["DEEPSEEK_API_KEY"], base_url="https://api.deepseek.com/v1")
 
     prompt = f"""你是 Java→C# 代码翻译专家。请把以下 Java 方法翻译成 C#。
 
@@ -177,8 +175,7 @@ public class {class_name} {{
 
 
 def fix_compile_errors(bad_code: str, errors: list[str], requirement: str) -> str:
-    client = OpenAI(api_key=os.environ["DEEPSEEK_API_KEY"],
-                    base_url="https://api.deepseek.com/v1")
+    client = OpenAI(api_key=os.environ["DEEPSEEK_API_KEY"], base_url="https://api.deepseek.com/v1")
     prompt = f"""以下 C# 代码编译失败，请修复所有编译错误后重新输出完整代码。
 
 【编译错误】

@@ -1,10 +1,10 @@
 """
 ForeXplore Adaptation Service — Python 概念验证脚本
 ====================================================
-完整流程: Java方法 → LLM翻译 → C#编译校验 → 自动修复 → 输出结果
+完整流程: Java方法 → DeepSeek翻译 → C#编译校验 → 自动修复 → 输出结果
 
 用法:
-  1. python translate_poc.py  (API key 已内置)
+  1. 设置 DEEPSEEK_API_KEY 后执行 python translate_poc.py
 
 依赖:
   pip install openai
@@ -25,7 +25,7 @@ from openai import OpenAI
 # ============================================================
 # 配置
 # ============================================================
-MODEL = "deepseek-chat"     # DeepSeek V3, 便宜好用
+MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 MAX_RETRIES = 3             # 编译失败最大自动修复次数
 DOTNET_PATH = "dotnet"      # dotnet 命令, 如果没装 .NET SDK 则在脚本最后看到警告
 

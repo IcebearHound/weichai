@@ -19,7 +19,7 @@ winget install Microsoft.DotNet.SDK.8
 ### 3. 设置 API Key
 
 ```powershell
-$env:OPENAI_API_KEY = "sk-你的key"
+$env:DEEPSEEK_API_KEY = "sk-你的key"
 ```
 
 ### 4. 运行

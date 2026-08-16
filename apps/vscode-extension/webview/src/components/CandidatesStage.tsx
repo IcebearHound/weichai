@@ -19,6 +19,7 @@ export function CandidatesStage({
 }: CandidatesStageProps) {
   const candidate = selectedCandidate(state);
   const adapting = state.pending === 'adapt';
+  const canAdapt = candidate !== null;
 
   return (
     <div className="stage-stack">
@@ -99,8 +100,8 @@ export function CandidatesStage({
         <div className="decision-fields">
           <div className="decision-static">
             <span>适配方式</span>
-            <strong>translate · Java → C#</strong>
-            <small>真实服务：仅支持 Java → C# 和 translate 策略。</small>
+            <strong>translate · 任意候选语言 → Java</strong>
+            <small>全部语言均参与检索，并可生成 Java 目标方法的适配实现。</small>
           </div>
           <label>
             <span>人工备注 / 额外约束</span>
@@ -118,10 +119,10 @@ export function CandidatesStage({
           type="button"
           className="primary-action"
           onClick={onAdapt}
-        disabled={adapting || !candidate}
+        disabled={adapting || !canAdapt}
       >
         {adapting ? <span className="spinner" /> : <Sparkles size={15} />}
-          {adapting ? '正在生成适配…' : candidate ? '确认此方案并生成适配' : '请先明确选择一个候选'}
+          {adapting ? '正在生成适配…' : !candidate ? '请先明确选择一个候选' : '确认此方案并生成适配'}
       </button>
       </section>
     </div>

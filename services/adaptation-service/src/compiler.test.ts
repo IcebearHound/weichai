@@ -53,6 +53,27 @@ describe("integrated compiler source replacement", () => {
     expect(result).not.toContain("NotImplementedException");
   });
 
+  it("selects the matching overload when a target class has repeated method names", () => {
+    const source = `public class Uploads {
+    public void parseRequest(HttpServletRequest request) {
+        throw new UnsupportedOperationException("http");
+    }
+
+    public void parseRequest(RequestContext context) {
+        throw new UnsupportedOperationException("context");
+    }
+}`;
+    const generated = `public void parseRequest(RequestContext context) {
+    return;
+}`;
+
+    const result = compilerInternals.replaceTargetMethod(source, generated);
+
+    expect(result).toContain('UnsupportedOperationException("http")');
+    expect(result).not.toContain('UnsupportedOperationException("context")');
+    expect(result).toContain("public void parseRequest(RequestContext context) {");
+  });
+
   it("rejects generated methods that do not exist in the target source", () => {
     expect(() =>
       compilerInternals.replaceTargetMethod(

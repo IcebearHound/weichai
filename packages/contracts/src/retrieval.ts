@@ -20,6 +20,8 @@ export interface CandidateScore {
   semantic: number;
   symbol: number;
   contract: number;
+  /** Hybrid weighted-RRF score used for recall ordering and tie breaks. */
+  hybrid?: number;
   /** LLM reranking score (0–1), only present when reranking is active. */
   rerank?: number;
 }

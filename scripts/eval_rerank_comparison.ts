@@ -2,11 +2,13 @@
 // Three-mode evaluation: Baseline (no rerank) vs Rerank (LLM) vs Agent (historical)
 import * as fs from 'fs';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const REPO_ROOT = path.resolve(__dirname, '..');
+const REPO_ROOT = path.resolve(process.cwd());
+const benchmarkDirectory = process.env.BENCHMARK_DIR?.trim();
+if (!benchmarkDirectory) {
+  throw new Error('BENCHMARK_DIR must point to a directory containing tasks.jsonl and relevance.jsonl.');
+}
+const BENCHMARK_DIR = path.resolve(REPO_ROOT, benchmarkDirectory);
 
 const API_URL = 'http://127.0.0.1:8787/v1/search';
 
@@ -152,6 +154,17 @@ function computeMetrics(
   };
 }
 
+type Metrics = ReturnType<typeof computeMetrics>;
+type TaskMetrics = Metrics & { taskId: string };
+
+function metricValue(value: Metrics[keyof Metrics]): number {
+  return typeof value === 'boolean' ? Number(value) : value;
+}
+
+function averageMetric(metrics: TaskMetrics[], key: keyof Metrics): number {
+  return metrics.reduce((sum, metric) => sum + metricValue(metric[key]), 0) / metrics.length;
+}
+
 // ── API call ──────────────────────────────────────────────────────────────
 
 async function searchSeekDB(task: TaskRecord, rerank: boolean): Promise<SearchCandidate[]> {
@@ -238,16 +251,13 @@ function check(v: boolean): string { return v ? '✓' : '✗'; }
 
 function generateReport(
   tasks: TaskRecord[],
-  baselineMetrics: Array<ReturnType<typeof computeMetrics> & { taskId: string }>,
-  rerankMetrics: Array<ReturnType<typeof computeMetrics> & { taskId: string }>,
+  baselineMetrics: TaskMetrics[],
+  rerankMetrics: TaskMetrics[],
   baselineTop20: Array<{ taskId: string; candidates: ReturnType<typeof labelResults> }>,
   rerankTop20: Array<{ taskId: string; candidates: ReturnType<typeof labelResults> }>,
 ): string {
   const agent = agentMetrics();
   const now = new Date().toISOString().slice(0, 10);
-
-  const avg = (arr: Array<Record<string, number>>, key: string) =>
-    arr.reduce((s, m) => s + (m[key] ?? 0), 0) / arr.length;
 
   const lines: string[] = [];
 
@@ -267,43 +277,44 @@ function generateReport(
   lines.push(``);
 
   // ── Aggregate ──
-  const bm = baselineMetrics as Array<Record<string, number>>;
-  const rm = rerankMetrics as Array<Record<string, number>>;
+  const bm = baselineMetrics;
+  const rm = rerankMetrics;
 
   lines.push(`## 二、整体指标汇总（5 任务平均）`, ``);
   lines.push(`| 指标 | A. Baseline（无重排） | B. +LLM Rerank | C. Agent（历史） | B vs A 变化 |`);
   lines.push(`|------|----------------------|---------------|-----------------|-------------|`);
 
-  const aggRows: Array<[string, string, (m: Record<string, number>) => number | string]> = [
-    ['Precision@3', 'precision3', (m: Record<string, number>) => pct(m.precision3)],
-    ['Precision@5', 'precision5', (m: Record<string, number>) => pct(m.precision5)],
-    ['Precision@10', 'precision10', (m: Record<string, number>) => pct(m.precision10)],
-    ['Recall@10', 'recall10', (m: Record<string, number>) => pct(m.recall10)],
-    ['Recall@20', 'recall20', (m: Record<string, number>) => pct(m.recall20)],
-    ['NDCG@3', 'ndcg3', (m: Record<string, number>) => f3(m.ndcg3)],
-    ['NDCG@5', 'ndcg5', (m: Record<string, number>) => f3(m.ndcg5)],
-    ['NDCG@10', 'ndcg10', (m: Record<string, number>) => f3(m.ndcg10)],
-    ['NDCG@20', 'ndcg20', (m: Record<string, number>) => f3(m.ndcg20)],
-    ['MRR', 'mrr', (m: Record<string, number>) => f3(m.mrr)],
-    ['Distractor@3', 'distractorAt3', (m: Record<string, number>) => String(Math.round(m.distractorAt3))],
-    ['High-Hit@3', 'highHit3', (m: Record<string, number>) => check(!!m.highHit3)],
+  const aggRows: Array<[string, keyof Metrics, (value: number) => string]> = [
+    ['Precision@3', 'precision3', pct],
+    ['Precision@5', 'precision5', pct],
+    ['Precision@10', 'precision10', pct],
+    ['Recall@10', 'recall10', pct],
+    ['Recall@20', 'recall20', pct],
+    ['NDCG@3', 'ndcg3', f3],
+    ['NDCG@5', 'ndcg5', f3],
+    ['NDCG@10', 'ndcg10', f3],
+    ['NDCG@20', 'ndcg20', f3],
+    ['MRR', 'mrr', f3],
+    ['Distractor@3', 'distractorAt3', (value) => String(Math.round(value))],
+    ['High-Hit@3', 'highHit3', (value) => check(value > 0)],
   ];
 
   for (const [label, key, fmt] of aggRows) {
-    const bv = fmt(bm.reduce((s, m) => ({ ...s, [key]: (s[key] ?? 0) + (m[key] ?? 0) / bm.length }), {} as Record<string, number>));
-    const rv = fmt(rm.reduce((s, m) => ({ ...s, [key]: (s[key] ?? 0) + (m[key] ?? 0) / rm.length }), {} as Record<string, number>));
+    const bv = fmt(averageMetric(bm, key));
+    const rv = fmt(averageMetric(rm, key));
 
     // Agent: only tasks 4-5, so compute partial avg
-    const agentVals = [...agent.values()].map(a => a[key as keyof typeof a] as number).filter(v => v !== undefined);
+    const agentVals = [...agent.values()]
+      .map((metric) => metric[key])
+      .filter((value): value is Metrics[keyof Metrics] => value !== undefined)
+      .map(metricValue);
     const av = agentVals.length > 0
-      ? (typeof agentVals[0] === 'number'
-        ? (typeof agentVals[0] === 'number' && key.includes('Hit') ? check(agentVals.filter(Boolean).length > 0) : f3(agentVals.reduce((s, v) => s + (v as number), 0) / agentVals.length))
-        : '—')
+      ? (key.includes('Hit') ? check(agentVals.some(Boolean)) : f3(agentVals.reduce((sum, value) => sum + value, 0) / agentVals.length))
       : '—';
 
     // Compute delta
-    const bNum = avg(bm, key);
-    const rNum = avg(rm, key);
+    const bNum = averageMetric(bm, key);
+    const rNum = averageMetric(rm, key);
     let delta = '';
     if (typeof bNum === 'number' && typeof rNum === 'number') {
       if (key.includes('tractor')) {
@@ -358,9 +369,9 @@ function generateReport(
     lines.push(`|------|------------|-----------|---------|`);
     for (const [label, key, fmt] of aggRows) {
       if (key === 'highHit3' || key === 'highHit10') continue;
-      const bv = fmt({ [key]: bMet?.[key as keyof typeof bMet] ?? 0 } as unknown as Record<string, number>);
-      const rv = fmt({ [key]: rMet?.[key as keyof typeof rMet] ?? 0 } as unknown as Record<string, number>);
-      const av = aMet ? fmt({ [key]: aMet[key as keyof typeof aMet] ?? 0 } as unknown as Record<string, number>) : '—';
+      const bv = fmt(bMet ? metricValue(bMet[key]) : 0);
+      const rv = fmt(rMet ? metricValue(rMet[key]) : 0);
+      const av = aMet ? fmt(metricValue(aMet[key] ?? 0)) : '—';
       lines.push(`| ${label} | ${bv} | ${rv} | ${av} |`);
     }
     lines.push(`| High-Hit@3 | ${check(bMet?.highHit3 ?? false)} | ${check(rMet?.highHit3 ?? false)} | ${aMet ? check(!!aMet.highHit3) : '—'} |`);
@@ -442,10 +453,10 @@ function generateReport(
   // ── Analysis ──
   lines.push(`## 五、分析`, ``);
 
-  const bP3 = avg(bm, 'precision3');
-  const rP3 = avg(rm, 'precision3');
-  const bD3 = avg(bm, 'distractorAt3');
-  const rD3 = avg(rm, 'distractorAt3');
+  const bP3 = averageMetric(bm, 'precision3');
+  const rP3 = averageMetric(rm, 'precision3');
+  const bD3 = averageMetric(bm, 'distractorAt3');
+  const rD3 = averageMetric(rm, 'distractorAt3');
 
   lines.push(`### 5.1 重排序效果`, ``);
   lines.push(`- **Precision@3**：${pct(bP3)} → ${pct(rP3)}（${rP3 > bP3 ? '+' : ''}${pct(rP3 - bP3)}）`);
@@ -478,8 +489,8 @@ function generateReport(
 // ── Main ──────────────────────────────────────────────────────────────────
 
 async function main() {
-  const tasks = loadTasks(path.join(REPO_ROOT, 'fixtures/benchmark/tasks.jsonl'));
-  const relevance = loadRelevance(path.join(REPO_ROOT, 'fixtures/benchmark/relevance.jsonl'));
+  const tasks = loadTasks(path.join(BENCHMARK_DIR, 'tasks.jsonl'));
+  const relevance = loadRelevance(path.join(BENCHMARK_DIR, 'relevance.jsonl'));
   const gt = buildGroundTruthMap(relevance);
 
   const resultsDir = path.join(REPO_ROOT, 'results/rerank_comparison');
@@ -549,17 +560,15 @@ async function main() {
   console.log(`Report saved to ${reportPath}`);
 
   // Print summary
-  const avg = (arr: Array<Record<string, number>>, key: string) =>
-    arr.reduce((s, m) => s + (m[key] ?? 0), 0) / arr.length;
-  const bm = baselineMetrics as Array<Record<string, number>>;
-  const rm = rerankMetrics as Array<Record<string, number>>;
+  const bm = baselineMetrics;
+  const rm = rerankMetrics;
   const bHit3c = baselineMetrics.filter(m => m.highHit3).length;
   const rHit3c = rerankMetrics.filter(m => m.highHit3).length;
   console.log('\n' + '='.repeat(80));
   console.log('SUMMARY');
   console.log('='.repeat(80));
-  console.log(`  Baseline  P@3=${pct(avg(bm, 'precision3'))}  P@5=${pct(avg(bm, 'precision5'))}  Dist@3=${avg(bm, 'distractorAt3').toFixed(1)}  HighHit3=${bHit3c}/5`);
-  console.log(`  Rerank    P@3=${pct(avg(rm, 'precision3'))}  P@5=${pct(avg(rm, 'precision5'))}  Dist@3=${avg(rm, 'distractorAt3').toFixed(1)}  HighHit3=${rHit3c}/5`);
+  console.log(`  Baseline  P@3=${pct(averageMetric(bm, 'precision3'))}  P@5=${pct(averageMetric(bm, 'precision5'))}  Dist@3=${averageMetric(bm, 'distractorAt3').toFixed(1)}  HighHit3=${bHit3c}/5`);
+  console.log(`  Rerank    P@3=${pct(averageMetric(rm, 'precision3'))}  P@5=${pct(averageMetric(rm, 'precision5'))}  Dist@3=${averageMetric(rm, 'distractorAt3').toFixed(1)}  HighHit3=${rHit3c}/5`);
   console.log(`  Agent     P@3~17%  P@5~30%  Dist@3=0  HighHit3=1/2 (task 4-5 only)`);
 }
 

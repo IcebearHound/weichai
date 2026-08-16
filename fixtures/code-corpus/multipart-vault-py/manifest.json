@@ -1,0 +1,13 @@
+{
+  "repository": "multipart-vault-py",
+  "language": "Python",
+  "languageVersion": "3.11+",
+  "sourceRoot": "src",
+  "testRoot": "tests",
+  "build": "python -m compileall -q src tests",
+  "test": "python run_tests.py",
+  "license": "MIT",
+  "dependencies": [],
+  "benchmarkIncluded": false,
+  "relatedTo": "Apache Commons FileUpload 1.5 semantics"
+}

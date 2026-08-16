@@ -40,8 +40,14 @@ export function createReranker(config: RetrievalConfig): LlmReranker | null {
 export function createRuntime(config: RetrievalConfig) {
   const store = new SeekDbStore(config.seekdb);
   const embeddings = createEmbeddingProvider(config);
-  const baseEngine: SearchEngine = new SeekDbSearchEngine(store, embeddings);
   const reranker = createReranker(config);
+  // The PDF workflow sends exactly the hybrid Top20 to the reranker. The
+  // base engine keeps its broader default recall when reranking is disabled.
+  const baseEngine: SearchEngine = new SeekDbSearchEngine(
+    store,
+    embeddings,
+    reranker ? 20 : undefined,
+  );
   const engine: SearchEngine = reranker
     ? new RerankingSearchEngine(baseEngine, reranker)
     : baseEngine;

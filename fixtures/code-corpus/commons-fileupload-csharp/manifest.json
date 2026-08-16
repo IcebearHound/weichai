@@ -1,0 +1,13 @@
+{
+  "repository": "commons-fileupload-csharp",
+  "language": "C#",
+  "languageVersion": "12/.NET 8",
+  "sourceRoot": "src",
+  "testRoot": "tests",
+  "build": "dotnet build Commons.FileUpload.csproj",
+  "test": "dotnet run --project Commons.FileUpload.csproj",
+  "license": "Apache-2.0",
+  "dependencies": [],
+  "benchmarkIncluded": false,
+  "upstream": "Apache Commons FileUpload 1.5"
+}

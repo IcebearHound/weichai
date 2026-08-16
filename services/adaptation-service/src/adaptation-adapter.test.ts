@@ -44,32 +44,65 @@ const request: AdaptationRequest = {
 describe("AdaptationAdapter language gate", () => {
   const adapter = new AdaptationAdapter({ apiKey: "not-used-by-gate-tests" });
 
-  it("rejects non-Java candidates before invoking the translator", async () => {
-    await expect(
-      adapter.adapt({
-        ...request,
-        candidate: { ...javaCandidate, language: "Python" },
-      }),
-    ).rejects.toThrow(
-      "Unsupported adaptation language pair: Python -> C#. Expected Java -> C#.",
-    );
-  });
-
-  it("rejects non-C# targets before invoking the translator", async () => {
+  it("rejects targets outside the Java and legacy C# service paths", async () => {
     await expect(
       adapter.adapt({
         ...request,
         target: { ...request.target, language: "TypeScript" },
       }),
     ).rejects.toThrow(
-      "Unsupported adaptation language pair: Java -> TypeScript. Expected Java -> C#.",
+      "AdaptationAdapter supports Java benchmark targets and legacy C# targets; received target language TypeScript.",
     );
   });
 
-  it("rejects strategies unsupported by the Java-to-C# adapter", async () => {
+  it("rejects strategies unsupported by the adapter", async () => {
     await expect(adapter.adapt({ ...request, strategy: "wrap" })).rejects.toThrow(
       'AdaptationAdapter only supports the "translate" strategy; received "wrap".',
     );
+  });
+
+  it("routes a Python candidate into the Java translation and validation path", async () => {
+    const compilerSuccess: CompileResult = { success: true, errors: [], output: "" };
+    const prompts: string[] = [];
+    const adapter = new AdaptationAdapter({
+      apiKey: "test-key",
+      projectRoot: process.cwd(),
+      translatorRequest: (async (_input: URL | RequestInfo, init?: RequestInit) => {
+        const request = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+        prompts.push(request.messages[0]?.content ?? "");
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: "public void calculate() { }" } }],
+        }), { status: 200 });
+      }) as typeof globalThis.fetch,
+      validator: {
+        compileStandalone: () => compilerSuccess,
+        compileIntegrated: () => compilerSuccess,
+        compileJavaStandalone: () => compilerSuccess,
+        compileJavaIntegrated: () => compilerSuccess,
+        isUnavailable: () => false,
+      },
+    });
+    const result = await adapter.adapt({
+      ...request,
+      target: {
+        ...request.target,
+        path: "src/Calculator.java",
+        language: "Java",
+        signature: "public void calculate()",
+      },
+      candidate: {
+        ...javaCandidate,
+        language: "Python",
+        preview: "def calculate():\n    return None",
+      },
+    });
+
+    expect(result.targetLanguage).toBe("Java");
+    expect(result.generatedCode).toBe("public void calculate() { }");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("【源语言】\nPython");
+    expect(result.validation.find((record) => record.id === "standalone-compile"))
+      .toMatchObject({ status: "pass", command: "javac" });
   });
 });
 
@@ -139,22 +172,18 @@ describe("AdaptationAdapter analyzer-translator integration", () => {
         return analysisReport;
       },
     };
-    const generatedCode = `${integrationRequest.target.signature}\n{\n    throw new NotImplementedException();\n}`;
+    const generatedCode = `public async ${integrationRequest.target.signature}\n{\n    throw new NotImplementedException();\n}`;
     const modelBodies: Array<Record<string, unknown>> = [];
     const translatorRequest = (async (_input: URL | RequestInfo, init?: RequestInit) => {
       modelBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return new Response(JSON.stringify({
-        choices: [{
-          message: {
-            content: JSON.stringify({
-              schemaVersion: "1.0",
-              generatedCode,
-              interfaceMappings: analysisReport.contractMapping,
-              completedSteps: analysisReport.implementationPlan,
-              unresolved: [],
-            }),
-          },
-        }],
+        choices: [{ message: { content: JSON.stringify({
+          schemaVersion: "1.0",
+          generatedCode,
+          interfaceMappings: analysisReport.contractMapping,
+          completedSteps: analysisReport.implementationPlan,
+          unresolved: [],
+        }) } }],
       }), { status: 200 });
     }) as typeof globalThis.fetch;
     const unavailable = {
@@ -202,19 +231,15 @@ describe("AdaptationAdapter analyzer-translator integration", () => {
         return analysisReport;
       },
     };
-    const generatedCode = `${integrationRequest.target.signature}\n{\n    return await cache.GetOrLoadAsync(request, token => FetchWithFallbackAsync(request, token), cancellationToken);\n}`;
+    const generatedCode = `public async ${integrationRequest.target.signature}\n{\n    return await cache.GetOrLoadAsync(request, token => FetchWithFallbackAsync(request, token), cancellationToken);\n}`;
     const translatorRequest = (async () => new Response(JSON.stringify({
-      choices: [{
-        message: {
-          content: JSON.stringify({
-            schemaVersion: "1.0",
-            generatedCode,
-            interfaceMappings: analysisReport.contractMapping,
-            completedSteps: analysisReport.implementationPlan,
-            unresolved: [],
-          }),
-        },
-      }],
+      choices: [{ message: { content: JSON.stringify({
+        schemaVersion: "1.0",
+        generatedCode,
+        interfaceMappings: analysisReport.contractMapping,
+        completedSteps: analysisReport.implementationPlan,
+        unresolved: [],
+      }) } }],
     }), { status: 200 })) as typeof globalThis.fetch;
     const standaloneFailure: CompileResult = {
       success: false,

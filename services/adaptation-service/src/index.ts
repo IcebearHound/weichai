@@ -1,7 +1,7 @@
 /**
  * @forexplore/adaptation-service
  *
- * Java → C# 代码适配服务：
+ * 任意已支持候选语言 → Java 代码适配服务：
  *   LLM 翻译 → 编译校验 → 自动修复 → 回填
  */
 
@@ -20,14 +20,15 @@ export {
   fixCompileErrors,
   projectTargetContext,
   repairTranslation,
-  translateCSharpToJava,
+  TranslatorAgent,
+  translateToJava,
   translateJavaToCSharp,
   translateWithAnalysis,
 } from "./translator";
 export type {
   AnalyzeTranslationRequest,
   ApplicabilityLevel,
-  CSharpToJavaRequest,
+  TranslateToJavaRequest,
   RepairTranslationRequest,
   TranslateRequest,
   TranslationMapping,
@@ -61,8 +62,11 @@ export {
 } from "./compiler";
 export type { CompileResult } from "./compiler";
 
-export { adaptationModelConfig, loadAdaptationModelConfig } from "./model-config";
-export type { AdaptationModelConfig } from "./model-config";
+export { deepSeekModelConfig, loadDeepSeekModelConfig } from "./model-config";
+export type { DeepSeekModelConfig } from "./model-config";
+
+export { chatCompletionContent, completeWithDeepSeek } from "./deepseek-client";
+export type { DeepSeekClientOptions, DeepSeekMessage } from "./deepseek-client";
 
 export { loadConfig } from "./config";
 export type { AdaptationServiceConfig } from "./config";

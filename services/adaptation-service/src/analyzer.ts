@@ -7,7 +7,8 @@ import type {
   DependencyAction,
 } from "@forexplore/contracts";
 import { analysisSchemaVersion } from "@forexplore/contracts";
-import { adaptationModelConfig, type AdaptationModelConfig } from "./model-config";
+import { completeWithDeepSeek } from "./deepseek-client";
+import { deepSeekModelConfig, type DeepSeekModelConfig } from "./model-config";
 
 export interface AnalyzerMessage {
   role: "system" | "user";
@@ -21,7 +22,7 @@ export interface AnalyzerModelClient {
 export interface AnalyzerAgentOptions {
   apiKey?: string;
   client?: AnalyzerModelClient;
-  modelConfig?: AdaptationModelConfig;
+  modelConfig?: DeepSeekModelConfig;
 }
 
 const analyzerSystemPrompt = `You are the Analyzer Agent in a Java-to-C# adaptation workflow.
@@ -50,7 +51,7 @@ export class AnalyzerAgent {
   constructor(options: AnalyzerAgentOptions) {
     this.#client = options.client ?? createDeepSeekAnalyzerClient(
       requireApiKey(options.apiKey),
-      options.modelConfig ?? adaptationModelConfig,
+      options.modelConfig ?? deepSeekModelConfig,
     );
   }
 
@@ -231,39 +232,15 @@ export function validateAnalysisReport(value: unknown): asserts value is Analysi
 
 function createDeepSeekAnalyzerClient(
   apiKey: string,
-  config: AdaptationModelConfig,
+  config: DeepSeekModelConfig,
 ): AnalyzerModelClient {
   return {
     async complete(messages, signal) {
-      const response = await fetch(`${config.apiBase}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: config.model,
-          messages,
-          thinking: { type: "disabled" },
-          temperature: 0,
-          response_format: { type: "json_object" },
-        }),
+      return completeWithDeepSeek(
+        messages,
+        { apiKey, modelConfig: config, temperature: 0, jsonMode: true },
         signal,
-      });
-
-      if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`DeepSeek Analyzer API error ${response.status}: ${error}`);
-      }
-
-      const data = (await response.json()) as {
-        choices?: Array<{ message?: { content?: unknown } }>;
-      };
-      const content = data.choices?.[0]?.message?.content;
-      if (typeof content !== "string" || !content.trim()) {
-        throw new Error("DeepSeek Analyzer API returned an empty completion.");
-      }
-      return content.trim();
+      );
     },
   };
 }

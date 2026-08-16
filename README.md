@@ -14,8 +14,9 @@ prototype; it is not the primary product entry point.
 - `packages/mock-adapters`: demonstration search, adaptation, and backfill implementations.
 - `packages/seekdb-adapter`: browser-to-retrieval-service `CodeSearchPort` adapter.
 - `services/retrieval-service`: SeekDB-backed semantic, structural, and hybrid search.
+- `services/adaptation-mcp-server`: local stdio MCP server for guarded translation tools.
 - `services`: backend boundaries for indexing, retrieval, and adaptation services.
-- `fixtures`: synthetic target system, code corpus, and retrieval benchmark.
+- `fixtures`: target workspaces and cross-language code corpus fixtures.
 - `tests`: repository-level contract, integration, and end-to-end tests.
 - `docs`: architecture material, prototypes, reports, and historical work logs.
 - `tooling`: repository-wide development and automation utilities.
@@ -23,8 +24,8 @@ prototype; it is not the primary product entry point.
 ## Local configuration
 
 Run all commands below from the repository root. The full workflow requires
-Node.js/npm, Docker with Compose for SeekDB, and a .NET SDK for real C# compile
-validation. The retrieval and Web layers can run without .NET.
+Node.js/npm, Docker with Compose for SeekDB, and a JDK for Java target compile
+validation. The retrieval layer can run without a JDK.
 
 Install the workspace dependencies and create local environment files:
 
@@ -122,10 +123,33 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 # DEEPSEEK_API_BASE=https://api.deepseek.com/v1
 ```
 
-Real Java-to-C# adaptation validates generated code with `dotnet build`. Check
-that the SDK is available with `dotnet --version`. Under WSL the service also
-auto-detects the standard Windows SDK path; set `DOTNET_COMMAND` explicitly in
-the adaptation environment if the SDK is installed elsewhere.
+The extension's candidate-language-to-Java adaptation validates generated code with `javac`.
+Set `JAVA_HOME` or place `javac` on `PATH` in the adaptation-service environment.
+
+### Configure the MCP translation server
+
+The MCP server exposes context collection, analysis, generation, repair,
+validation, and complete adaptation with patch preview. It does not expose file
+write-back. Copy `services/adaptation-mcp-server/.env.example`, configure the
+same DeepSeek and target-project variables, then run:
+
+```bash
+npm run dev:mcp
+```
+
+Claude Code loads the checked-in `.mcp.json` when run from this project. Set
+`DEEPSEEK_API_KEY` in the shell, then start its outer agent with DeepSeek V4
+Flash:
+
+```bash
+export DEEPSEEK_API_KEY=<server-side-key>
+npm run claude:deepseek
+```
+
+The launcher routes Claude Code's Anthropic-compatible model calls directly to
+DeepSeek. The project MCP server keeps the Analyzer and Translator as separate,
+stateless DeepSeek agents. See `services/adaptation-mcp-server/README.md` for
+the tool boundary.
 
 ### Start the application
 
@@ -183,9 +207,9 @@ npm run build:adaptation
 npm test
 ```
 
-The runtime module tree is loaded through `ModuleSymbolPort` from the C# target
-fixture. The repository also includes a Vite-time TypeScript workspace scanner
-for generated module-tree integrations.
+The primary entry point is the VS Code extension, which derives its target from
+the active Java workspace. The default fixture is
+`fixtures/target-system/commons-fileupload-java-skeleton`.
 
 ## Development guide
 

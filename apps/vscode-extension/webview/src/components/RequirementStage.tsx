@@ -66,7 +66,7 @@ export function RequirementStage({
           onChange={(event) =>
             dispatch({ type: 'SET_REQUIREMENT', value: event.target.value })
           }
-          placeholder="例如：为报价读取增加 5 秒 TTL 缓存、并发请求合并、超时与 stale 回退；保持现有接口不变。留空时按目标名称、签名与注释检索。"
+          placeholder="例如：解析 multipart 请求并保留字段顺序、文件阈值和大小限制；保持现有接口不变。留空时按目标名称、签名与注释检索。"
           rows={4}
         />
         <div className="requirement-meta">

@@ -18,7 +18,7 @@ const server = createHttpServer({
 
 server.listen(config.port, config.host, () => {
   console.log(`Adaptation service listening on http://${config.host}:${config.port}`);
-  console.log(`C# project: ${config.projectRoot}`);
+  console.log(`Target project: ${config.projectRoot}`);
 });
 
 async function shutdown(): Promise<void> {

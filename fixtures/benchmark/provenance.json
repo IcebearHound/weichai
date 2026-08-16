@@ -1,7 +1,0 @@
-{
-  "synthetic": true,
-  "statement": "Every source file in this fixture set was independently generated for this benchmark.",
-  "copiedFromOpenSource": false,
-  "generatedAt": "2026-07-13",
-  "scope": ["target-system", "code-corpus", "benchmark"]
-}

@@ -1,11 +1,11 @@
-export interface AdaptationModelConfig {
+export interface DeepSeekModelConfig {
   apiBase: string;
   model: string;
 }
 
-export function loadAdaptationModelConfig(
+export function loadDeepSeekModelConfig(
   env: NodeJS.ProcessEnv = process.env,
-): AdaptationModelConfig {
+): DeepSeekModelConfig {
   const apiBase = (env.DEEPSEEK_API_BASE?.trim() || "https://api.deepseek.com/v1")
     .replace(/\/+$/, "");
   const url = new URL(apiBase);
@@ -19,4 +19,4 @@ export function loadAdaptationModelConfig(
   };
 }
 
-export const adaptationModelConfig = loadAdaptationModelConfig();
+export const deepSeekModelConfig = loadDeepSeekModelConfig();

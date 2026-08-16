@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "forexplore-adaptation": {
+      "command": "npm",
+      "args": [
+        "run",
+        "start",
+        "--workspace",
+        "@forexplore/adaptation-mcp-server"
+      ]
+    }
+  }
+}

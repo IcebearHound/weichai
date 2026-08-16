@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -63,5 +63,29 @@ describe('corpus manifest validation', () => {
     await expect(extractCorpus(root)).rejects.toThrow(
       'sourceRoot must stay inside',
     );
+  });
+
+  it('discovers C# source files when a C# manifest declares them', async () => {
+    const { root } = await createCorpus(
+      JSON.stringify({ repository: 'csharp-fixture', language: 'C#', sourceRoot: 'src' }),
+    );
+    await mkdir(path.join(root, 'src'));
+    await writeFile(
+      path.join(root, 'src', 'UploadPart.cs'),
+      [
+        'namespace Fixture;',
+        'public sealed class UploadPart',
+        '{',
+        '  public string Read() { return "ok"; }',
+        '}',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const documents = await extractCorpus(root);
+
+    expect(documents.map((document) => document.title)).toContain('UploadPart');
+    expect(documents.map((document) => document.title)).toContain('Read');
+    expect(documents.every((document) => document.language === 'C#')).toBe(true);
   });
 });

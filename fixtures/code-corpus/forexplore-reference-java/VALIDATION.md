@@ -9,4 +9,4 @@
 | Behavior suite | `bash build.sh test` |
 | CLI smoke | Included in the behavior suite |
 
-The source count excludes blank lines and comments using the same effective-line convention as `fixtures/benchmark/refresh_manifest.py`.
+The source count excludes blank and comment-only lines.

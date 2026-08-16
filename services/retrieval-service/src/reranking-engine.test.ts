@@ -50,8 +50,9 @@ function reranker(
 
 describe('RerankingSearchEngine', () => {
   it('uses a complete, known rerank response to reorder candidates', async () => {
+    const base = baseEngine();
     const engine = new RerankingSearchEngine(
-      baseEngine(),
+      base,
       reranker([
         { id: 'first', score: 0.2, reason: 'weak' },
         { id: 'second', score: 0.9, reason: 'strong' },
@@ -63,6 +64,7 @@ describe('RerankingSearchEngine', () => {
       { id: 'second', score: { rerank: 0.9 }, rerankReason: 'strong' },
       { id: 'third', score: { rerank: 0.5 }, rerankReason: 'medium' },
     ]);
+    expect(base.search).toHaveBeenCalledWith(expect.objectContaining({ topK: 20 }));
   });
 
   it.each([

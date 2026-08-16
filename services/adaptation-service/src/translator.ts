@@ -1,5 +1,5 @@
 /**
- * Translator Agent for Java -> C# module adaptation.
+ * Translator helpers for Java ↔ C# module adaptation.
  *
  * AnalysisReport is owned by the shared contracts. TargetModuleContext is
  * projected into the smaller prompt-oriented view used by this agent.
@@ -7,9 +7,10 @@
 import type {
   AnalysisReport,
   ApplicabilityLevel as SharedApplicabilityLevel,
+  Language,
   TargetModuleContext,
 } from "@forexplore/contracts";
-import { adaptationModelConfig } from "./model-config";
+import { completeWithDeepSeek } from "./deepseek-client";
 
 export type ApplicabilityLevel = SharedApplicabilityLevel;
 export type TranslatorAnalysisReport = AnalysisReport;
@@ -33,7 +34,9 @@ export function projectTargetContext(
   context: TargetModuleContext,
 ): TranslatorTargetContext {
   return {
-    targetSignature: context.target.signature,
+    // ModuleTree signatures can omit C# modifiers (for example `public async`).
+    // The collected declaration is the source of truth for a replacement method.
+    targetSignature: targetMethodDeclaration(context) ?? context.target.signature,
     targetFilePath: context.target.path,
     enclosingType: context.source.containingType,
     documentation: context.target.documentation,
@@ -54,6 +57,20 @@ export function projectTargetContext(
     ),
     immutableConstraints: [...context.constraints],
   };
+}
+
+function targetMethodDeclaration(context: TargetModuleContext): string | undefined {
+  const method = context.source.method.trim();
+  const openingBrace = method.indexOf("{");
+  if (openingBrace < 0) return undefined;
+
+  const declaration = method.slice(0, openingBrace).trim();
+  const methodPattern = new RegExp(`\\b${escapeRegExp(context.target.name)}\\s*\\(`);
+  return declaration && methodPattern.test(declaration) ? declaration : undefined;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export interface AnalyzeTranslationRequest {
@@ -97,6 +114,55 @@ export interface RepairTranslationRequest extends AnalyzeTranslationRequest {
 export interface TranslatorModelOptions {
   apiKey: string;
   request?: typeof globalThis.fetch;
+}
+
+/**
+ * Independent implementation agent. Its model calls are deliberately
+ * stateless: Analyzer history is never retained or injected into this agent.
+ * The validated AnalysisReport is the only Analyzer-produced handoff.
+ */
+export class TranslatorAgent {
+  readonly #options: TranslatorModelOptions;
+
+  constructor(options: TranslatorModelOptions) {
+    this.#options = options;
+  }
+
+  async translate(
+    request: AnalyzeTranslationRequest,
+    signal?: AbortSignal,
+  ): Promise<TranslationResult> {
+    assertAnalysisAllowsTranslation(request.analysisReport);
+    const raw = await callModel(
+      TRANSLATOR_SYSTEM_PROMPT,
+      buildTranslationPrompt(request),
+      this.#options,
+      signal,
+    );
+    return validateWithRepairs(request, parseTranslationResult(raw), this.#options, signal);
+  }
+
+  /** Repair keeps no conversation state and receives only structured feedback. */
+  async repair(
+    request: RepairTranslationRequest,
+    signal?: AbortSignal,
+  ): Promise<TranslationResult> {
+    assertAnalysisAllowsTranslation(request.analysisReport);
+    if (request.validationFeedback.status === "pass") {
+      return validateTranslationResult(request.previousResult, request);
+    }
+    if (request.validationFeedback.issues.length === 0) {
+      throw new Error("Failed validation feedback must contain at least one issue.");
+    }
+
+    const raw = await callModel(
+      TRANSLATOR_SYSTEM_PROMPT,
+      buildRepairPrompt(request),
+      this.#options,
+      signal,
+    );
+    return validateWithRepairs(request, parseTranslationResult(raw), this.#options, signal);
+  }
 }
 
 /** Existing Java -> C# entry point kept for HTTP/adapter compatibility. */
@@ -168,14 +234,7 @@ export async function translateWithAnalysis(
   options: TranslatorModelOptions,
   signal?: AbortSignal,
 ): Promise<TranslationResult> {
-  assertAnalysisAllowsTranslation(request.analysisReport);
-  const raw = await callModel(
-    TRANSLATOR_SYSTEM_PROMPT,
-    buildTranslationPrompt(request),
-    options,
-    signal,
-  );
-  return validateWithRepairs(request, parseTranslationResult(raw), options, signal);
+  return new TranslatorAgent(options).translate(request, signal);
 }
 
 /**
@@ -187,21 +246,7 @@ export async function repairTranslation(
   options: TranslatorModelOptions,
   signal?: AbortSignal,
 ): Promise<TranslationResult> {
-  assertAnalysisAllowsTranslation(request.analysisReport);
-  if (request.validationFeedback.status === "pass") {
-    return validateTranslationResult(request.previousResult, request);
-  }
-  if (request.validationFeedback.issues.length === 0) {
-    throw new Error("Failed validation feedback must contain at least one issue.");
-  }
-
-  const raw = await callModel(
-    TRANSLATOR_SYSTEM_PROMPT,
-    buildRepairPrompt(request),
-    options,
-    signal,
-  );
-  return validateWithRepairs(request, parseTranslationResult(raw), options, signal);
+  return new TranslatorAgent(options).repair(request, signal);
 }
 
 async function validateWithRepairs(
@@ -375,52 +420,14 @@ async function callModel(
   options: TranslatorModelOptions,
   signal?: AbortSignal,
 ): Promise<string> {
-  if (!options.apiKey.trim()) throw new Error("Translator API key must not be empty.");
-  const request = options.request ?? globalThis.fetch.bind(globalThis);
-  const response = await request(`${adaptationModelConfig.apiBase}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${options.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: adaptationModelConfig.model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      thinking: { type: "disabled" },
-      temperature: 0.1,
-      response_format: { type: "json_object" },
-    }),
+  return completeWithDeepSeek(
+    [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    { ...options, temperature: 0.1, jsonMode: true },
     signal,
-  });
-
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(`DeepSeek API error ${response.status}: ${text}`);
-  }
-  let data: unknown;
-  try {
-    data = JSON.parse(text) as unknown;
-  } catch {
-    throw new Error("DeepSeek API returned invalid JSON.");
-  }
-  const content = completionContent(data);
-  if (!content) throw new Error("DeepSeek API returned an empty completion.");
-  return content;
-}
-
-function completionContent(value: unknown): string | null {
-  if (typeof value !== "object" || value === null) return null;
-  const choices = (value as { choices?: unknown }).choices;
-  if (!Array.isArray(choices) || choices.length === 0) return null;
-  const first = choices[0];
-  if (typeof first !== "object" || first === null) return null;
-  const message = (first as { message?: unknown }).message;
-  if (typeof message !== "object" || message === null) return null;
-  const content = (message as { content?: unknown }).content;
-  return typeof content === "string" && content.trim() ? content.trim() : null;
+  );
 }
 
 function parseTranslationResult(raw: string): TranslationResult {
@@ -853,10 +860,11 @@ function legacyAnalysisRequest(request: TranslateRequest): AnalyzeTranslationReq
   };
 }
 
-// ---- C# → Java 双向翻译（独立路径，不经过分析器/校验器）----
+// ---- Source language → Java translation for the benchmark target ----
 
-export interface CSharpToJavaRequest {
-  csharpSource: string;
+export interface TranslateToJavaRequest {
+  sourceLanguage: Language;
+  sourceCode: string;
   javaSignature: string;
   requirement: string;
   matchType: "exact" | "partial" | "different";
@@ -868,40 +876,27 @@ const MATCH_NOTES: Record<string, string> = {
   different: "功能差异较大，以需求描述为准，源码仅作参考。",
 };
 
-const CSHARP_TO_JAVA_RULES = [
-  "1. C# decimal → Java double",
-  "2. C# List<T> → Java List<T>",
-  "3. C# Dictionary<K,V> → Java Map<K,V>",
-  "4. C# bool → Java boolean",
-  "5. C# string → Java String",
-  "6. C# 属性 (get; set;) → Java getter/setter 方法",
-  "7. C# 无 throws 声明 → Java 方法签名添加 throws 声明（如需要）",
-  "8. ArgumentException → IllegalArgumentException",
-  "9. InvalidOperationException → IllegalStateException",
-  "10. ArgumentNullException → NullPointerException",
-  "11. C# static method → Java 保留 static",
-  "12. LINQ → Stream API (Where→filter, Select→map, ToDictionary→collect(Collectors.toMap), OrderByDescending→sorted(Comparator.reverseOrder()), Take→limit)",
-  "13. string.Format() / $\"\" 字符串插值 → String.format()",
-  "14. Dictionary.TryGetValue + 赋值 → Map.merge()",
-].join("\n");
-
-export async function translateCSharpToJava(
-  request: CSharpToJavaRequest,
+export async function translateToJava(
+  request: TranslateToJavaRequest,
   apiKey: string,
   signal?: AbortSignal,
+  modelOptions?: Pick<TranslatorModelOptions, "request">,
 ): Promise<string> {
-  const prompt = buildCSharpToJavaPrompt(request);
-  return callLLM(prompt, apiKey, signal);
+  const prompt = buildTranslateToJavaPrompt(request);
+  return callLLM(prompt, apiKey, signal, modelOptions?.request);
 }
 
-function buildCSharpToJavaPrompt(req: CSharpToJavaRequest): string {
-  return `你是 C#→Java 代码翻译专家。请把以下 C# 方法翻译成 Java。
+function buildTranslateToJavaPrompt(req: TranslateToJavaRequest): string {
+  return `You are a source-to-Java code translation expert. Translate the selected ${req.sourceLanguage} implementation into Java.
 
 【匹配类型】${MATCH_NOTES[req.matchType] ?? ""}
 
-【C# 源码】
-\`\`\`csharp
-${req.csharpSource}
+【源语言】
+${req.sourceLanguage}
+
+【源码】
+\`\`\`
+${req.sourceCode}
 \`\`\`
 
 【目标 Java 方法签名】
@@ -912,52 +907,31 @@ ${req.javaSignature}
 【需求描述】
 ${req.requirement}
 
-【翻译规则】
-${CSHARP_TO_JAVA_RULES}
-
-15. 不要写 import 语句 (放到编译 wrapper 里统一处理)
-16. 只输出方法代码（包含签名），不要 class 包裹，不要文件头，不要解释
-17. 不要 markdown 代码块标记 (\`\`\`)`;
+【规则】
+1. The Java target signature is immutable. Preserve it exactly.
+2. Preserve the source behavior, error handling, ordering, and boundary conditions relevant to the requirement.
+3. Convert source-language types, collection APIs, exceptions, and idioms into Java equivalents. Do not retain source-language syntax.
+4. Reuse only dependencies visible in the target contract; do not invent unavailable libraries or helpers.
+5. Do not write import statements. Output only one Java method including its signature, with no class wrapper, file header, explanation, or Markdown fences.`;
 }
 
 async function callLLM(
   prompt: string,
   apiKey: string,
   signal?: AbortSignal,
+  request?: typeof globalThis.fetch,
 ): Promise<string> {
-  const response = await fetch(`${adaptationModelConfig.apiBase}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: adaptationModelConfig.model,
-      messages: [{ role: "user", content: prompt }],
-      thinking: { type: "disabled" },
-      temperature: 0.1,
-    }),
+  const content = await completeWithDeepSeek(
+    [{ role: "user", content: prompt }],
+    { apiKey, request, temperature: 0.1 },
     signal,
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`DeepSeek API error ${response.status}: ${err}`);
-  }
-
-  const data = (await response.json()) as {
-    choices: Array<{ message: { content: string } }>;
-  };
-  const content = data.choices[0]?.message.content;
-  if (typeof content !== "string" || !content.trim()) {
-    throw new Error("DeepSeek API returned an empty completion.");
-  }
-  return stripCodeFence(content.trim());
+  );
+  return stripCodeFence(content);
 }
 
 function stripCodeFence(code: string): string {
   return code
-    .replace(/^```(?:csharp|cs|java)?\s*/i, "")
+    .replace(/^```(?:[A-Za-z0-9_+-]+)?\s*/i, "")
     .replace(/\s*```\s*$/, "")
     .trim();
 }

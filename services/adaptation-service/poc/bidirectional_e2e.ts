@@ -1,5 +1,5 @@
 /**
- * 双向翻译 E2E 脚本 — 真实调用 DeepSeek LLM + 编译校验
+ * 双向翻译 E2E 脚本 — 真实调用 DeepSeek + 编译校验
  *
  * 用法:
  *   PowerShell:
@@ -17,15 +17,20 @@ import {
   compileStandalone,
 } from "../src/compiler";
 import {
-  translateCSharpToJava,
+  translateToJava,
   translateJavaToCSharp,
 } from "../src/translator";
 
-const apiKey = process.env.DEEPSEEK_API_KEY;
-if (!apiKey) {
-  console.error("[X] DEEPSEEK_API_KEY 未设置");
-  console.error("    请在 services/adaptation-service/.env 里填 DEEPSEEK_API_KEY=sk-...");
-  process.exit(1);
+const apiKey = requireDeepSeekApiKey();
+
+function requireDeepSeekApiKey(): string {
+  const value = process.env.DEEPSEEK_API_KEY?.trim();
+  if (!value) {
+    console.error("[X] DEEPSEEK_API_KEY 未设置");
+    console.error("    请在 services/adaptation-service/.env 里填 DEEPSEEK_API_KEY=sk-...");
+    process.exit(1);
+  }
+  return value;
 }
 
 // ---- 只依赖标准库的方法（保证独立编译可验证） ----
@@ -103,9 +108,10 @@ async function main() {
   await runDirection(
     "方向 2: C# -> Java（javac 独立编译）",
     () =>
-      translateCSharpToJava(
+      translateToJava(
         {
-          csharpSource,
+          sourceLanguage: "C#",
+          sourceCode: csharpSource,
           javaSignature,
           requirement: "对所有金额求和后减去折扣，返回最终总额",
           matchType: "exact",

@@ -1,0 +1,324 @@
+import {
+  AdaptationAdapter,
+  AnalyzerAgent,
+  collectTargetContext,
+  compileIntegrated,
+  compileStandalone,
+  projectTargetContext,
+  repairTranslation,
+  translateJavaToCSharp,
+  translateToJava,
+  translateWithAnalysis,
+  type AdaptationAnalyzer,
+  type AdaptationValidator,
+  type TranslatorModelOptions,
+} from "@forexplore/adaptation-service";
+import type { ModuleTarget } from "@forexplore/contracts";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import * as z from "zod/v4";
+
+const MAX_CODE_CHARS = 160_000;
+const MAX_REQUIREMENT_CHARS = 8_000;
+const MAX_NOTES_CHARS = 8_000;
+
+const languageSchema = z.enum([
+  "TypeScript",
+  "Python",
+  "Java",
+  "C#",
+  "Rust",
+  "Go",
+]);
+
+const targetSchema = z.object({
+  id: z.string().trim().min(1).max(256),
+  name: z.string().trim().min(1).max(512),
+  kind: z.enum(["class", "function"]),
+  path: z.string().trim().min(1).max(4_096),
+  language: languageSchema,
+  signature: z.string().trim().min(1).max(16_000),
+  documentation: z.string().max(32_000).optional(),
+  line: z.number().int().positive().optional(),
+  implementationStatus: z.enum(["implemented", "unimplemented"]).optional(),
+});
+
+const candidateSchema = z.object({
+  id: z.string().trim().min(1).max(256),
+  title: z.string().trim().min(1).max(1_024),
+  repository: z.string().trim().min(1).max(4_096),
+  license: z.string().trim().min(1).max(512),
+  language: languageSchema,
+  kind: z.enum(["class", "function"]),
+  path: z.string().trim().min(1).max(4_096),
+  signature: z.string().trim().min(1).max(16_000),
+  summary: z.string().max(16_000),
+  score: z.object({
+    overall: z.number(),
+    semantic: z.number(),
+    symbol: z.number(),
+    contract: z.number(),
+    rerank: z.number().optional(),
+  }),
+  preview: z.string().min(1).max(MAX_CODE_CHARS),
+  dependencies: z.array(z.string().max(1_024)).max(1_000),
+  compatibility: z.array(z.string().max(4_096)).max(1_000),
+  risks: z.array(z.string().max(4_096)).max(1_000),
+  rerankReason: z.string().max(8_000).optional(),
+});
+
+const analysisReportSchema = z.object({
+  schemaVersion: z.literal("1.0"),
+  applicability: z.object({
+    level: z.enum(["direct", "adapt", "reference", "reject"]),
+    confidence: z.number().min(0).max(1),
+    reasons: z.array(z.string().min(1).max(8_000)).min(1),
+  }),
+  behaviorMapping: z.array(z.object({
+    requirement: z.string().min(1).max(8_000),
+    status: z.enum(["covered", "partial", "missing", "conflict"]),
+    candidateEvidence: z.array(z.string().max(8_000)),
+    targetAction: z.string().min(1).max(8_000),
+  })),
+  contractMapping: z.array(z.object({
+    source: z.string().min(1).max(8_000),
+    target: z.string().min(1).max(8_000),
+    action: z.enum(["preserve", "rename", "convert", "inject", "replace"]),
+    note: z.string().min(1).max(8_000),
+  })),
+  dependencyPlan: z.array(z.object({
+    sourceDependency: z.string().min(1).max(8_000),
+    targetDependency: z.string().min(1).max(8_000).optional(),
+    action: z.enum(["reuse-existing", "adapt", "inline", "unresolved"]),
+  })),
+  implementationPlan: z.array(z.string().min(1).max(8_000)).min(1),
+  risks: z.array(z.string().max(8_000)),
+  assumptions: z.array(z.string().max(8_000)),
+  unresolved: z.array(z.string().max(8_000)),
+});
+
+const translationResultSchema = z.object({
+  schemaVersion: z.literal("1.0"),
+  generatedCode: z.string().min(1).max(MAX_CODE_CHARS),
+  interfaceMappings: z.array(z.object({
+    source: z.string().min(1).max(8_000),
+    target: z.string().min(1).max(8_000),
+    action: z.enum(["preserve", "rename", "convert", "inject", "replace"]),
+    note: z.string().min(1).max(8_000),
+  })),
+  completedSteps: z.array(z.string().min(1).max(8_000)),
+  unresolved: z.array(z.string().max(8_000)),
+});
+
+const validationFeedbackSchema = z.object({
+  status: z.enum(["pass", "fail"]),
+  issues: z.array(z.object({
+    category: z.enum(["syntax", "contract", "dependency", "behavior"]),
+    file: z.string().max(4_096).optional(),
+    line: z.number().int().positive().optional(),
+    message: z.string().min(1).max(16_000),
+    evidence: z.string().max(16_000).optional(),
+  })).max(1_000),
+});
+
+export interface AdaptationMcpServerOptions {
+  apiKey: string;
+  projectRoot: string;
+  skeletonProjectPath?: string;
+  analyzer?: AdaptationAnalyzer;
+  translatorRequest?: typeof globalThis.fetch;
+  validator?: AdaptationValidator;
+}
+
+/**
+ * Creates a local MCP server for translation analysis and generation. File
+ * write-back stays outside MCP so the VS Code host retains its approval gate.
+ */
+export function createAdaptationMcpServer(
+  options: AdaptationMcpServerOptions,
+): McpServer {
+  const server = new McpServer({
+    name: "forexplore-adaptation",
+    version: "0.1.0",
+  });
+  const analyzer = options.analyzer ?? new AnalyzerAgent({ apiKey: options.apiKey });
+  const translatorOptions: TranslatorModelOptions = options.translatorRequest
+    ? { apiKey: options.apiKey, request: options.translatorRequest }
+    : { apiKey: options.apiKey };
+  const adapter = new AdaptationAdapter({
+    apiKey: options.apiKey,
+    projectRoot: options.projectRoot,
+    skeletonProjectPath: options.skeletonProjectPath,
+    analyzer,
+    translatorRequest: options.translatorRequest,
+    validator: options.validator,
+  });
+
+  const collect = (target: ModuleTarget, signal: AbortSignal) => collectTargetContext({
+    projectRoot: options.projectRoot,
+    target,
+    signal,
+  });
+
+  server.registerTool("forexplore_collect_target_context", {
+    title: "Collect Target Context",
+    description: "Read a selected target module and its bounded local dependencies from the configured project.",
+    inputSchema: { target: targetSchema },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  }, async ({ target }, extra) => runTool(() => collect(target, extra.signal)));
+
+  server.registerTool("forexplore_analyze_translation", {
+    title: "Analyze Translation Candidate",
+    description: "Compare a retrieved candidate with the selected target contract and return AnalysisReport v1.",
+    inputSchema: {
+      target: targetSchema,
+      candidate: candidateSchema,
+      requirement: z.string().trim().min(1).max(MAX_REQUIREMENT_CHARS),
+      decisionNotes: z.string().max(MAX_NOTES_CHARS).optional(),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  }, async ({ target, candidate, requirement, decisionNotes }, extra) => runTool(async () => {
+    const targetContext = collect(target, extra.signal);
+    return analyzer.analyze({
+      schemaVersion: "1.0",
+      targetContext,
+      candidate,
+      requirement,
+      immutableConstraints: targetContext.constraints,
+      decisionNotes,
+    }, extra.signal);
+  }));
+
+  server.registerTool("forexplore_generate_translation", {
+    title: "Generate Translation",
+    description: "Generate one target method from source code and a validated AnalysisReport; it does not write files.",
+    inputSchema: {
+      target: targetSchema,
+      candidateSource: z.string().min(1).max(MAX_CODE_CHARS),
+      requirement: z.string().trim().min(1).max(MAX_REQUIREMENT_CHARS),
+      analysisReport: analysisReportSchema,
+    },
+    annotations: { destructiveHint: false },
+  }, async ({ target, candidateSource, requirement, analysisReport }, extra) => runTool(() =>
+    translateWithAnalysis({
+      candidateSource,
+      targetContext: projectTargetContext(collect(target, extra.signal)),
+      requirement,
+      analysisReport,
+    }, translatorOptions, extra.signal),
+  ));
+
+  server.registerTool("forexplore_repair_translation", {
+    title: "Repair Translation",
+    description: "Repair a generated target method from structured compiler or contract feedback; it does not write files.",
+    inputSchema: {
+      target: targetSchema,
+      candidateSource: z.string().min(1).max(MAX_CODE_CHARS),
+      requirement: z.string().trim().min(1).max(MAX_REQUIREMENT_CHARS),
+      analysisReport: analysisReportSchema,
+      previousResult: translationResultSchema,
+      validationFeedback: validationFeedbackSchema,
+    },
+    annotations: { destructiveHint: false },
+  }, async (
+    { target, candidateSource, requirement, analysisReport, previousResult, validationFeedback },
+    extra,
+  ) => runTool(() => repairTranslation({
+    candidateSource,
+    targetContext: projectTargetContext(collect(target, extra.signal)),
+    requirement,
+    analysisReport,
+    previousResult,
+    validationFeedback,
+  }, translatorOptions, extra.signal)));
+
+  server.registerTool("forexplore_validate_csharp_translation", {
+    title: "Validate C# Translation",
+    description: "Compile generated C# as a standalone method or inside a temporary copy of the configured skeleton project.",
+    inputSchema: {
+      generatedCode: z.string().min(1).max(MAX_CODE_CHARS),
+      mode: z.enum(["standalone", "integrated"]),
+      className: z.string().trim().min(1).max(512).optional(),
+      target: targetSchema.optional(),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  }, async ({ generatedCode, mode, className, target }) => runTool(() => {
+    if (mode === "standalone") {
+      return compileStandalone(generatedCode, className ?? "ForeXploreStandalone");
+    }
+    if (!options.skeletonProjectPath) {
+      throw new Error("Integrated validation requires ADAPTATION_SKELETON_PROJECT_PATH.");
+    }
+    if (!target) throw new Error("Integrated validation requires the selected target.");
+    return compileIntegrated(generatedCode, options.skeletonProjectPath, target.path);
+  }));
+
+  server.registerTool("forexplore_adapt_translation", {
+    title: "Adapt Translation",
+    description: "Run the guarded workflow: collect context, analyze, translate, compile, repair up to three times, and return a patch preview without writing files.",
+    inputSchema: {
+      target: targetSchema,
+      candidate: candidateSchema,
+      requirement: z.string().trim().min(1).max(MAX_REQUIREMENT_CHARS),
+      decisionNotes: z.string().max(MAX_NOTES_CHARS).default(""),
+    },
+    annotations: { destructiveHint: false },
+  }, async ({ target, candidate, requirement, decisionNotes }, extra) => runTool(() => adapter.adapt({
+    target,
+    candidate,
+    requirement,
+    strategy: "translate",
+    decisionNotes,
+  }, extra.signal)));
+
+  server.registerTool("forexplore_translate_java_to_csharp", {
+    title: "Translate Java to C#",
+    description: "Compatibility translation tool for one Java method to a C# method signature; use the guarded workflow for production adaptation.",
+    inputSchema: {
+      javaSource: z.string().min(1).max(MAX_CODE_CHARS),
+      csharpSignature: z.string().trim().min(1).max(16_000),
+      requirement: z.string().trim().min(1).max(MAX_REQUIREMENT_CHARS),
+      matchType: z.enum(["exact", "partial", "different"]),
+    },
+    annotations: { destructiveHint: false },
+  }, async (request, extra) => runTool(() => translateJavaToCSharp(request, options.apiKey, extra.signal)));
+
+  server.registerTool("forexplore_translate_csharp_to_java", {
+    title: "Translate C# to Java",
+    description: "Translate one C# method to a Java method signature without writing files.",
+    inputSchema: {
+      csharpSource: z.string().min(1).max(MAX_CODE_CHARS),
+      javaSignature: z.string().trim().min(1).max(16_000),
+      requirement: z.string().trim().min(1).max(MAX_REQUIREMENT_CHARS),
+      matchType: z.enum(["exact", "partial", "different"]),
+    },
+    annotations: { destructiveHint: false },
+  }, async (request, extra) => runTool(() => translateToJava({
+    sourceLanguage: "C#",
+    sourceCode: request.csharpSource,
+    javaSignature: request.javaSignature,
+    requirement: request.requirement,
+    matchType: request.matchType,
+  }, options.apiKey, extra.signal, { request: translatorOptions.request })));
+
+  return server;
+}
+
+async function runTool<T>(work: () => Promise<T> | T) {
+  try {
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(await work(), null, 2) }],
+    };
+  } catch (error) {
+    return {
+      content: [{
+        type: "text" as const,
+        text: error instanceof Error ? error.message : String(error),
+      }],
+      isError: true,
+    };
+  }
+}
+
+export type TranslationMcpTarget = z.infer<typeof targetSchema>;
+export type TranslationMcpCandidate = z.infer<typeof candidateSchema>;
+export type TranslationMcpAnalysisReport = z.infer<typeof analysisReportSchema>;

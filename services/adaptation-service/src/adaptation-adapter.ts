@@ -26,11 +26,14 @@ import {
 import {
   projectTargetContext,
   repairTranslation,
+  translateToJava,
   translateWithAnalysis,
   type AnalyzeTranslationRequest,
   type TranslatorModelOptions,
 } from "./translator";
 import {
+  compileJavaIntegrated,
+  compileJavaStandalone,
   compileIntegrated,
   compileStandalone,
   isCompilerUnavailable,
@@ -42,9 +45,9 @@ const MAX_RETRIES = 3;
 const STANDALONE_CLASS_NAME = "ForeXploreStandalone";
 
 export interface AdaptationAdapterOptions {
-  /** DeepSeek API key */
+  /** DeepSeek API key used by the specialized translation agents */
   apiKey: string;
-  /** C# skeleton 项目根目录（可选，有则启用集成编译） */
+  /** Target skeleton project root (optional; enables integrated compilation). */
   skeletonProjectPath?: string;
   /** 目标项目根目录（可选，有则生成定点 context patch 而非全量替换） */
   projectRoot?: string;
@@ -69,12 +72,20 @@ export interface AdaptationValidator {
     skeletonProjectPath: string,
     targetFilePath: string,
   ): CompileResult;
+  compileJavaStandalone?(code: string, targetName: string): CompileResult;
+  compileJavaIntegrated?(
+    code: string,
+    skeletonProjectPath: string,
+    targetFilePath: string,
+  ): CompileResult;
   isUnavailable(result: CompileResult): boolean;
 }
 
 const defaultValidator: AdaptationValidator = {
   compileStandalone,
   compileIntegrated,
+  compileJavaStandalone,
+  compileJavaIntegrated,
   isUnavailable: isCompilerUnavailable,
 };
 
@@ -109,6 +120,14 @@ export class AdaptationAdapter implements CodeAdaptationPort {
       );
     }
     const requirement = effectiveRequirement(request);
+    if (request.target.language === "Java") {
+      // Candidate source languages deliberately stay unrestricted. The
+      // selected corpus implementation is translated into this Java contract.
+      return this.#adaptToJava(request, projectRoot, requirement, signal);
+    }
+
+    // Legacy C# target support remains for the standalone service API. The
+    // VS Code benchmark extension always selects a Java target.
     const collectedContext = this.#contextCollector({
       projectRoot,
       target: request.target,
@@ -250,6 +269,114 @@ export class AdaptationAdapter implements CodeAdaptationPort {
       files: patch ? [patch] : [],
     };
   }
+
+  async #adaptToJava(
+    request: AdaptationRequest,
+    projectRoot: string,
+    requirement: string,
+    signal?: AbortSignal,
+  ): Promise<AdaptationResult> {
+    const generatedJava = await translateToJava(
+      {
+        sourceLanguage: request.candidate.language,
+        sourceCode: request.candidate.preview,
+        javaSignature: request.target.signature,
+        requirement,
+        matchType: "exact",
+      },
+      this.#translatorOptions.apiKey,
+      signal,
+      { request: this.#translatorOptions.request },
+    );
+    const unavailable: CompileResult = {
+      success: false,
+      errors: ["JDK not installed; Java validation was not executed."],
+      output: "",
+    };
+    const standaloneResult = this.#validator.compileJavaStandalone?.(
+      generatedJava,
+      STANDALONE_CLASS_NAME,
+    ) ?? unavailable;
+    const integratedResult = this.#skeletonProjectPath
+      ? this.#validator.compileJavaIntegrated?.(
+          generatedJava,
+          this.#skeletonProjectPath,
+          request.target.path,
+        ) ?? unavailable
+      : null;
+    const targetSnapshot = readOriginalIfAvailable(projectRoot, request.target.path);
+    const canBuildPatch = targetSnapshot.content !== null && request.target.line != null;
+    const patch = canBuildPatch
+      ? buildFilePatch(
+          request.target.path,
+          generatedJava,
+          targetSnapshot.content,
+          request.target.line,
+        )
+      : null;
+
+    return {
+      strategy: request.strategy,
+      targetLanguage: "Java" as Language,
+      generatedCode: generatedJava,
+      interfaceMappings: [
+        {
+          source: request.candidate.title,
+          target: request.target.name,
+          action: "convert",
+          note: `Translate the selected ${request.candidate.language} implementation into the existing Java method contract.`,
+        },
+      ],
+      validation: [
+        {
+          id: "translation-direction",
+          label: `${request.candidate.language} to Java direction`,
+          status: "pass",
+          required: true,
+          summary: `The selected ${request.candidate.language} candidate is being translated into the Java target contract.`,
+        },
+        javaStandaloneCompileValidation(
+          standaloneResult,
+          integratedResult,
+          this.#validator.isUnavailable(standaloneResult),
+        ),
+        integratedResult
+          ? javaCompileValidation(
+              "integrated-compile",
+              "Java target project compilation",
+              integratedResult,
+              true,
+              this.#validator.isUnavailable(integratedResult),
+            )
+          : {
+              id: "integrated-compile",
+              label: "Java target project compilation",
+              status: "unverified",
+              required: false,
+              summary: "No target skeleton project was configured, so integrated compilation was not run.",
+              failureReason: "skeleton-project-not-configured",
+            },
+        {
+          id: "target-context-snapshot",
+          label: "Target file snapshot",
+          status: canBuildPatch ? "pass" : "unverified",
+          required: true,
+          summary: canBuildPatch
+            ? "Read the target file and generated a patch guarded by its original hash."
+            : targetSnapshot.reason ?? "The target file could not be read, so no protected patch was generated.",
+          failureReason: canBuildPatch ? undefined : "target-context-unavailable",
+        },
+        {
+          id: "behavioral-semantics",
+          label: "Behavioral validation",
+          status: "unverified",
+          required: false,
+          summary: "Compilation validates syntax only; multipart streaming and storage behavior still require the upstream tests.",
+        },
+      ],
+      files: patch ? [patch] : [],
+    };
+  }
 }
 
 // ---- helpers ----
@@ -280,12 +407,9 @@ function assertSupportedTranslation(request: AdaptationRequest): void {
       `AdaptationAdapter only supports the "translate" strategy; received "${request.strategy}".`,
     );
   }
-  if (
-    request.candidate.language !== "Java" ||
-    request.target.language !== "C#"
-  ) {
+  if (request.target.language !== "Java" && request.target.language !== "C#") {
     throw new Error(
-      `Unsupported adaptation language pair: ${request.candidate.language} -> ${request.target.language}. Expected Java -> C#.`,
+      `AdaptationAdapter supports Java benchmark targets and legacy C# targets; received target language ${request.target.language}.`,
     );
   }
   if (!isSafeRelativePath(request.target.path)) {
@@ -338,8 +462,8 @@ function buildFilePatch(
   // 定点 patch：用括号匹配找到原方法体范围
   const originalLines = originalContent.replace(/\r\n/g, "\n").split("\n");
   const startIdx = Math.max(0, targetLine - 1);
-  if (startIdx >= originalLines.length || !isCSharpMethodStart(originalLines[startIdx] ?? "")) {
-    throw new Error("The target line must point at a C# method declaration before a safe patch can be built.");
+  if (startIdx >= originalLines.length || !isMethodStart(originalLines[startIdx] ?? "")) {
+    throw new Error("The target line must point at a method declaration before a safe patch can be built.");
   }
 
   // 找到方法体的闭合大括号
@@ -392,18 +516,57 @@ function compileValidation(
   result: ReturnType<typeof compileStandalone>,
   required: boolean,
   unavailable: boolean,
+  command = "dotnet build --nologo -v q",
 ): ValidationRecord {
   return {
     id,
     label,
     status: unavailable ? "unverified" : result.success ? "pass" : "fail",
     required,
-    command: "dotnet build --nologo -v q",
+    command,
     summary: result.success
       ? "编译通过。编译通过不证明业务行为正确。"
       : result.errors.slice(0, 3).join("; "),
     failureReason: result.success ? undefined : unavailable ? "compiler-unavailable" : "compiler-failed",
   };
+}
+
+function javaCompileValidation(
+  id: string,
+  label: string,
+  result: CompileResult,
+  required: boolean,
+  unavailable: boolean,
+): ValidationRecord {
+  return compileValidation(id, label, result, required, unavailable, "javac");
+}
+
+function javaStandaloneCompileValidation(
+  result: CompileResult,
+  integratedResult: CompileResult | null,
+  unavailable: boolean,
+): ValidationRecord {
+  const record = javaCompileValidation(
+    "standalone-compile",
+    "Java standalone compilation",
+    result,
+    integratedResult === null,
+    unavailable,
+  );
+
+  if (integratedResult?.success && !result.success) {
+    return {
+      ...record,
+      status: "warn",
+      required: false,
+      summary:
+        `The standalone wrapper lacks project types or dependencies: ${result.errors.slice(0, 3).join("; ")}` +
+        " The target project compilation is the authoritative compilation evidence.",
+      failureReason: undefined,
+    };
+  }
+
+  return record;
 }
 
 /**
@@ -450,7 +613,7 @@ function isInsideRoot(root: string, candidate: string): boolean {
   return Boolean(relativePath) && relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath);
 }
 
-function isCSharpMethodStart(line: string): boolean {
+function isMethodStart(line: string): boolean {
   const trimmed = line.trim();
   if (!trimmed || /^(if|for|foreach|while|switch|catch|using|return|new|throw)\b/.test(trimmed)) {
     return false;

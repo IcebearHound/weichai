@@ -21,8 +21,8 @@ async function openFixtureWithSelection(): Promise<void> {
   if (!FIXTURE_WORKSPACE) throw new Error('FOREXPLORE_TEST_WORKSPACE env var is required.');
   const document = await vscode.workspace.openTextDocument(vscode.Uri.file(FIXTURE_FILE));
   const editor = await vscode.window.showTextDocument(document);
-  const methodOffset = document.getText().indexOf('public async Task<Quote> GetQuoteAsync');
-  assert.ok(methodOffset >= 0, 'C# demo fixture must contain GetQuoteAsync');
+  const methodOffset = document.getText().indexOf('public List<FileItem> parseRequest(RequestContext ctx)');
+  assert.ok(methodOffset >= 0, 'Java fixture must contain parseRequest');
   const fullRange = new vscode.Range(
     document.positionAt(methodOffset),
     document.positionAt(Math.min(document.getText().length, methodOffset + 360)),
@@ -30,7 +30,7 @@ async function openFixtureWithSelection(): Promise<void> {
   editor.selection = new vscode.Selection(fullRange.start, fullRange.end);
   assert.ok(
     vscode.workspace.getWorkspaceFolder(document.uri),
-    'C# fixture must be inside the launched workspace folder',
+    'Java fixture must be inside the launched workspace folder',
   );
 }
 

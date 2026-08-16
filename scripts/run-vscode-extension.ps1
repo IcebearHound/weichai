@@ -31,7 +31,7 @@ function Ensure-VsCodeExtension {
   }
 }
 
-Ensure-VsCodeExtension -ExtensionId 'ms-dotnettools.csharp'
+Ensure-VsCodeExtension -ExtensionId 'redhat.java'
 
 if (-not $SkipSeekDb) {
   docker compose -f $composeFile up -d

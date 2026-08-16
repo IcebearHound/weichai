@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import type { ModuleTarget } from "@forexplore/contracts";
 import { describe, expect, it } from "vitest";
 import { collectTargetContext } from "./context-collector";
+import { projectTargetContext } from "./translator";
 
 const projectRoot = fileURLToPath(
   new URL("../../../fixtures/target-system/forexplore-csharp-workspace", import.meta.url),
@@ -23,6 +24,9 @@ describe("collectTargetContext", () => {
 
     expect(context.schemaVersion).toBe("1.0");
     expect(context.source.method).toContain("GetQuoteAsync");
+    expect(projectTargetContext(context).targetSignature).toBe(
+      "public async Task<Quote> GetQuoteAsync(QuoteRequest request, CancellationToken cancellationToken)",
+    );
     expect(context.source.containingType).toContain("QuoteOrchestrationService");
     expect(context.source.fields).toEqual(
       expect.arrayContaining([

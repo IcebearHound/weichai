@@ -14,13 +14,18 @@ const extensionRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const suitePath = fileURLToPath(new URL('../../../dist/test/integration/suite.js', import.meta.url));
 const extensionDevelopmentPath = path.resolve(extensionRoot);
 const fixtureWorkspace = fileURLToPath(
-  new URL('../../../../../fixtures/target-system/forexplore-csharp-workspace', import.meta.url),
+  new URL('../../../../../fixtures/target-system/commons-fileupload-java-skeleton', import.meta.url),
 );
 const fixtureFile = path.join(
   fixtureWorkspace,
   'src',
-  'Application',
-  'QuoteOrchestrationService.cs',
+  'main',
+  'java',
+  'org',
+  'apache',
+  'commons',
+  'fileupload',
+  'FileUploadBase.java',
 );
 
 async function main(): Promise<void> {

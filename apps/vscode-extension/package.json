@@ -14,7 +14,7 @@
   ],
   "main": "./dist/extension/extension.js",
   "extensionDependencies": [
-    "ms-dotnettools.csharp"
+    "redhat.java"
   ],
   "files": [
     "dist/extension/**",
@@ -55,7 +55,7 @@
       "editor/context": [
         {
           "command": "forexplore.startTranslation",
-          "when": "editorHasSelection && resourceScheme == file && resourceLangId == csharp",
+          "when": "editorHasSelection && resourceScheme == file && resourceLangId == java",
           "group": "forexplore@1"
         }
       ]
@@ -67,7 +67,7 @@
           "type": "string",
           "enum": ["real"],
           "default": "real",
-          "description": "调用本地 SeekDB 检索服务和 Java → C# 适配服务；两个服务都必须健康。"
+          "description": "调用本地 SeekDB 检索服务和候选语言 → Java 适配服务；两个服务都必须健康。"
         },
         "forexplore.repositoryPaths": {
           "type": "array",
@@ -85,7 +85,7 @@
         "forexplore.adaptationApiUrl": {
           "type": "string",
           "default": "http://127.0.0.1:8788",
-          "description": "Java → C# 翻译服务地址。"
+          "description": "候选语言 → Java 翻译服务地址。"
         }
       }
     }

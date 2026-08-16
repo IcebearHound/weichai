@@ -261,7 +261,25 @@ interface VerificationReport {
 
 ### 4.7 测试迁移 Agent(test-migrator.ts)
 
-复用 adaptation-service 导出的 `completeWithDeepSeek`(deepseek-v4-flash,jsonMode)。
+**LLM 调度方式(架构修正,最终版):统一通过 Claude Code 子进程。**
+
+本项目为 "Claude Code + DeepSeek 模型" 的 agent 架构(见 `scripts/run-claude-deepseek.sh`),
+测试模块遵循同一架构:
+
+- 所有需要 LLM 的环节(TestMigratorAgent、RepairAgent)一律通过启动 `claude` 子进程
+  (`spawn("claude", ["-p", prompt, "--output-format", "text"], { env: {...} })`)完成;
+  **禁止直接调用 DeepSeek HTTP API**(不使用 adaptation-service 的
+  `completeWithDeepSeek`/`translateToJava`/`repairTranslation`)。
+- 子进程环境变量与 `scripts/run-claude-deepseek.sh` 一致:
+  `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`、
+  `ANTHROPIC_AUTH_TOKEN=$DEEPSEEK_API_KEY`、
+  `ANTHROPIC_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}`、
+  `ANTHROPIC_DEFAULT_OPUS/SONNET/HAIKU_MODEL` 同 model。
+- 封装在 `claude-client.ts`:可注入 `spawnClaude`(生产=真实 spawn,测试=预设 stdout),
+  超时与错误处理;`TestMigratorAgent`/`RepairAgent` 通过注入的 `spawnClaude` 调用。
+- 检索/代码定位由 agent 自带工具(rg/find/read)完成,**代码侧只接收整理好的纯输入**
+  (完整方法体、测试代码、需求文本、目标签名),不实现任何检索/提取脚本。
+- 单元测试全部通过 fake `spawnClaude` 注入,不依赖本机 claude / DeepSeek API。
 
 **两阶段:检索与迁移分离。**
 
@@ -283,7 +301,7 @@ interface VerificationReport {
     历史怪癖)。
 
 **校验**:LLM 输出经 `validateDescription` 严格校验,不合格则重试(最多 2 次)后失败。
-单元测试用注入的 fake fetch;真实调用只出现在 e2e。
+单元测试用注入的 fake `spawnClaude`;真实调用只出现在 e2e。
 
 ### 4.8 修复闭环(repair-loop.ts)
 
@@ -297,8 +315,9 @@ verify ── 有 FAIL/DIVERGENT case ──► 构建诊断反馈 ──► LLM
   另附需求原文与 `requirementVerdict`(目标侧是否符合需求)——修复 Agent 以需求为准,
   仅当目标侧偏离需求时才需要修复;若两侧不一致但目标侧已符合需求,该差异不进入修复目标。
 - Java 目标方向:verifier 内 `RepairAgent`(prompt 结构与 translateToJava 对齐 + 差分诊断 +
-  需求判据),经 `completeWithDeepSeek` 生成新方法代码。
-- C# 目标方向:复用 adaptation-service 的 `repairTranslation`(已有结构化反馈入口)。
+  需求判据),经 **claude 子进程** 生成新方法代码(见 4.7 LLM 调度方式)。
+- C# 目标方向:同样走 claude 子进程(修复 prompt 带需求判据;不再复用 adaptation-service 的
+  `repairTranslation`)。
 - 每轮结束记录:轮次、修复后通过率、仍在失败的 case。
 - 收敛条件:全部 PASS(含 target-conforms 视为通过)或达到 maxRounds(默认 3)。
 
@@ -312,13 +331,12 @@ verify ── 有 FAIL/DIVERGENT case ──► 构建诊断反馈 ──► LLM
 
 | 复用 | 来源 | 方式 |
 | --- | --- | --- |
-| `completeWithDeepSeek` / `DeepSeekMessage` | adaptation-service | import(workspace 依赖) |
-| `translateToJava` / `repairTranslation` | adaptation-service | import |
-| `compileJavaStandalone` 等的 wrapper 模式 | adaptation-service | 参照模式,verifier 内自实现(执行模型不同:需要运行而不仅是编译) |
+| `claude` 子进程(LLM 调度) | 本机 CLI + DeepSeek 环境变量 | spawn(与 run-claude-deepseek.sh 一致) |
+| javac / dotnet / java 子进程 | 本机工具链 | child_process(executor.ts) |
 | `@forexplore/contracts` 的 `Language` 等类型 | packages/contracts | import |
 
-依赖声明:`@forexplore/translation-verifier` 依赖 `@forexplore/adaptation-service` 与
-`@forexplore/contracts`,并加入根 package.json workspaces(自动)与 test 脚本。
+依赖声明:`@forexplore/translation-verifier` 仅依赖 `@forexplore/contracts` 与 devDependencies,
+**不依赖 `@forexplore/adaptation-service`**(其 LLM 客户端为 DeepSeek HTTP 直调,与本架构不符)。
 
 ## 6. 全局约束(计划与实现必须遵守)
 
@@ -328,10 +346,13 @@ verify ── 有 FAIL/DIVERGENT case ──► 构建诊断反馈 ──► LLM
 4. 测试描述 schemaVersion 固定 `"1.0"`;输出报告 schemaVersion 固定 `"1.0"`。
 5. 执行结果序列化带深度/大小上限,禁止无限递归。
 6. 不修改 `fixtures/code-corpus/*` 与 `fixtures/target-system/*` 的内容(只读使用)。
-7. 单元测试不依赖本机 javac/dotnet(注入 fake executor);e2e 测试在真实工具链上跑,失败可跳过(skip if unavailable)。
-8. 中文注释允许;README 与文档用中文(遵循仓库 AGENTS.md)。
-9. 语言:TypeScript;测试:vitest;格式与 monorepo 一致。
-10. 异常映射表、比较选项等常量集中定义,禁止散落 magic string。
+7. **translation-verifier 不含 LLM HTTP 直调与检索逻辑**:所有 LLM 环节统一经 claude 子进程
+   (注入 `spawnClaude`,环境变量与 run-claude-deepseek.sh 一致);检索/定位由 agent 工具完成;
+   单元测试用 fake spawn 注入,不依赖本机 claude / DeepSeek API。
+8. 单元测试不依赖本机 javac/dotnet(注入 fake executor);e2e 测试在真实工具链上跑,失败可跳过(skip if unavailable)。
+9. 中文注释允许;README 与文档用中文(遵循仓库 AGENTS.md)。
+10. 语言:TypeScript;测试:vitest;格式与 monorepo 一致。
+11. 异常映射表、比较选项等常量集中定义,禁止散落 magic string。
 
 ## 7. 度量与报告
 

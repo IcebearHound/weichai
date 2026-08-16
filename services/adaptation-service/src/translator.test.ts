@@ -22,7 +22,7 @@ function resultFor(
   return {
     schemaVersion: "1.0",
     generatedCode,
-    interfaceMappings: request.analysisReport.contractMapping.map((mapping) => ({ ...mapping })),
+    interfaceMappings: [],
     completedSteps: [...request.analysisReport.implementationPlan],
     unresolved: [],
   };
@@ -56,7 +56,7 @@ describe("Translator Agent", () => {
     );
 
     expect(result.generatedCode).toContain(request.targetContext.targetSignature);
-    expect(result.interfaceMappings).toEqual(request.analysisReport.contractMapping);
+    expect(result.interfaceMappings).toEqual([]);
     expect(calls[0]?.model).toBe("deepseek-v4-flash");
     expect(calls[0]?.response_format).toEqual({ type: "json_object" });
     const messages = calls[0]?.messages as Array<{ role: string; content: string }>;
@@ -94,6 +94,30 @@ describe("Translator Agent", () => {
       }),
     ).rejects.toThrow("Analyzer rejected candidate");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("generates from the target context when the adapter explicitly drops a rejected candidate", async () => {
+    const request = fixture("translator-reject");
+    request.referencePolicy = "target-only";
+    request.analysisReport.implementationPlan = [
+      "Implement the requirement using the existing target contract and collected target context without a reference candidate.",
+    ];
+    const expected = resultFor(
+      request,
+      "public Task<Quote> GetQuoteAsync(QuoteRequest request, CancellationToken cancellationToken) { return Task.FromResult(new Quote()); }",
+    );
+    const calls: Array<Record<string, unknown>> = [];
+
+    await expect(
+      translateWithAnalysis(request, {
+        apiKey: "test-key",
+        request: modelRequest(expected, calls),
+      }),
+    ).resolves.toEqual(expected);
+    const prompt = (calls[0]?.messages as Array<{ content: string }>)[1]?.content ?? "";
+    expect(prompt).toContain("The Analyzer rejected the selected candidate");
+    expect(prompt).toContain("No candidate is suitable");
+    expect(prompt).not.toContain("database.truncate");
   });
 
   it("stops for unresolved dependencies instead of inventing a target dependency", async () => {
@@ -261,7 +285,7 @@ describe("Translator Agent", () => {
     expect(() => translatorInternals.validateTranslationResult(complete, request)).not.toThrow();
   });
 
-  it("requires every planned step and contract mapping to be acknowledged", () => {
+  it("requires every planned step but does not require mapping acknowledgements", () => {
     const request = fixture("translator-direct");
     const incomplete = resultFor(request);
     incomplete.completedSteps.pop();
@@ -270,28 +294,56 @@ describe("Translator Agent", () => {
       translatorInternals.validateTranslationResult(incomplete, request),
     ).toThrow("did not complete implementationPlan items");
 
-    const missingMapping = resultFor(request);
-    missingMapping.interfaceMappings = [];
-    expect(() =>
-      translatorInternals.validateTranslationResult(missingMapping, request),
-    ).toThrow("omitted required contract mappings");
+    const noMapping = resultFor(request);
+    noMapping.interfaceMappings = [];
+    expect(() => translatorInternals.validateTranslationResult(noMapping, request)).not.toThrow();
   });
 
   it("rejects malformed structured model output", () => {
     expect(() => translatorInternals.parseTranslationResult("not-json")).toThrow(
       "invalid TranslationResult JSON",
     );
-    expect(() =>
-      translatorInternals.parseTranslationResult(
-        JSON.stringify({
-          schemaVersion: "1.0",
-          generatedCode: "public void Run() {}",
-          interfaceMappings: [{ source: "", target: "value", action: "convert", note: "map" }],
-          completedSteps: ["step"],
-          unresolved: [],
-        }),
-      ),
-    ).toThrow("invalid interface mapping");
+    expect(translatorInternals.parseTranslationResult(
+      JSON.stringify({
+        schemaVersion: "1.0",
+        generatedCode: "public void Run() {}",
+        completedSteps: ["step"],
+        unresolved: [],
+      }),
+    )).toEqual({
+      schemaVersion: "1.0",
+      generatedCode: "public void Run() {}",
+      interfaceMappings: [],
+      completedSteps: ["step"],
+      unresolved: [],
+    });
+  });
+
+  it("feeds malformed JSON back to the Translator before failing", async () => {
+    const request = fixture("translator-direct");
+    const expected = resultFor(request);
+    const calls: Array<Record<string, unknown>> = [];
+    const fetch = vi.fn(async (_input: URL | RequestInfo, init?: RequestInit) => {
+      calls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      const content = calls.length === 1
+        ? "not-json"
+        : JSON.stringify(expected);
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof globalThis.fetch;
+
+    await expect(
+      translateWithAnalysis(request, { apiKey: "test-key", request: fetch }),
+    ).resolves.toEqual(expected);
+    expect(calls).toHaveLength(2);
+    expect((calls[1]?.messages as Array<{ content: string }>)[1]?.content).toContain(
+      "invalid TranslationResult JSON",
+    );
+    expect((calls[1]?.messages as Array<{ content: string }>)[1]?.content).toContain(
+      "VALIDATION_FEEDBACK_JSON",
+    );
   });
 
   it("repairs from structured Validator feedback and preserves AnalysisReport constraints", async () => {

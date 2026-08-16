@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import quopri
 from email.header import decode_header
 from io import BytesIO
 from typing import BinaryIO, Callable, Iterable, Protocol
@@ -14,6 +13,7 @@ from .core import (
     FileItem,
     FileItemHeaders,
     FileUpload,
+    FileUploadException,
     InvalidFileNameException,
     RequestContext,
     SizeLimitExceededException,
@@ -54,6 +54,60 @@ class FileItemStream(Protocol):
 class FileItemIterator(Protocol):
     def has_next(self) -> bool: ...
     def next(self) -> FileItemStream: ...
+
+
+# 它把已构造的条目逐个投影成 FileItemStream，保留 Java 迭代器的消费顺序。
+class MaterializedFileItemStream:
+    def __init__(self, item: FileItem) -> None:
+        self._item = item
+
+    def open_stream(self) -> BinaryIO:
+        return self._item.get_input_stream()
+
+    def get_content_type(self) -> str | None:
+        return self._item.get_content_type()
+
+    def get_field_name(self) -> str | None:
+        return self._item.get_field_name()
+
+    def get_name(self) -> str | None:
+        return self._item.get_name()
+
+    def is_form_field(self) -> bool:
+        return self._item.is_form_field()
+
+    def get_headers(self) -> FileItemHeaders | None:
+        return self._item.get_headers()
+
+    def set_headers(self, headers: FileItemHeaders) -> None:
+        self._item.set_headers(headers)
+
+
+# 这个适配器实现 has_next/next 的单向消费语义，并拒绝越过末尾继续读取。
+class MaterializedFileItemIterator:
+    def __init__(self, items: Iterable[FileItem]) -> None:
+        self._items = iter(items)
+        self._next: FileItem | None = None
+        self._checked = False
+
+    def has_next(self) -> bool:
+        if self._checked:
+            return self._next is not None
+        self._checked = True
+        try:
+            self._next = next(self._items)
+        except StopIteration:
+            self._next = None
+        return self._next is not None
+
+    def next(self) -> MaterializedFileItemStream:
+        if not self.has_next():
+            raise FileUploadException("No more file items are available.")
+        item = self._next
+        self._next = None
+        self._checked = False
+        assert item is not None
+        return MaterializedFileItemStream(item)
 
 
 # 这是为旧代码保留的 DiskFileItem 兼容名字。
@@ -182,14 +236,52 @@ class Streams:
 class Base64Decoder:
     @staticmethod
     def decode(value: str) -> bytes:
-        return base64.b64decode(value)
+        output = bytearray()
+        quartet: list[str] = []
+        for character in value:
+            if character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=":
+                continue
+            quartet.append(character)
+            if len(quartet) != 4:
+                continue
+            block = "".join(quartet)
+            padding = block.find("=")
+            if padding >= 0 and (padding < 2 or any(character != "=" for character in block[padding:])):
+                raise ValueError("incorrect Base64 padding")
+            output.extend(base64.b64decode(block, validate=True))
+            quartet.clear()
+        if quartet:
+            raise ValueError("truncated Base64 input")
+        return bytes(output)
 
 
 # 它负责还原 Quoted-Printable 形式的头字段。
 class QuotedPrintableDecoder:
     @staticmethod
     def decode(value: str) -> bytes:
-        return quopri.decodestring(value)
+        output = bytearray()
+        index = 0
+        while index < len(value):
+            character = value[index]
+            if character != "=":
+                output.append(ord(character))
+                index += 1
+                continue
+            if index + 1 >= len(value):
+                raise ValueError("truncated quoted-printable escape")
+            if value[index + 1] == "\r":
+                if index + 2 >= len(value) or value[index + 2] != "\n":
+                    raise ValueError("CR must be followed by LF")
+                index += 3
+                continue
+            if index + 2 >= len(value):
+                raise ValueError("truncated quoted-printable escape")
+            try:
+                output.append(int(value[index + 1:index + 3], 16))
+            except ValueError as error:
+                raise ValueError("invalid quoted-printable escape") from error
+            index += 3
+        return bytes(output)
 
 
 # 该工具将 RFC 2047 的编码头转换回可读文字。

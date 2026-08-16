@@ -1,9 +1,12 @@
 import { execFile, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import type { VerifierLanguage } from "./description.js";
 import { createLogger, type Logger } from "./logger.js";
+
+const require = createRequire(import.meta.url);
 
 export interface CompileOutcome {
   success: boolean;
@@ -38,6 +41,9 @@ export interface RealExecutorOptions {
   javacPath?: string;
   javaPath?: string;
   dotnetPath?: string;
+  pythonPath?: string;
+  nodePath?: string;
+  tsxPath?: string;
   timeoutMs?: number;
   /** 注入的 logger;默认 createLogger("executor")。 */
   logger?: Logger;
@@ -49,7 +55,17 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 export function isToolchainAvailable(language: VerifierLanguage): boolean {
   if (language === "Java") return findOnPath("javac");
   if (language === "C#") return findOnPath("dotnet");
+  if (language === "Python") return findOnPath("python3") || findOnPath("python");
+  if (language === "TypeScript") return findOnPath("node") && packageEntry("tsx/cli") !== null;
   throw new Error(`Unsupported language: ${String(language)}`);
+}
+
+function packageEntry(specifier: string): string | null {
+  try {
+    return require.resolve(specifier);
+  } catch {
+    return null;
+  }
 }
 
 function findOnPath(name: string): boolean {
@@ -75,12 +91,18 @@ export class RealDriverExecutor implements DriverExecutor {
       javacPath: options.javacPath ?? "javac",
       javaPath: options.javaPath ?? "java",
       dotnetPath: options.dotnetPath ?? "dotnet",
+      pythonPath: options.pythonPath ?? (findOnPath("python3") ? "python3" : "python"),
+      nodePath: options.nodePath ?? "node",
+      tsxPath: options.tsxPath ?? packageEntry("tsx/cli") ?? "",
       timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     };
     this.#logger = options.logger ?? createLogger("executor");
   }
 
   async compile(side: SideSpec): Promise<CompileOutcome> {
+    if (side.language === "Java" && side.projectRoot && existsSync(join(side.projectRoot, "pom.xml"))) {
+      return this.#compileJavaProject(side);
+    }
     const dir = mkdtempSync(join(tmpdir(), "forexplore-verifier-"));
     try {
       writeSideFiles(dir, side);
@@ -91,8 +113,20 @@ export class RealDriverExecutor implements DriverExecutor {
         this.#logCompileOutcome(side, outcome);
         return outcome;
       }
-      this.#logger.debug("编译命令(C#): dotnet build --nologo -v q (Verifier.csproj)");
-      const outcome = await this.#compileCSharp(dir, side);
+      if (side.language === "C#") {
+        this.#logger.debug("编译命令(C#): dotnet build --nologo -v q (Verifier.csproj)");
+        const outcome = await this.#compileCSharp(dir, side);
+        this.#logCompileOutcome(side, outcome);
+        return outcome;
+      }
+      if (side.language === "Python") {
+        this.#logger.debug(`编译命令(Python): ${this.#options.pythonPath} -m py_compile`);
+        const outcome = this.#compilePython(dir);
+        this.#logCompileOutcome(side, outcome);
+        return outcome;
+      }
+      this.#logger.debug("编译命令(TypeScript): tsc --noEmit");
+      const outcome = await this.#compileTypeScript(dir);
       this.#logCompileOutcome(side, outcome);
       return outcome;
     } finally {
@@ -141,7 +175,58 @@ export class RealDriverExecutor implements DriverExecutor {
     }
   }
 
+  #compilePython(dir: string): CompileOutcome {
+    try {
+      const pythonFiles = collectRelativeFiles(dir).filter((file) => file.endsWith(".py"));
+      const stdout = execFileSync(this.#options.pythonPath, ["-m", "py_compile", ...pythonFiles], {
+        cwd: dir,
+        encoding: "utf-8",
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: this.#options.timeoutMs,
+        stdio: "pipe",
+      });
+      return { success: true, errors: [], output: stdout };
+    } catch (error) {
+      const output = errorOutput(error);
+      return { success: false, errors: parsePythonErrors(output), output };
+    }
+  }
+
+  async #compileTypeScript(dir: string): Promise<CompileOutcome> {
+    try {
+      const typeScriptFiles = collectRelativeFiles(dir).filter((file) => file.endsWith(".ts"));
+      const stdout = await execFileAsync(
+        this.#options.nodePath,
+        [
+          typescriptCompilerEntry(),
+          "--noEmit",
+          "--target",
+          "ES2022",
+          "--module",
+          "NodeNext",
+          "--moduleResolution",
+          "NodeNext",
+          "--allowImportingTsExtensions",
+          "--skipLibCheck",
+          "--types",
+          "node",
+          "--typeRoots",
+          nodeTypeRoots(),
+          ...typeScriptFiles,
+        ],
+        { cwd: dir, timeoutMs: this.#options.timeoutMs },
+      );
+      return { success: true, errors: [], output: stdout };
+    } catch (error) {
+      const output = errorOutput(error);
+      return { success: false, errors: parseTypeScriptErrors(output), output };
+    }
+  }
+
   async run(side: SideSpec): Promise<RunOutcome> {
+    if (side.language === "Java" && side.projectRoot && existsSync(join(side.projectRoot, "pom.xml"))) {
+      return this.#runJavaProject(side);
+    }
     const dir = mkdtempSync(join(tmpdir(), "forexplore-verifier-"));
     try {
       writeSideFiles(dir, side);
@@ -163,18 +248,37 @@ export class RealDriverExecutor implements DriverExecutor {
         this.#logger.debug(`运行 stdout(Java,截断):\n${truncate(stdout, 500)}`);
         return { exitCode: 0, stdout, stderr: "" };
       }
-      writeFileSync(join(dir, "Verifier.csproj"), csprojContent(side), "utf-8");
-      await execFileAsync(this.#options.dotnetPath, ["build", "--nologo", "-v", "q"], {
+      if (side.language === "C#") {
+        writeFileSync(join(dir, "Verifier.csproj"), csprojContent(side), "utf-8");
+        await execFileAsync(this.#options.dotnetPath, ["build", "--nologo", "-v", "q"], {
+          cwd: dir,
+          timeoutMs: this.#options.timeoutMs,
+        });
+        this.#logger.debug("运行命令(C#): dotnet run --no-build --project Verifier.csproj");
+        const stdout = await execFileAsync(
+          this.#options.dotnetPath,
+          ["run", "--no-build", "--project", "Verifier.csproj"],
+          { cwd: dir, timeoutMs: this.#options.timeoutMs },
+        );
+        this.#logger.debug(`运行 stdout(C#,截断):\n${truncate(stdout, 500)}`);
+        return { exitCode: 0, stdout, stderr: "" };
+      }
+      if (side.language === "Python") {
+        this.#logger.debug(`运行命令(Python): ${this.#options.pythonPath} driver.py`);
+        const stdout = await execFileAsync(this.#options.pythonPath, ["driver.py"], {
+          cwd: dir,
+          timeoutMs: this.#options.timeoutMs,
+          env: runtimeEnvironment(dir, side),
+        });
+        this.#logger.debug(`运行 stdout(Python,截断):\n${truncate(stdout, 500)}`);
+        return { exitCode: 0, stdout, stderr: "" };
+      }
+      this.#logger.debug("运行命令(TypeScript): node tsx driver.ts");
+      const stdout = await execFileAsync(this.#options.nodePath, [this.#options.tsxPath, "driver.ts"], {
         cwd: dir,
         timeoutMs: this.#options.timeoutMs,
       });
-      this.#logger.debug("运行命令(C#): dotnet run --no-build --project Verifier.csproj");
-      const stdout = await execFileAsync(
-        this.#options.dotnetPath,
-        ["run", "--no-build", "--project", "Verifier.csproj"],
-        { cwd: dir, timeoutMs: this.#options.timeoutMs },
-      );
-      this.#logger.debug(`运行 stdout(C#,截断):\n${truncate(stdout, 500)}`);
+      this.#logger.debug(`运行 stdout(TypeScript,截断):\n${truncate(stdout, 500)}`);
       return { exitCode: 0, stdout, stderr: "" };
     } catch (error) {
       const output = errorOutput(error);
@@ -183,6 +287,87 @@ export class RealDriverExecutor implements DriverExecutor {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+
+  #compileJavaProject(side: SideSpec): CompileOutcome {
+    const dir = mkdtempSync(join(tmpdir(), "forexplore-verifier-project-"));
+    try {
+      cpSync(side.projectRoot!, dir, {
+        recursive: true,
+        filter: (source) => !["target", ".git", "node_modules"].includes(source.split(/[\\/]/).at(-1) ?? ""),
+      });
+      writeSideFiles(dir, side);
+      return this.#runMavenCompile(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  async #runJavaProject(side: SideSpec): Promise<RunOutcome> {
+    const dir = mkdtempSync(join(tmpdir(), "forexplore-verifier-project-"));
+    try {
+      cpSync(side.projectRoot!, dir, {
+        recursive: true,
+        filter: (source) => !["target", ".git", "node_modules"].includes(source.split(/[\\/]/).at(-1) ?? ""),
+      });
+      writeSideFiles(dir, side);
+      const compile = this.#runMavenCompile(dir);
+      if (!compile.success) return { exitCode: 1, stdout: "", stderr: compile.output };
+      const classpath = this.#mavenClasspath(dir);
+      const driverClasses = join(dir, ".verifier-driver-classes");
+      mkdirSync(driverClasses, { recursive: true });
+      const driverFile = join(dir, `${driverClassNameFromSource(side.driverSource)}.java`);
+      execFileSync(this.#options.javacPath, ["-cp", classpath, "-d", driverClasses, driverFile], {
+        cwd: dir,
+        encoding: "utf-8",
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: this.#options.timeoutMs,
+        stdio: "pipe",
+      });
+      const stdout = await execFileAsync(
+        this.#options.javaPath,
+        ["-cp", [driverClasses, join(dir, "target/classes"), classpath].join(delimiter), driverClassNameFromSource(side.driverSource)],
+        { cwd: dir, timeoutMs: this.#options.timeoutMs },
+      );
+      return { exitCode: 0, stdout, stderr: "" };
+    } catch (error) {
+      return { exitCode: 1, stdout: "", stderr: errorOutput(error) };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  #runMavenCompile(dir: string): CompileOutcome {
+    try {
+      const stdout = execFileSync(process.env.MAVEN_COMMAND?.trim() || "mvn", ["-q", "-DskipTests", "compile"], {
+        cwd: dir,
+        encoding: "utf-8",
+        maxBuffer: 20 * 1024 * 1024,
+        timeout: this.#options.timeoutMs,
+        stdio: "pipe",
+      });
+      return { success: true, errors: [], output: stdout };
+    } catch (error) {
+      const output = errorOutput(error);
+      return { success: false, errors: parseJavaErrors(output), output };
+    }
+  }
+
+  #mavenClasspath(dir: string): string {
+    const outputFile = join(dir, ".verifier-classpath");
+    try {
+      execFileSync(process.env.MAVEN_COMMAND?.trim() || "mvn", ["-q", "dependency:build-classpath", `-Dmdep.outputFile=${outputFile}`, "-Dmdep.includeScope=compile"], {
+        cwd: dir,
+        encoding: "utf-8",
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: this.#options.timeoutMs,
+        stdio: "pipe",
+      });
+    } catch {
+      // A project with no external runtime dependencies still has a valid empty classpath.
+    }
+    const dependencyClasspath = existsSync(outputFile) ? readFileSync(outputFile, "utf8").trim() : "";
+    return [join(dir, "target/classes"), dependencyClasspath].filter(Boolean).join(delimiter);
   }
 }
 
@@ -199,12 +384,25 @@ function writeSideFiles(dir: string, side: SideSpec): void {
     mkdirSync(dirname(fullPath), { recursive: true });
     writeFileSync(fullPath, file.content, "utf-8");
   }
-  // 驱动文件名:Java 要求 public 类名与文件名一致;C# 无此限制。
-  const driverFile =
-    side.language === "Java"
-      ? join(dir, `${driverClassNameFromSource(side.driverSource)}.java`)
-      : join(dir, "Driver.cs");
+  // Java requires a public class name match; dynamic-language drivers use a stable script name.
+  const driverFile = driverFilePath(dir, side);
   writeFileSync(driverFile, side.driverSource, "utf-8");
+  if (side.language === "TypeScript") {
+    writeFileSync(join(dir, "package.json"), '{"type":"module"}\n', "utf-8");
+  }
+}
+
+function driverFilePath(dir: string, side: SideSpec): string {
+  switch (side.language) {
+    case "Java":
+      return join(dir, `${driverClassNameFromSource(side.driverSource)}.java`);
+    case "C#":
+      return join(dir, "Driver.cs");
+    case "Python":
+      return join(dir, "driver.py");
+    case "TypeScript":
+      return join(dir, "driver.ts");
+  }
 }
 
 /**
@@ -251,16 +449,44 @@ function csprojContent(side: SideSpec): string {
 `;
 }
 
+function requiredPackageEntry(specifier: string): string {
+  const entry = packageEntry(specifier);
+  if (!entry) throw new Error(`Required package entry is unavailable: ${specifier}`);
+  return entry;
+}
+
+function typescriptCompilerEntry(): string {
+  const entry = requiredPackageEntry("typescript");
+  return join(dirname(entry), "tsc.js");
+}
+
+function nodeTypeRoots(): string {
+  return dirname(dirname(requiredPackageEntry("@types/node/package.json")));
+}
+
+function runtimeEnvironment(dir: string, side: SideSpec): NodeJS.ProcessEnv {
+  if (side.language !== "Python") return process.env;
+  const roots = new Set([dir]);
+  for (const file of side.sourceFiles) {
+    const [first, second] = file.relativePath.replace(/\\/g, "/").split("/");
+    if (first && second) roots.add(join(dir, first));
+  }
+  return {
+    ...process.env,
+    PYTHONPATH: [...roots, process.env.PYTHONPATH].filter((entry): entry is string => Boolean(entry)).join(delimiter),
+  };
+}
+
 function execFileAsync(
   command: string,
   args: string[],
-  options: { cwd: string; timeoutMs: number },
+  options: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       command,
       args,
-      { cwd: options.cwd, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, timeout: options.timeoutMs },
+      { cwd: options.cwd, env: options.env, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, timeout: options.timeoutMs },
       (error, stdout, stderr) => {
         if (error) {
           // Node 24 的 execFile error 对象不再附带 stdout/stderr,这里手动补上,供 errorOutput 解析编译诊断。
@@ -297,6 +523,20 @@ function parseDotnetErrors(output: string): string[] {
   return output
     .split("\n")
     .filter((line) => /error\s*[A-Z]{2,}/.test(line))
+    .map((line) => line.trim());
+}
+
+function parsePythonErrors(output: string): string[] {
+  return output
+    .split("\n")
+    .filter((line) => /SyntaxError|IndentationError|Error:/.test(line))
+    .map((line) => line.trim());
+}
+
+function parseTypeScriptErrors(output: string): string[] {
+  return output
+    .split("\n")
+    .filter((line) => /error TS\d+:/.test(line))
     .map((line) => line.trim());
 }
 

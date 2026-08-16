@@ -22,14 +22,23 @@ export function generateJavaDriver(description: TestDescription): string {
     lines.push(`  static void ${methodName}(JsonWriter out) throws Exception {`);
     lines.push(`    out.beginObject().name("caseId").value(${JSON.stringify(c.id)});`);
     const args = c.inputs.map(javaLiteral).join(", ");
-    const call = description.target.isStatic
-      ? `${description.target.className}.${description.target.method}(${args})`
-      : `new ${description.target.className}(${description.target.constructorArgs.map(javaLiteral).join(", ")}).${description.target.method}(${args})`;
+    const call = description.target.entryKind === "constructor"
+      ? `new ${description.target.className}(${args})`
+      : description.target.isStatic
+        ? `${description.target.className}.${description.target.method}(${args})`
+        : `new ${description.target.className}(${description.target.constructorArgs.map(javaLiteral).join(", ")}).${description.target.method}(${args})`;
     lines.push(`    try {`);
-    lines.push(`      Object r = ${call};`);
-    lines.push(`      out.name("outcome").value("return");`);
-    lines.push(`      out.name("returnValue");`);
-    lines.push(`      writeValue(out, r);`);
+    if (description.target.entryKind === "constructor") {
+      lines.push(`      ${call};`);
+      lines.push(`      out.name("outcome").value("return");`);
+      lines.push(`      out.name("returnValue");`);
+      lines.push(`      writeValue(out, null);`);
+    } else {
+      lines.push(`      Object r = ${call};`);
+      lines.push(`      out.name("outcome").value("return");`);
+      lines.push(`      out.name("returnValue");`);
+      lines.push(`      writeValue(out, r);`);
+    }
     lines.push(`    } catch (Throwable t) {`);
     lines.push(`      out.name("outcome").value("exception");`);
     lines.push(`      out.name("exceptionType").value(t.getClass().getSimpleName());`);

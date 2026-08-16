@@ -5,7 +5,10 @@ import {
   FileItemHeaders,
   FileUpload,
   InMemoryRequestContext,
+  InvalidFileNameException,
+  SizeLimitExceededException,
   RequestContext,
+  decodeMimeHeader,
 } from './file-upload.js';
 
 /** 该接口表明条目支持挂接和读取关联的头集合。 */
@@ -93,7 +96,9 @@ export class LimitedInputStream implements Closeable {
   read(length = this.source.length - this.offset): Buffer {
     const value = this.source.subarray(this.offset, this.offset + length);
     this.offset += value.length;
-    if (this.sizeMax >= 0 && this.offset > this.sizeMax) throw new Error('stream exceeds configured maximum size');
+    if (this.sizeMax >= 0 && this.offset > this.sizeMax) {
+      throw new SizeLimitExceededException('stream exceeds configured maximum size', this.offset, this.sizeMax);
+    }
     return Buffer.from(value);
   }
   getCount(): number { return this.offset; }
@@ -105,21 +110,59 @@ export class LimitedInputStream implements Closeable {
 export class Streams {
   static copy(input: Buffer, output?: { write(chunk: Buffer): unknown }): number { output?.write(input); return input.length; }
   static checkFileName(fileName: string | undefined): string | undefined {
-    if (fileName?.includes('\0')) throw new Error(`Invalid file name: ${fileName}`);
+    if (fileName?.includes('\0')) throw new InvalidFileNameException(`Invalid file name: ${fileName}`);
     return fileName;
   }
 }
 
 /** MIME Header 里的 Base64 片段由它转为字节。 */
-export class Base64Decoder { static decode(value: string): Buffer { return Buffer.from(value, 'base64'); } }
+export class Base64Decoder {
+  static decode(value: string): Buffer {
+    const output: Buffer[] = [];
+    let quartet = '';
+    for (const character of value) {
+      if (!/[A-Za-z0-9+/=]/.test(character)) continue;
+      quartet += character;
+      if (quartet.length !== 4) continue;
+      const padding = quartet.indexOf('=');
+      if (padding >= 0 && (padding < 2 || /[^=]/.test(quartet.slice(padding)))) {
+        throw new Error('incorrect Base64 padding');
+      }
+      output.push(Buffer.from(quartet, 'base64'));
+      quartet = '';
+    }
+    if (quartet) throw new Error('truncated Base64 input');
+    return Buffer.concat(output);
+  }
+}
 
 /** 它负责把 Quoted-Printable 头值解回二进制内容。 */
 export class QuotedPrintableDecoder {
-  static decode(value: string): Buffer { return Buffer.from(value.replace(/=([0-9a-f]{2})/gi, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16))), 'latin1'); }
+  static decode(value: string): Buffer {
+    const output: number[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      if (value[index] !== '=') {
+        output.push(value.charCodeAt(index));
+        continue;
+      }
+      if (index + 1 >= value.length) throw new Error('truncated quoted-printable escape');
+      if (value[index + 1] === '\r') {
+        if (value[index + 2] !== '\n') throw new Error('CR must be followed by LF');
+        index += 2;
+        continue;
+      }
+      if (index + 2 >= value.length || !/^[0-9a-f]{2}$/i.test(value.slice(index + 1, index + 3))) {
+        throw new Error('invalid quoted-printable escape');
+      }
+      output.push(Number.parseInt(value.slice(index + 1, index + 3), 16));
+      index += 2;
+    }
+    return Buffer.from(output);
+  }
 }
 
 /** 这里处理 RFC 2047 风格的编码邮件头。 */
-export class MimeUtility { static decodeText(value: string): string { return value; } }
+export class MimeUtility { static decodeText(value: string): string { return decodeMimeHeader(value, true); } }
 
 /** MIME 编码头无法解释时会抛出该异常。 */
 export class ParseException extends Error {}

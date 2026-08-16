@@ -4,6 +4,26 @@ import { mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+/** RFC 2047 头文本在参数解析和 MIME 兼容层之间共用此解码器。 */
+export function decodeMimeHeader(value: string, strict = false): string {
+  if (!value.includes('=?')) return value;
+  const compact = value.replace(/\?=\s+=\?/g, '?==?');
+  return compact.replace(/=\?([^?]+)\?([bBqQ])\?([^?]*)\?=/g, (encoded, charset: string, encoding: string, payload: string) => {
+    try {
+      const bytes = encoding.toUpperCase() === 'B'
+        ? Buffer.from(payload, 'base64')
+        : Buffer.from(payload.replace(/_/g, ' ').replace(/=([0-9a-f]{2})/gi, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16))), 'latin1');
+      const normalized = charset.toLowerCase().replace(/[_ ]/g, '-');
+      if (normalized === 'utf-8' || normalized === 'utf8') return bytes.toString('utf8');
+      if (normalized === 'iso-8859-1' || normalized === 'latin1') return bytes.toString('latin1');
+      return new TextDecoder(charset).decode(bytes);
+    } catch (error) {
+      if (strict) throw error;
+      return encoded;
+    }
+  });
+}
+
 /** 上传工作流的解析或存储失败由这个基础错误表示。 */
 export class FileUploadException extends Error {}
 /** 缺少可解析的 boundary 参数会导致这个错误。 */
@@ -132,7 +152,7 @@ export class ParameterParser {
     const unquoted = value.length >= 2 && value.startsWith('"') && value.endsWith('"')
       ? value.slice(1, -1)
       : value;
-    return unquoted || undefined;
+    return unquoted ? decodeMimeHeader(unquoted) : undefined;
   }
 }
 
@@ -357,6 +377,7 @@ export class DiskFileItemFactory implements FileItemFactory {
 export abstract class FileUploadBase {
   static readonly MULTIPART = 'multipart/';
   static readonly MULTIPART_FORM_DATA = 'multipart/form-data';
+  static readonly MULTIPART_MIXED = 'multipart/mixed';
   static readonly CONTENT_TYPE = 'content-type';
   static readonly CONTENT_DISPOSITION = 'content-disposition';
   sizeMax = -1;
@@ -384,24 +405,40 @@ export abstract class FileUploadBase {
 
     const items: FileItem[] = [];
     try {
+      const addItem = (fieldName: string, headers: FileItemHeaders, body: Buffer, fileName: string | undefined): void => {
+        if (this.fileCountMax >= 0 && items.length >= this.fileCountMax) {
+          throw new FileCountLimitExceededException('Attachment count exceeds configured maximum.', this.fileCountMax);
+        }
+        if (this.fileSizeMax >= 0 && body.length > this.fileSizeMax) {
+          throw new FileSizeLimitExceededException(`The field ${fieldName} exceeds its maximum permitted size.`, body.length, this.fileSizeMax);
+        }
+        const item = factory.createItem(fieldName, headers.getHeader(FileUploadBase.CONTENT_TYPE), fileName === undefined, fileName);
+        if (item instanceof DiskFileItem) item.store(body);
+        else throw new FileUploadException('This reference requires a writable DiskFileItemFactory.');
+        item.setHeaders(headers);
+        items.push(item);
+        this.progressListener?.(body.length, requestSize, items.length);
+      };
+
       for (const part of new MultipartStream(context.getInputStream(), boundary).readParts()) {
         const headers = FileUploadBase.getParsedHeaders(part.rawHeaders);
         const disposition = FileUploadBase.parseDisposition(headers.getHeader(FileUploadBase.CONTENT_DISPOSITION));
         const fieldName = disposition.get('name');
         if (!fieldName) continue;
-        if (this.fileCountMax >= 0 && items.length >= this.fileCountMax) {
-          throw new FileCountLimitExceededException('Attachment count exceeds configured maximum.', this.fileCountMax);
+        const contentType = headers.getHeader(FileUploadBase.CONTENT_TYPE) ?? '';
+        const nestedBoundary = contentType.toLowerCase().startsWith(FileUploadBase.MULTIPART_MIXED)
+          ? FileUploadBase.getBoundary(contentType)
+          : undefined;
+        if (nestedBoundary) {
+          for (const nestedPart of new MultipartStream(part.body, nestedBoundary).readParts()) {
+            const nestedHeaders = FileUploadBase.getParsedHeaders(nestedPart.rawHeaders);
+            const nestedDisposition = FileUploadBase.parseDisposition(nestedHeaders.getHeader(FileUploadBase.CONTENT_DISPOSITION));
+            const nestedFileName = nestedDisposition.get('filename');
+            if (nestedFileName !== undefined) addItem(fieldName, nestedHeaders, nestedPart.body, nestedFileName);
+          }
+          continue;
         }
-        if (this.fileSizeMax >= 0 && part.body.length > this.fileSizeMax) {
-          throw new FileSizeLimitExceededException(`The field ${fieldName} exceeds its maximum permitted size.`, part.body.length, this.fileSizeMax);
-        }
-        const fileName = disposition.get('filename');
-        const item = factory.createItem(fieldName, headers.getHeader(FileUploadBase.CONTENT_TYPE), fileName === undefined, fileName);
-        if (item instanceof DiskFileItem) item.store(part.body);
-        else throw new FileUploadException('This reference requires a writable DiskFileItemFactory.');
-        item.setHeaders(headers);
-        items.push(item);
-        this.progressListener?.(part.body.length, requestSize, items.length);
+        addItem(fieldName, headers, part.body, disposition.get('filename'));
       }
       return items;
     } catch (error) {
@@ -417,6 +454,10 @@ export abstract class FileUploadBase {
       result.set(name, [...(result.get(name) ?? []), item]);
     }
     return result;
+  }
+
+  getItemIterator(context: RequestContext): MaterializedFileItemIterator {
+    return new MaterializedFileItemIterator(this.parseRequest(context));
   }
 
   static getBoundary(contentType: string | undefined): Buffer | undefined {
@@ -449,6 +490,44 @@ export abstract class FileUploadBase {
     const parser = new ParameterParser();
     parser.setLowerCaseNames(true);
     return parser.parse(value);
+  }
+}
+
+/** 它把已经物化的 FileItem 映射成流式条目视图。 */
+export class MaterializedFileItemStream {
+  constructor(private readonly item: FileItem) {}
+  openStream(): Buffer { return this.item.getInputStream(); }
+  getContentType(): string | undefined { return this.item.getContentType(); }
+  getFieldName(): string | undefined { return this.item.getFieldName(); }
+  getName(): string | undefined { return this.item.getName(); }
+  isFormField(): boolean { return this.item.isFormField(); }
+  getHeaders(): FileItemHeaders | undefined {
+    return this.item instanceof DiskFileItem ? this.item.getHeaders() : undefined;
+  }
+  setHeaders(headers: FileItemHeaders): void { this.item.setHeaders(headers); }
+}
+
+/** 这个适配器实现单向 hasNext/next 迭代并在耗尽时报告错误。 */
+export class MaterializedFileItemIterator {
+  private readonly items: Iterator<FileItem>;
+  private nextItem: FileItem | undefined;
+  private checked = false;
+
+  constructor(items: Iterable<FileItem>) { this.items = items[Symbol.iterator](); }
+
+  hasNext(): boolean {
+    if (this.checked) return this.nextItem !== undefined;
+    this.checked = true;
+    this.nextItem = this.items.next().value as FileItem | undefined;
+    return this.nextItem !== undefined;
+  }
+
+  next(): MaterializedFileItemStream {
+    if (!this.hasNext()) throw new FileUploadException('No more file items are available.');
+    const item = this.nextItem!;
+    this.nextItem = undefined;
+    this.checked = false;
+    return new MaterializedFileItemStream(item);
   }
 }
 

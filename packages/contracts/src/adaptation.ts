@@ -25,6 +25,8 @@ export interface AdaptationResult {
   targetLanguage: Language;
   generatedCode: string;
   interfaceMappings: InterfaceMapping[];
+  /** Behavior-level repair instructions produced by post-compile verification. */
+  modificationPlan?: string[];
   validation: ValidationRecord[];
   files: FilePatch[];
 }
@@ -34,7 +36,21 @@ export const analysisSchemaVersion = '1.0' as const;
 
 export type ApplicabilityLevel = 'direct' | 'adapt' | 'reference' | 'reject';
 export type BehaviorStatus = 'covered' | 'partial' | 'missing' | 'conflict';
-export type ContractAction = 'preserve' | 'rename' | 'convert' | 'inject' | 'replace';
+/**
+ * How a candidate contract element is represented by the target contract.
+ * The last four actions cover common model terminology for an intentional
+ * compatibility layer rather than silently coercing one action into another.
+ */
+export type ContractAction =
+  | 'preserve'
+  | 'rename'
+  | 'convert'
+  | 'inject'
+  | 'replace'
+  | 'adapt'
+  | 'map'
+  | 'delegate'
+  | 'wrap';
 export type DependencyAction = 'reuse-existing' | 'adapt' | 'inline' | 'unresolved';
 
 export interface TargetDependencyContext {

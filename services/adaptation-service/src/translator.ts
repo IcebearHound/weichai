@@ -7,6 +7,7 @@
 import type {
   AnalysisReport,
   ApplicabilityLevel as SharedApplicabilityLevel,
+  ContractAction,
   Language,
   TargetModuleContext,
 } from "@forexplore/contracts";
@@ -84,19 +85,25 @@ export interface AnalyzeTranslationRequest {
   targetContext: TranslatorTargetContext;
   requirement: string;
   analysisReport: TranslatorAnalysisReport;
+  /** The adapter may deliberately omit an unsuitable candidate reference. */
+  referencePolicy?: "candidate" | "target-only";
 }
 
 export interface TranslationMapping {
   source: string;
   target: string;
-  action: "preserve" | "rename" | "convert" | "inject" | "replace";
+  action: ContractAction;
   note: string;
 }
 
 export interface TranslationResult {
   schemaVersion: "1.0";
   generatedCode: string;
-  interfaceMappings: TranslationMapping[];
+  /**
+   * Retained only for response compatibility. The Translator is not asked to
+   * attest to Analyzer mappings, and host validation never uses this field.
+   */
+  interfaceMappings?: TranslationMapping[];
   completedSteps: string[];
   unresolved: string[];
 }
@@ -138,14 +145,17 @@ export class TranslatorAgent {
     request: AnalyzeTranslationRequest,
     signal?: AbortSignal,
   ): Promise<TranslationResult> {
-    assertAnalysisAllowsTranslation(request.analysisReport);
+    assertAnalysisAllowsTranslation(
+      request.analysisReport,
+      request.referencePolicy === "target-only",
+    );
     const raw = await callModel(
       TRANSLATOR_SYSTEM_PROMPT,
       buildTranslationPrompt(request),
       this.#options,
       signal,
     );
-    return validateWithRepairs(request, parseTranslationResult(raw), this.#options, signal);
+    return validateWithRepairs(request, raw, this.#options, signal);
   }
 
   /** Repair keeps no conversation state and receives only structured feedback. */
@@ -153,7 +163,10 @@ export class TranslatorAgent {
     request: RepairTranslationRequest,
     signal?: AbortSignal,
   ): Promise<TranslationResult> {
-    assertAnalysisAllowsTranslation(request.analysisReport);
+    assertAnalysisAllowsTranslation(
+      request.analysisReport,
+      request.referencePolicy === "target-only",
+    );
     if (request.validationFeedback.status === "pass") {
       return validateTranslationResult(request.previousResult, request);
     }
@@ -167,7 +180,7 @@ export class TranslatorAgent {
       this.#options,
       signal,
     );
-    return validateWithRepairs(request, parseTranslationResult(raw), this.#options, signal);
+    return validateWithRepairs(request, raw, this.#options, signal);
   }
 }
 
@@ -197,20 +210,9 @@ Return exactly one JSON object with this shape and no markdown:
 {
   "schemaVersion": "1.0",
   "generatedCode": "the exact target method signature followed immediately by its method body, and nothing else",
-  "interfaceMappings": [
-    { "source": "...", "target": "...", "action": "preserve|rename|convert|inject|replace", "note": "..." }
-  ],
   "completedSteps": ["exact implementationPlan item"],
   "unresolved": ["..."]
 }`;
-
-const mappingActions = new Set<TranslationMapping["action"]>([
-  "preserve",
-  "rename",
-  "convert",
-  "inject",
-  "replace",
-]);
 const MAX_VALIDATION_REPAIRS = 2;
 
 export async function translateWithAnalysis(
@@ -235,41 +237,64 @@ export async function repairTranslation(
 
 async function validateWithRepairs(
   request: AnalyzeTranslationRequest,
-  initialResult: TranslationResult,
+  initialRaw: string,
   options: TranslatorModelOptions,
   signal?: AbortSignal,
 ): Promise<TranslationResult> {
-  let result = initialResult;
+  let result: TranslationResult | undefined;
+  let parseFailure: Error | undefined;
+  try {
+    result = parseTranslationResult(initialRaw);
+  } catch (error: unknown) {
+    parseFailure = error instanceof Error ? error : new Error(String(error));
+  }
 
   for (let attempt = 0; ; attempt += 1) {
-    try {
-      return validateTranslationResult(result, request);
-    } catch (error) {
-      if (attempt >= MAX_VALIDATION_REPAIRS) throw error;
+    if (result) {
+      try {
+        return validateTranslationResult(result, request);
+      } catch (error: unknown) {
+        parseFailure = error instanceof Error ? error : new Error(String(error));
+      }
+    }
 
-      const message = error instanceof Error ? error.message : String(error);
-      const repairRequest: RepairTranslationRequest = {
-        ...request,
-        previousResult: result,
-        validationFeedback: {
-          status: "fail",
-          issues: [
-            {
-              category: "syntax",
-              message:
-                `The previous generatedCode failed host validation: ${message} ` +
-                "Rewrite generatedCode to satisfy the output boundary exactly.",
-            },
-          ],
-        },
-      };
-      const repairedRaw = await callModel(
-        TRANSLATOR_SYSTEM_PROMPT,
-        buildRepairPrompt(repairRequest),
-        options,
-        signal,
-      );
+    if (attempt >= MAX_VALIDATION_REPAIRS) {
+      throw parseFailure ?? new Error("Translator returned no result.");
+    }
+
+    const message = parseFailure?.message ?? "Translator returned no result.";
+    const repairRequest: RepairTranslationRequest = {
+      ...request,
+      previousResult: result ?? {
+        schemaVersion: "1.0",
+        generatedCode: "",
+        completedSteps: [],
+        unresolved: [],
+      },
+      validationFeedback: {
+        status: "fail",
+        issues: [
+          {
+            category: "syntax",
+            message:
+              `The previous Translator response failed host validation: ${message} ` +
+              "Return one valid TranslationResult JSON object and satisfy the output boundary exactly.",
+          },
+        ],
+      },
+    };
+    const repairedRaw = await callModel(
+      TRANSLATOR_SYSTEM_PROMPT,
+      buildRepairPrompt(repairRequest),
+      options,
+      signal,
+    );
+    try {
       result = parseTranslationResult(repairedRaw);
+      parseFailure = undefined;
+    } catch (error: unknown) {
+      result = undefined;
+      parseFailure = error instanceof Error ? error : new Error(String(error));
     }
   }
 }
@@ -277,6 +302,7 @@ async function validateWithRepairs(
 function buildTranslationPrompt(request: AnalyzeTranslationRequest): string {
   const classTarget = request.targetContext.targetKind === "class";
   const targetUnit = classTarget ? "class" : "method";
+  const referenceFree = request.referencePolicy === "target-only";
   const outputBoundary = classTarget
     ? `Translate the candidate class into the existing target ${targetUnit}. The generatedCode string
 must start with the exact target class declaration and contain exactly that complete class, including
@@ -313,7 +339,14 @@ report an item in your unresolved output when the requested method truly cannot 
 without inventing a missing target dependency.
 
 CANDIDATE_SOURCE_DATA
-${request.candidateSource}
+${referenceFree
+    ? "(No candidate is suitable. Generate from the functional requirement and target context only.)"
+    : request.candidateSource}
+
+REFERENCE_POLICY
+${referenceFree
+    ? "The Analyzer rejected the selected candidate. Ignore candidate implementation details and implement autonomously from the target contract, collected context, and requirement."
+    : "Use the selected candidate only as implementation evidence; the target contract remains authoritative."}
 
 LANGUAGE_POLICY
 Use only syntax, standard libraries, and dependencies justified by the target language and the
@@ -326,6 +359,7 @@ ${request.targetContext.targetSignature}`;
 function buildRepairPrompt(request: RepairTranslationRequest): string {
   const classTarget = request.targetContext.targetKind === "class";
   const targetUnit = classTarget ? "class" : "method";
+  const referenceFree = request.referencePolicy === "target-only";
   const outputBoundary = classTarget
     ? "Repair the complete target class using structured Validator feedback. The generatedCode string must begin with the exact target class declaration and contain exactly one complete class. Do not output a package, namespace, imports, or another top-level type."
     : "Repair the previous translation using structured Validator feedback. Only change the existing target method implementation. The generatedCode string must begin with the exact target method signature and contain exactly one complete method. Do not output or retain any enclosing class, record, struct, interface, namespace, using directive, field, property, constructor, helper method, test, markdown fence, or declaration before or after the method. The enclosing target type already exists in the target project. Do not weaken the target contract, change tests, or ignore AnalysisReport constraints.";
@@ -350,7 +384,14 @@ target dependency or port whose documented contract owns the required responsibi
 or invent a missing dependency merely because its internal implementation is unavailable.
 
 CANDIDATE_SOURCE_DATA
-${request.candidateSource}
+${referenceFree
+    ? "(No candidate is suitable. Repair from the functional requirement and target context only.)"
+    : request.candidateSource}
+
+REFERENCE_POLICY
+${referenceFree
+    ? "The Analyzer rejected the selected candidate. Do not restore or rely on candidate implementation details."
+    : "Use the selected candidate only as implementation evidence; the target contract remains authoritative."}
 
 PREVIOUS_TRANSLATION_JSON
 ${JSON.stringify(request.previousResult, null, 2)}
@@ -393,7 +434,6 @@ function parseTranslationResult(raw: string): TranslationResult {
   if (
     candidate.schemaVersion !== "1.0" ||
     typeof candidate.generatedCode !== "string" ||
-    !Array.isArray(candidate.interfaceMappings) ||
     !Array.isArray(candidate.completedSteps) ||
     !candidate.completedSteps.every((item) => typeof item === "string") ||
     !Array.isArray(candidate.unresolved) ||
@@ -401,38 +441,12 @@ function parseTranslationResult(raw: string): TranslationResult {
   ) {
     throw new Error("Translator returned an invalid TranslationResult shape.");
   }
-  const mappings = candidate.interfaceMappings.map(parseMapping);
   return {
     schemaVersion: "1.0",
     generatedCode: cleanGeneratedCode(candidate.generatedCode),
-    interfaceMappings: mappings,
+    interfaceMappings: [],
     completedSteps: candidate.completedSteps.map((item) => item.trim()).filter(Boolean),
     unresolved: candidate.unresolved.map((item) => item.trim()).filter(Boolean),
-  };
-}
-
-function parseMapping(value: unknown): TranslationMapping {
-  if (typeof value !== "object" || value === null) {
-    throw new Error("Translator returned an invalid interface mapping.");
-  }
-  const mapping = value as Partial<TranslationMapping>;
-  if (
-    typeof mapping.source !== "string" ||
-    !mapping.source.trim() ||
-    typeof mapping.target !== "string" ||
-    !mapping.target.trim() ||
-    typeof mapping.action !== "string" ||
-    !mappingActions.has(mapping.action as TranslationMapping["action"]) ||
-    typeof mapping.note !== "string" ||
-    !mapping.note.trim()
-  ) {
-    throw new Error("Translator returned an invalid interface mapping.");
-  }
-  return {
-    source: mapping.source.trim(),
-    target: mapping.target.trim(),
-    action: mapping.action as TranslationMapping["action"],
-    note: mapping.note.trim(),
   };
 }
 
@@ -451,7 +465,10 @@ function cleanGeneratedCode(code: string): string {
   return (fenced?.[1] ?? trimmed).trim();
 }
 
-function assertAnalysisAllowsTranslation(report: TranslatorAnalysisReport): void {
+function assertAnalysisAllowsTranslation(
+  report: TranslatorAnalysisReport,
+  allowReferenceFreeGeneration = false,
+): void {
   if (report.schemaVersion !== "1.0") {
     throw new Error(`Unsupported AnalysisReport schema: ${String(report.schemaVersion)}`);
   }
@@ -462,7 +479,7 @@ function assertAnalysisAllowsTranslation(report: TranslatorAnalysisReport): void
   ) {
     throw new Error("AnalysisReport applicability confidence must be between 0 and 1.");
   }
-  if (report.applicability.level === "reject") {
+  if (report.applicability.level === "reject" && !allowReferenceFreeGeneration) {
     throw new Error(
       `Analyzer rejected candidate: ${report.applicability.reasons.join("; ") || "no reason provided"}`,
     );
@@ -524,24 +541,7 @@ function validateTranslationResult(
     throw new Error(`Translator did not complete implementationPlan items: ${missingSteps.join("; ")}`);
   }
 
-  const missingMappings = request.analysisReport.contractMapping.filter(
-    (expected) =>
-      !result.interfaceMappings.some(
-        (actual) =>
-          actual.source === expected.source &&
-          actual.target === expected.target &&
-          actual.action === expected.action,
-      ),
-  );
-  if (missingMappings.length > 0) {
-    throw new Error(
-      `Translator omitted required contract mappings: ${missingMappings
-        .map((item) => `${item.source}->${item.target}:${item.action}`)
-        .join("; ")}`,
-    );
-  }
-
-  return { ...result, generatedCode };
+  return { ...result, generatedCode, interfaceMappings: [] };
 }
 
 function assertTargetContract(

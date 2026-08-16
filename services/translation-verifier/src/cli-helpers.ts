@@ -1,7 +1,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { validateDescription, type TestDescription, type VerifierLanguage } from "./description.js";
-import { generateDriverSource } from "./driver/driver-codegen.js";
+import { generateDriverSource, generateSourceDriverSource } from "./driver/driver-codegen.js";
+import type { SourceInvocation } from "./driver/source-invocation.js";
 import { RealDriverExecutor, type SideFile, type SideSpec } from "./executor.js";
 import { verify, type VerificationJob, type VerificationReport } from "./verifier.js";
 import { RepairAgent, RepairLoop } from "./repair-loop.js";
@@ -17,6 +18,10 @@ export interface CliOptions {
   maxRounds?: number;
   json?: boolean;
   requirement?: string;
+  sourceModule?: string;
+  sourceClass?: string;
+  sourceMethod?: string;
+  sourceInstance?: boolean;
 }
 
 const VALUE_FLAGS = new Set([
@@ -27,9 +32,12 @@ const VALUE_FLAGS = new Set([
   "--max-rounds",
   "--api-key",
   "--requirement",
+  "--source-module",
+  "--source-class",
+  "--source-method",
 ]);
 
-const BOOLEAN_FLAGS = new Set(["--json"]);
+const BOOLEAN_FLAGS = new Set(["--json", "--source-instance"]);
 
 const JAVA_EXT = ".java";
 const CSHARP_EXT = ".cs";
@@ -47,6 +55,7 @@ export function parseCliArgs(argv: string[]): CliOptions | { error: string } {
     const flag = argv[i] as string;
     if (BOOLEAN_FLAGS.has(flag)) {
       if (flag === "--json") options.json = true;
+      if (flag === "--source-instance") options.sourceInstance = true;
       continue;
     }
     if (VALUE_FLAGS.has(flag)) {
@@ -78,6 +87,15 @@ export function parseCliArgs(argv: string[]): CliOptions | { error: string } {
           break;
         case "--requirement":
           options.requirement = value;
+          break;
+        case "--source-module":
+          options.sourceModule = value;
+          break;
+        case "--source-class":
+          options.sourceClass = value;
+          break;
+        case "--source-method":
+          options.sourceMethod = value;
           break;
       }
       continue;
@@ -182,12 +200,15 @@ export async function runCli(argv: string[], logger: Logger = createLogger("cli"
 
   // 3. 双侧驱动 + verify。
   const executor = new RealDriverExecutor({ logger });
+  let sourceInvocation: SourceInvocation;
+  try {
+    sourceInvocation = buildSourceInvocation(description, sourceLang, parsed);
+  } catch (error) {
+    console.error(`error: invalid source invocation: ${errorMessage(error)}`);
+    return 2;
+  }
   const targetDriver = generateDriverSource(description);
-  // 源侧驱动 ← 描述(源语言):源侧语言由 --source 目录文件推断,驱动调用目标签名保持一致。
-  const sourceDriver = generateDriverSource({
-    ...description,
-    target: { ...description.target, language: sourceLang },
-  });
+  const sourceDriver = generateSourceDriverSource(description, sourceInvocation);
   logger.info("流水线:生成双侧驱动完成");
   const job: VerificationJob = {
     description,
@@ -250,13 +271,16 @@ function errorMessage(error: unknown): string {
 }
 
 function extensionFor(language: VerifierLanguage): string {
-  return language === "C#" ? CSHARP_EXT : JAVA_EXT;
+  if (language === "C#") return CSHARP_EXT;
+  if (language === "Python") return ".py";
+  if (language === "TypeScript") return ".ts";
+  return JAVA_EXT;
 }
 
 /**
  * 递归读取目录内源文件(跳过 IGNORED_DIRS 构建/依赖目录)。
  * 相对路径使用 POSIX 风格(与 --method-file 的相对路径约定一致)。
- * 未指定 language 时读取全部 Java/C# 文件(供语言推断)。
+ * 未指定 language 时读取全部 Java/C#/Python/TypeScript 文件(供语言推断)。
  */
 function readDirSourceFiles(dir: string, language?: VerifierLanguage): SideFile[] {
   const extension = language === undefined ? null : extensionFor(language);
@@ -276,6 +300,7 @@ function readDirSourceFiles(dir: string, language?: VerifierLanguage): SideFile[
       }
       if (!entry.isFile()) continue;
       if (extension !== null && !entry.name.endsWith(extension)) continue;
+      if (extension === ".ts" && entry.name.endsWith(".d.ts")) continue;
       files.push({
         relativePath: relative === "" ? entry.name : `${relative}/${entry.name}`,
         content: readFileSync(join(current, entry.name), "utf-8"),
@@ -286,16 +311,45 @@ function readDirSourceFiles(dir: string, language?: VerifierLanguage): SideFile[
   return files;
 }
 
-/** 从源目录文件集合推断源语言:仅 .java → Java,仅 .cs → C#;混合或为空 → 抛错。 */
+/** 从源目录文件集合推断源语言:仅一种支持的扩展名 → 对应语言;混合或为空 → 抛错。 */
 function inferSourceLanguage(files: SideFile[]): VerifierLanguage {
   const javaCount = files.filter((f) => f.relativePath.endsWith(JAVA_EXT)).length;
   const csharpCount = files.filter((f) => f.relativePath.endsWith(CSHARP_EXT)).length;
-  if (javaCount > 0 && csharpCount > 0) {
-    throw new Error("source directory contains both .java and .cs files; cannot infer the source language.");
+  const pythonCount = files.filter((f) => f.relativePath.endsWith(".py")).length;
+  const typeScriptCount = files.filter((f) => f.relativePath.endsWith(".ts") && !f.relativePath.endsWith(".d.ts")).length;
+  const languages = [javaCount, csharpCount, pythonCount, typeScriptCount].filter((count) => count > 0).length;
+  if (languages > 1) {
+    throw new Error("source directory contains multiple source languages; cannot infer the source language.");
   }
   if (javaCount > 0) return "Java";
   if (csharpCount > 0) return "C#";
-  throw new Error("source directory contains no Java or C# source files.");
+  if (pythonCount > 0) return "Python";
+  if (typeScriptCount > 0) return "TypeScript";
+  throw new Error("source directory contains no Java, C#, Python, or TypeScript source files.");
+}
+
+function buildSourceInvocation(
+  description: TestDescription,
+  sourceLanguage: VerifierLanguage,
+  options: CliOptions,
+): SourceInvocation {
+  const dynamicSource = sourceLanguage === "Python" || sourceLanguage === "TypeScript";
+  const module = options.sourceModule;
+  if (dynamicSource && !module) {
+    throw new Error(`--source-module is required for ${sourceLanguage} source code.`);
+  }
+  const className = options.sourceClass ?? (dynamicSource ? undefined : description.target.className);
+  if (!dynamicSource && !className) {
+    throw new Error(`--source-class is required for ${sourceLanguage} source code.`);
+  }
+  return {
+    language: sourceLanguage,
+    module,
+    className,
+    method: options.sourceMethod ?? description.target.method,
+    isStatic: !options.sourceInstance && description.target.isStatic,
+    constructorArgs: description.target.constructorArgs,
+  };
 }
 
 /** 用修复产物内容替换 methodFile 对应文件(未命中时原样返回)。 */

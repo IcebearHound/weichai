@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 using System.Collections;
 using System.Text;
+using Apache.Commons.FileUpload.Util;
 
 namespace Apache.Commons.FileUpload;
 
@@ -230,7 +231,7 @@ public sealed class ParameterParser
         {
             token = token[1..^1];
         }
-        return token.Length == 0 ? null : token;
+        return token.Length == 0 ? null : MimeUtility.DecodeText(token);
     }
 }
 

@@ -9,6 +9,7 @@ import type {
 import { describe, expect, it } from "vitest";
 import { AdaptationAdapter, _buildFilePatch } from "./adaptation-adapter";
 import type { CompileResult } from "./compiler";
+import type { AdaptationVerifier } from "./verification-adapter";
 
 const javaCandidate: SearchCandidate = {
   id: "java-candidate",
@@ -227,6 +228,119 @@ describe("AdaptationAdapter implementation boundary", () => {
     expect(result.validation.find((record) => record.id === "standalone-compile"))
       .toMatchObject({ status: "pass", command: "javac" });
     expect(result.files).toHaveLength(1);
+  });
+
+  it("drops an Analyzer-rejected candidate and marks autonomous generation for review", async () => {
+    const compilerSuccess: CompileResult = { success: true, errors: [], output: "" };
+    const fallbackPlan =
+      "Implement the requirement using the existing target contract and collected target context without a reference candidate.";
+    const rejectedReport: AnalysisReport = {
+      ...analysisReport,
+      applicability: {
+        level: "reject",
+        confidence: 0.99,
+        reasons: ["The selected candidate does not match the Java target contract."],
+      },
+      behaviorMapping: [],
+      contractMapping: [],
+      implementationPlan: [fallbackPlan],
+    };
+    const modelBodies: Array<{ messages: Array<{ content: string }> }> = [];
+    const adapter = new AdaptationAdapter({
+      apiKey: "test-key",
+      projectRoot: javaProjectRoot,
+      contextCollector: () => targetContext,
+      analyzer: { async analyze() { return rejectedReport; } },
+      translatorRequest: (async (_input: URL | RequestInfo, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+        modelBodies.push(body);
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify({
+            schemaVersion: "1.0",
+            generatedCode: "public static final boolean isMultipartContent(RequestContext ctx) { return ctx != null; }",
+            interfaceMappings: [],
+            completedSteps: [fallbackPlan],
+            unresolved: [],
+          }) } }],
+        }), { status: 200 });
+      }) as typeof globalThis.fetch,
+      validator: {
+        compileStandalone: () => compilerSuccess,
+        compileIntegrated: () => compilerSuccess,
+        isUnavailable: () => false,
+      },
+    });
+
+    const result = await adapter.adapt({ ...request, candidate: javaCandidate });
+    const prompt = modelBodies[0]?.messages.map((message) => message.content).join("\n") ?? "";
+
+    expect(result.generatedCode).toContain("isMultipartContent(RequestContext ctx)");
+    expect(result.validation).toContainEqual(expect.objectContaining({
+      id: "reference-candidate",
+      status: "warn",
+      required: false,
+    }));
+    expect(result.validation).toContainEqual(expect.objectContaining({
+      id: "analyzer",
+      status: "warn",
+      required: false,
+    }));
+    expect(prompt).toContain("No candidate is suitable");
+    expect(prompt).not.toContain(javaCandidate.preview);
+  });
+
+  it("runs differential verification after compile and feeds its plan to Translator repair", async () => {
+    const compilerSuccess: CompileResult = { success: true, errors: [], output: "" };
+    const modelBodies: Array<{ messages: Array<{ content: string }> }> = [];
+    const verifierCalls: string[] = [];
+    const verifier: AdaptationVerifier = {
+      async verify(input) {
+        verifierCalls.push(input.generatedCode);
+        return {
+          status: "fail",
+          summary: "差分验证未通过：0/1 个 case 通过，1 个 case 需要修复。",
+          modificationPlan: ["修复 case wrong-return：目标返回值与需求不一致。"],
+          reason: "behavioral-divergence",
+        };
+      },
+    };
+    const generatedCode = "public static final boolean isMultipartContent(RequestContext ctx) { return true; }";
+    const adapter = new AdaptationAdapter({
+      apiKey: "test-key",
+      projectRoot: javaProjectRoot,
+      contextCollector: () => targetContext,
+      verifier,
+      analyzer: { async analyze() { return analysisReport; } },
+      translatorRequest: (async (_input: URL | RequestInfo, init?: RequestInit) => {
+        modelBodies.push(JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> });
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify({
+            schemaVersion: "1.0",
+            generatedCode,
+            completedSteps: analysisReport.implementationPlan,
+            unresolved: [],
+          }) } }],
+        }), { status: 200 });
+      }) as typeof globalThis.fetch,
+      validator: {
+        compileStandalone: () => compilerSuccess,
+        compileIntegrated: () => compilerSuccess,
+        isUnavailable: () => false,
+      },
+    });
+
+    const result = await adapter.adapt(request);
+
+    expect(verifierCalls).toHaveLength(4);
+    expect(modelBodies).toHaveLength(4);
+    expect(modelBodies[1]?.messages.map((message) => message.content).join("\n"))
+      .toContain("修复 case wrong-return");
+    expect(result.modificationPlan).toEqual(["修复 case wrong-return：目标返回值与需求不一致。"]);
+    expect(result.validation).toContainEqual(expect.objectContaining({
+      id: "differential-verification",
+      status: "fail",
+      required: true,
+    }));
   });
 });
 

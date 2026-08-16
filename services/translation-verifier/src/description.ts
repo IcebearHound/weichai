@@ -1,6 +1,9 @@
-export type VerifierLanguage = "Java" | "C#";
+/** Languages that can execute one side of a differential verification. */
+export type VerifierLanguage = "Java" | "C#" | "Python" | "TypeScript";
+/** Languages currently supported as the translated target side. */
+export type TargetLanguage = "Java" | "C#";
 export const verifierSchemaVersion = "1.0" as const;
-const VALID_LANGUAGES: ReadonlySet<string> = new Set(["Java", "C#"]);
+const VALID_TARGET_LANGUAGES: ReadonlySet<string> = new Set(["Java", "C#"]);
 
 export type TypedValue =
   | { type: "string"; value: string }
@@ -24,9 +27,11 @@ export interface TestDescription {
   /** 用户需求原文(可选;需求第一原则下由调用方随描述传递,修复闭环以其为准)。 */
   requirement?: string;
   target: {
-    language: VerifierLanguage;
+    language: TargetLanguage;
     className: string;
     method: string;
+    /** Class-level verification may use a constructor as its executable entry. */
+    entryKind?: "method" | "constructor";
     isStatic: boolean;
     constructorArgs: TypedValue[];
   };
@@ -43,7 +48,7 @@ export function validateDescription(value: unknown): TestDescription {
   }
   const target = d.target as Record<string, unknown> | undefined;
   if (typeof target !== "object" || target === null) throw new Error("TestDescription.target is required.");
-  if (typeof target.language !== "string" || !VALID_LANGUAGES.has(target.language)) {
+  if (typeof target.language !== "string" || !VALID_TARGET_LANGUAGES.has(target.language)) {
     throw new Error(`TestDescription.target.language must be one of Java, C#; received ${String(target.language)}.`);
   }
   for (const key of ["className", "method"] as const) {
@@ -53,6 +58,9 @@ export function validateDescription(value: unknown): TestDescription {
   }
   if (typeof target.isStatic !== "boolean") {
     throw new Error("TestDescription.target.isStatic must be a boolean.");
+  }
+  if (target.entryKind !== undefined && target.entryKind !== "method" && target.entryKind !== "constructor") {
+    throw new Error('TestDescription.target.entryKind must be "method" or "constructor" when present.');
   }
   const ctorArgs = target.constructorArgs;
   if (!Array.isArray(ctorArgs)) throw new Error("TestDescription.target.constructorArgs must be an array.");
@@ -165,6 +173,7 @@ export function canonicalDescriptionJson(description: TestDescription): string {
       language: description.target.language,
       className: description.target.className,
       method: description.target.method,
+      ...(description.target.entryKind === undefined ? {} : { entryKind: description.target.entryKind }),
       isStatic: description.target.isStatic,
       constructorArgs: description.target.constructorArgs.map(canonicalTypedValue),
     },

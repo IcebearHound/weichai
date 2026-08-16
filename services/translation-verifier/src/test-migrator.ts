@@ -14,6 +14,8 @@ export interface MigrationInput {
   repository?: string;
   /** 来源文件路径(SearchCandidate.path,仓库相对路径)。 */
   sourcePath?: string;
+  /** 完整目标类上下文，用于类级入口(尤其是构造函数)推导合法输入。 */
+  targetContext?: string;
   target: {
     language: "Java" | "C#";
     className: string;
@@ -57,7 +59,10 @@ Priority rules:
 3. Do not inherit defects of the reference implementation (ignored whitespace, off-by-one errors,
    historical quirks).
 4. Keep expected values language-agnostic; for exceptions use "kind": "exception" with "type" and
-   optional "messageContains"; include at least 3 cases; values must be JSON-safe.`;
+   optional "messageContains"; include at least 3 cases; values must be JSON-safe.
+5. When target.method is "__constructor__", each case invokes the target constructor using case.inputs.
+   A successful construction MUST use expected {"kind":"return","value":{"type":"null","value":null}};
+   do not invent object fields or serialize the constructed object.`;
 
 export class TestMigratorAgent {
   readonly #options: TestMigratorOptions;
@@ -83,7 +88,7 @@ export class TestMigratorAgent {
         // 不再 DeepSeek HTTP 直调;system 提示与 user prompt 合并为单一 prompt。
         const raw = await runClaude(`${MIGRATOR_SYSTEM_PROMPT}\n\n${prompt}`, this.#options);
         this.#logger.debug(`LLM 原始返回:\n${raw}`);
-        const description = validateDescription(JSON.parse(stripFences(raw)));
+        const description = validateDescription(coerceDescription(JSON.parse(extractJson(raw))));
         this.#logger.info("extractDescription 完成");
         return description;
       } catch (error) {
@@ -118,9 +123,73 @@ SOURCE_METHOD
 \`\`\`
 ${input.sourceCode}
 \`\`\`
-${input.existingTests ? `EXISTING_TESTS
+${input.targetContext ? `TARGET_CLASS_CONTEXT
+\`\`\`
+${input.targetContext}
+\`\`\`
+` : ""}${input.existingTests ? `EXISTING_TESTS
 \`\`\`
 ${input.existingTests}
 \`\`\`
 ` : ""}`;
+}
+
+function extractJson(raw: string): string {
+  const stripped = stripFences(raw).trim();
+  try {
+    JSON.parse(stripped);
+    return stripped;
+  } catch {
+    const start = stripped.indexOf("{");
+    const end = stripped.lastIndexOf("}");
+    if (start < 0 || end <= start) throw new Error("Claude output did not contain a JSON object.");
+    return stripped.slice(start, end + 1);
+  }
+}
+
+function coerceDescription(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const description = value as Record<string, unknown>;
+  const cases = Array.isArray(description.cases) ? description.cases : undefined;
+  if (!cases) return value;
+  return {
+    ...description,
+    cases: cases.map((testCase) => {
+      if (!testCase || typeof testCase !== "object") return testCase;
+      const c = testCase as Record<string, unknown>;
+      const expected = c.expected && typeof c.expected === "object"
+        ? c.expected as Record<string, unknown>
+        : undefined;
+      return {
+        ...c,
+        inputs: Array.isArray(c.inputs) ? c.inputs.map(coerceTypedValue) : c.inputs,
+        expected: expected?.kind === "return"
+          ? { ...expected, value: coerceTypedValue(expected.value) }
+          : c.expected,
+      };
+    }),
+  };
+}
+
+function coerceTypedValue(value: unknown): unknown {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (typeof record.type === "string" && "value" in record) {
+      return { ...record, value: record.type === "list" && Array.isArray(record.value)
+        ? record.value.map(coerceTypedValue)
+        : record.type === "map" && record.value && typeof record.value === "object"
+          ? Object.fromEntries(Object.entries(record.value as Record<string, unknown>).map(([key, item]) => [key, coerceTypedValue(item)]))
+          : record.value };
+    }
+    return {
+      type: "map",
+      value: Object.fromEntries(Object.entries(record).map(([key, item]) => [key, coerceTypedValue(item)])),
+    };
+  }
+  if (Array.isArray(value)) return { type: "list", value: value.map(coerceTypedValue) };
+  if (value === null) return { type: "null", value: null };
+  if (typeof value === "string") return { type: "string", value };
+  if (typeof value === "number" && Number.isFinite(value)) return { type: "number", value };
+  if (typeof value === "boolean") return { type: "boolean", value };
+  return { type: "string", value: String(value) };
 }

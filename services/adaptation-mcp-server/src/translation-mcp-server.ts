@@ -8,6 +8,7 @@ import {
   repairTranslation,
   translateWithAnalysis,
   type AdaptationAnalyzer,
+  type AdaptationVerifier,
   type AdaptationValidator,
   type TranslatorModelOptions,
 } from "@forexplore/adaptation-service";
@@ -80,7 +81,7 @@ const analysisReportSchema = z.object({
   contractMapping: z.array(z.object({
     source: z.string().min(1).max(8_000),
     target: z.string().min(1).max(8_000),
-    action: z.enum(["preserve", "rename", "convert", "inject", "replace"]),
+    action: z.enum(["preserve", "rename", "convert", "inject", "replace", "adapt", "map", "delegate", "wrap"]),
     note: z.string().min(1).max(8_000),
   })),
   dependencyPlan: z.array(z.object({
@@ -100,9 +101,9 @@ const translationResultSchema = z.object({
   interfaceMappings: z.array(z.object({
     source: z.string().min(1).max(8_000),
     target: z.string().min(1).max(8_000),
-    action: z.enum(["preserve", "rename", "convert", "inject", "replace"]),
+    action: z.enum(["preserve", "rename", "convert", "inject", "replace", "adapt", "map", "delegate", "wrap"]),
     note: z.string().min(1).max(8_000),
-  })),
+  })).optional().default([]),
   completedSteps: z.array(z.string().min(1).max(8_000)),
   unresolved: z.array(z.string().max(8_000)),
 });
@@ -131,6 +132,7 @@ export interface AdaptationMcpServerOptions {
   analyzer?: AdaptationAnalyzer;
   translatorRequest?: typeof globalThis.fetch;
   validator?: AdaptationValidator;
+  verifier?: AdaptationVerifier;
 }
 
 /**
@@ -155,6 +157,7 @@ export function createAdaptationMcpServer(
     analyzer,
     translatorRequest: options.translatorRequest,
     validator: options.validator,
+    verifier: options.verifier,
   });
 
   const collect = (target: ModuleTarget, signal: AbortSignal) => collectTargetContext({

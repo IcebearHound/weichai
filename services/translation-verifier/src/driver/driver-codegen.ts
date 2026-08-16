@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import { canonicalDescriptionJson, type TestDescription } from "../description.js";
 import { generateJavaDriver } from "./java-driver.js";
 import { generateCSharpDriver } from "./csharp-driver.js";
+import { generatePythonDriver } from "./python-driver.js";
+import { type SourceInvocation } from "./source-invocation.js";
+import { generateTypeScriptDriver } from "./typescript-driver.js";
 
 /**
  * 基于 canonicalDescriptionJson 的 sha256 前缀生成确定性驱动类名(Java/C# 共享)。
@@ -25,5 +28,28 @@ export function generateDriverSource(description: TestDescription): string {
       return generateCSharpDriver(description);
     default:
       throw new Error(`Unsupported driver language: ${String(description.target.language)}`);
+  }
+}
+
+/** Generate a source-side driver without widening the translated target schema. */
+export function generateSourceDriverSource(description: TestDescription, source: SourceInvocation): string {
+  switch (source.language) {
+    case "Java":
+    case "C#":
+      if (!source.className) throw new Error(`${source.language} source driver requires source.className.`);
+      return generateDriverSource({
+        ...description,
+        target: {
+          language: source.language,
+          className: source.className,
+          method: source.method,
+          isStatic: source.isStatic,
+          constructorArgs: source.constructorArgs,
+        },
+      });
+    case "Python":
+      return generatePythonDriver(description, source);
+    case "TypeScript":
+      return generateTypeScriptDriver(description, source);
   }
 }

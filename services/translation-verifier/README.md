@@ -38,8 +38,8 @@
 | 模块 | 职责 |
 | --- | --- |
 | `description.ts` | 语言无关测试描述类型 + 校验 + canonical 规范化 |
-| `driver/` | Java / C# 驱动代码生成器(确定性;输入字面量嵌入,输出微型 JSON writer) |
-| `executor.ts` | javac / dotnet 编译 + 运行(可注入 fake,单元测试不依赖工具链) |
+| `driver/` | Java / C# 目标驱动，以及 Python / TypeScript 源侧驱动(确定性 JSON 输出) |
+| `executor.ts` | javac / dotnet / python3 / tsc+tsx 编译 + 运行(可注入 fake) |
 | `comparator.ts` | 差分比较器(数值容差 / 跨语言异常等价类 / 语义集合比较) |
 | `verifier.ts` | 双轨道验证编排 + 量化报告 + 需求裁决(`requirementVerdict`) |
 | `test-migrator.ts` | 测试迁移 Agent(需求第一,生成语言无关描述) |
@@ -79,10 +79,15 @@ E2E 三阶段:①验证翻译产物(差分 + 需求黄金校验)→ ②注入 bu
 npx tsx services/translation-verifier/src/cli.ts \
   --description <描述.json> --source <源目录> --target <目标目录> \
   [--method-file <目标类型相对路径>] [--max-rounds 3] [--json] \
-  [--requirement <需求文本>] [--api-key <key>]
+  [--requirement <需求文本>] [--api-key <key>] \
+  [--source-module <Python模块或TS相对路径>] [--source-class <类名>] \
+  [--source-method <方法名>] [--source-instance]
 ```
 
 - `--description` / `--source` / `--target` 必填;`--requirement` 缺失时描述须自带(需求第一)。
+- 源目录只含一种 `.java`、`.cs`、`.py` 或 `.ts` 时自动识别语言；Python/TypeScript 必须提供
+  `--source-module`，类方法再提供 `--source-class`，模块级函数可省略类名。
+- `TestDescription.target.language` 仍只支持 Java/C#；Python/TypeScript 是源侧执行适配器，不会改变目标翻译契约。
 - 翻译由 agent 在调度时完成,CLI 不做 LLM 调用。
 
 ## 语言无关测试描述(schema v1.0)
@@ -127,7 +132,6 @@ npx tsx services/translation-verifier/src/cli.ts \
 - 真实分支覆盖率(需要 JaCoCo / dotnet-coverage 插桩)尚未接入,报告 `coverage` 字段预留。
 - 状态路径(state path)深度支持受限:本期 expected 支持 return / exception;对象内部状态可通过
   getter 以 return 形式断言。
-- 源/目标两侧方法名需与描述 `target.className/method` 一致(签名保持的逐方法翻译);不一致时
-  显式 DIVERGENT 失败,不静默误调用。
+- Java/C# 源侧默认沿用描述中的类名/方法名；Python/TypeScript 可通过源侧参数显式指定模块、类和方法。
 - 修复闭环面向 Java 目标方向;无 `DEEPSEEK_API_KEY` 时跳过修复演示。
 - `ignoreMessageSubstrings` 当前为预留选项(默认不比较异常消息)。

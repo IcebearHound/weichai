@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from email.header import decode_header
 from io import BytesIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
@@ -165,7 +166,15 @@ class ParameterParser:
     def _unquote(value: str) -> str | None:
         if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
             value = value[1:-1]
-        return value or None
+        if not value:
+            return None
+        try:
+            return "".join(
+                part.decode(charset or "ascii") if isinstance(part, bytes) else part
+                for part, charset in decode_header(value)
+            )
+        except (LookupError, UnicodeError):
+            return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,6 +462,7 @@ class DiskFileItemFactory:
 class FileUploadBase:
     MULTIPART = "multipart/"
     MULTIPART_FORM_DATA = "multipart/form-data"
+    MULTIPART_MIXED = "multipart/mixed"
     CONTENT_TYPE = "content-type"
     CONTENT_DISPOSITION = "content-disposition"
 
@@ -486,26 +496,38 @@ class FileUploadBase:
 
         items: list[DiskFileItem] = []
         try:
+            def add_item(field_name: str, headers: FileItemHeaders, body: bytes, file_name: str | None) -> None:
+                if self.file_count_max >= 0 and len(items) >= self.file_count_max:
+                    raise FileCountLimitExceededException("Attachment count exceeds configured maximum.", self.file_count_max)
+                if self.file_size_max >= 0 and len(body) > self.file_size_max:
+                    raise FileSizeLimitExceededException(
+                        f"The field {field_name} exceeds its maximum permitted size.", len(body), self.file_size_max
+                    )
+                item = factory.create_item(field_name, headers.get_header(self.CONTENT_TYPE), file_name is None, file_name)
+                with item.get_output_stream() as output:
+                    output.write(body)
+                item.set_headers(headers)
+                items.append(item)
+                if self.progress_listener:
+                    self.progress_listener(len(body), request_size, len(items))
+
             for part in MultipartStream(context.get_input_stream(), boundary).read_parts():
                 headers = self.get_parsed_headers(part.raw_headers)
                 disposition = self._parse_disposition(headers.get_header(self.CONTENT_DISPOSITION))
                 field_name = disposition.get("name")
                 if not field_name:
                     continue
-                if self.file_count_max >= 0 and len(items) >= self.file_count_max:
-                    raise FileCountLimitExceededException("Attachment count exceeds configured maximum.", self.file_count_max)
-                if self.file_size_max >= 0 and len(part.body) > self.file_size_max:
-                    raise FileSizeLimitExceededException(
-                        f"The field {field_name} exceeds its maximum permitted size.", len(part.body), self.file_size_max
-                    )
-                file_name = disposition.get("filename")
-                item = factory.create_item(field_name, headers.get_header(self.CONTENT_TYPE), file_name is None, file_name)
-                with item.get_output_stream() as output:
-                    output.write(part.body)
-                item.set_headers(headers)
-                items.append(item)
-                if self.progress_listener:
-                    self.progress_listener(len(part.body), request_size, len(items))
+                content_type = headers.get_header(self.CONTENT_TYPE) or ""
+                nested_boundary = self.get_boundary(content_type) if content_type.lower().startswith(self.MULTIPART_MIXED) else None
+                if nested_boundary:
+                    for nested_part in MultipartStream(BytesIO(part.body), nested_boundary).read_parts():
+                        nested_headers = self.get_parsed_headers(nested_part.raw_headers)
+                        nested_disposition = self._parse_disposition(nested_headers.get_header(self.CONTENT_DISPOSITION))
+                        nested_file_name = nested_disposition.get("filename")
+                        if nested_file_name is not None:
+                            add_item(field_name, nested_headers, nested_part.body, nested_file_name)
+                    continue
+                add_item(field_name, headers, part.body, disposition.get("filename"))
             return items
         except Exception:
             for item in items:
@@ -517,6 +539,12 @@ class FileUploadBase:
         for item in self.parse_request(context):
             mapped.setdefault(item.get_field_name() or "", []).append(item)
         return mapped
+
+    def get_item_iterator(self, context: RequestContext) -> "FileItemIterator":
+        # 延迟导入避免核心上传类与兼容迭代器互相初始化。
+        from .compat import MaterializedFileItemIterator
+
+        return MaterializedFileItemIterator(self.parse_request(context))
 
     @staticmethod
     def get_boundary(content_type: str | None) -> bytes | None:

@@ -70,7 +70,7 @@ describe("generateDriverSource 按 language 分派", () => {
   it("非法语言(Python)→ 抛错", () => {
     const desc: TestDescription = {
       ...csharpDescription(),
-      target: { ...csharpDescription().target, language: "Python" as VerifierLanguage },
+      target: { ...csharpDescription().target, language: "Python" as never },
     };
     expect(() => generateDriverSource(desc)).toThrow(/Unsupported driver language: Python/);
   });

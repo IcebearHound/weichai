@@ -21,6 +21,11 @@ public class DiskFileItem : FileItem, FileItemHeadersSupport
     private string defaultCharset = DEFAULT_CHARSET;
     private FileItemHeaders? headers;
 
+    static DiskFileItem()
+    {
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+    }
+
     public DiskFileItem(string? fieldName, string? contentType, bool isFormField, string? fileName, int sizeThreshold, string? repository)
     {
         this.fieldName = fieldName;
@@ -171,6 +176,10 @@ public class DiskFileItem : FileItem, FileItemHeadersSupport
             {
                 File.Delete(filePath);
             }
+            if (!spilled)
+            {
+                memory.SetLength(0);
+            }
         }
 
         private void EnsureStorage(int nextWrite)
@@ -194,7 +203,7 @@ public class DiskFileItem : FileItem, FileItemHeadersSupport
             {
                 file?.Dispose();
                 file = null;
-                memory.Dispose();
+                // 关闭条目输出流只结束写入；内存内容仍须支持 get/getSize。
             }
             base.Dispose(disposing);
         }

@@ -3,6 +3,7 @@ import { config as loadEnv } from "dotenv";
 import { loadConfig } from "@forexplore/adaptation-service";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createAdaptationMcpServer } from "./translation-mcp-server.js";
+import { TranslationVerifierAdapter } from "@forexplore/adaptation-service";
 
 const mcpEnvPath = fileURLToPath(new URL("../.env", import.meta.url));
 const adaptationEnvPath = fileURLToPath(new URL("../../adaptation-service/.env", import.meta.url));
@@ -18,6 +19,7 @@ async function main(): Promise<void> {
     apiKey: config.apiKey,
     projectRoot: config.projectRoot,
     skeletonProjectPath: config.skeletonProjectPath,
+    verifier: new TranslationVerifierAdapter({ apiKey: config.apiKey }),
   });
   await server.connect(new StdioServerTransport());
   console.error("ForeXplore adaptation MCP server is running on stdio.");

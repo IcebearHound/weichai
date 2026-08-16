@@ -3,6 +3,15 @@
 Language-neutral code adaptation: Analyzer report → Translator generation →
 target-language compilation → protected patch generation.
 
+Production HTTP and MCP entry points also attach `TranslationVerifierAdapter`:
+after compilation, function- and class-level translations select an executable
+entry (a public member or constructor) and run language-neutral cases against
+source and target sides. A failed comparison becomes a bounded
+`modificationPlan` and a behavior feedback item for the existing Translator
+repair loop. Only compilation plus differential verification can produce a
+passing behavioral validation; unsupported or unavailable verifier inputs are
+reported as required `unverified` checks and cannot be written back.
+
 ## Analyzer-driven Translator Agent
 
 The Translator now has a structured member-C entry point:
@@ -25,18 +34,24 @@ agents. The Analyzer receives the target facts, requirement, and candidate and
 returns `AnalysisReport v1`. The Translator starts a fresh model interaction;
 it receives its own target prompt plus that validated report, never Analyzer
 messages or conversation history. Its response is parsed as a structured
-`TranslationResult` containing generated code, mappings, completed plan steps,
-and unresolved items.
+`TranslationResult` containing generated code, completed plan steps, and
+unresolved items. The legacy `interfaceMappings` response field is retained
+for compatibility but is not required or used as a completion attestation.
 
-Runtime guards reject Analyzer `reject` decisions, unresolved dependencies,
-changed target signatures, omitted plan steps/mappings, and output that escapes
-the requested method or class scope with imports, namespaces, or extra types. The HTTP adapter runs the
+Runtime guards reject unresolved dependencies, changed target signatures, omitted
+plan steps, and output that escapes the requested method or class scope
+with imports, namespaces, or extra types. When Analyzer marks only the selected
+candidate as `reject`, the adapter drops that candidate and runs a target-only
+generation path; the result carries a non-blocking warning for developer review
+before write-back. The HTTP adapter runs the
 integrated sequence:
 
 ```text
 collectTargetContext -> AnalyzerAgent.analyze -> AnalysisReport artifact
   -> TranslatorAgent.translate
-  -> compile validation -> repairTranslation (at most three rounds)
+  -> compile validation
+  -> differential verification -> modification plan
+  -> repairTranslation (at most three rounds) -> recompile/reverify
 ```
 
 `AnalysisReport` comes from `@forexplore/contracts`; the Translator no longer
@@ -147,7 +162,8 @@ code-indexer (module 1) → retrieval-service (module 2) → adaptation-service 
 | `src/analyzer.ts` | Independent Analyzer Agent that returns validated `AnalysisReport` JSON |
 | `src/compiler.ts` | Language-registry compiler checks for all contract languages |
 | `src/model-config.ts` | Isolated temporary model provider configuration |
-| `src/adaptation-adapter.ts` | Main adapter, orchestrates context → analyze → translate → compile → repair |
+| `src/adaptation-adapter.ts` | Main adapter, orchestrates context → analyze → translate → compile → verify → repair |
+| `src/verification-adapter.ts` | Bridges TestMigrator, dual-side verifier execution, and behavior modification plans |
 | `src/backfill-adapter.ts` | Backfill results into corpus |
 | `poc/translate_poc.py` | Standalone POC with 5 test cases |
 | `poc/e2e_pipeline.py` | End-to-end: calls retrieval-service /v1/search |

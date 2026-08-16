@@ -95,7 +95,7 @@ npm run e2e                                                # 根 package.json �
 | `--source-method <path>` | 是 | - | 源语言完整方法体文件(agent 整理,单类文件) |
 | `--source-tests <path>` | 否 | - | 相关测试文件(仅作参考,不进入源侧编译) |
 | `--target-file <path>` | 是 | - | Java 翻译产物文件(agent 提供) |
-| `--source-lang <Java\|C#>` | 否 | `C#` | 源语言 |
+| `--source-lang <Java\|C#\|Python\|TypeScript>` | 否 | `C#` | 源语言;目标端仍为 Java |
 | `--fixture <path>` | 否 | `e2e/fixtures/mime-util-description.json` | 无 key 时的描述 JSON |
 | `--api-key <key>` | 否 | `DEEPSEEK_API_KEY` | 描述生成/修复闭环的 API Key |
 | `--target-class <name>` | 否 | 从描述或目标文件解析 | 目标类全限定名(如 `org.apache.commons.fileupload.util.mime.MimeUtility`) |
@@ -106,7 +106,7 @@ npm run e2e                                                # 根 package.json �
 
 > 目标类名/方法名由调用方(agent)显式给出(`--target-class`/`--target-method`);
 > 缺省时从描述 fixture 或目标文件的 public class/方法**声明行**解析(仅声明行,不算检索)。
-> 源侧类名/方法名从 source-method 文件的 class/方法声明行解析(如 C# `DecodeText` vs Java `decodeText`)。
+> 源侧类名/方法名从 source-method 文件的声明行解析；Python/TypeScript 也支持模块级函数，文件会在临时目录中以 `source.py`/`source.ts` 执行。
 
 ## fixtures 说明
 

@@ -26,14 +26,23 @@ export function generateCSharpDriver(description: TestDescription): string {
     lines.push(`  static void ${methodName}(JsonWriter writer) {`);
     lines.push(`    writer.BeginObject().Name("caseId").Value(${csharpStringLiteral(c.id)});`);
     const args = c.inputs.map(csharpLiteral).join(", ");
-    const call = description.target.isStatic
-      ? `${description.target.className}.${description.target.method}(${args})`
-      : `new ${description.target.className}(${description.target.constructorArgs.map(csharpLiteral).join(", ")}).${description.target.method}(${args})`;
+    const call = description.target.entryKind === "constructor"
+      ? `new ${description.target.className}(${args})`
+      : description.target.isStatic
+        ? `${description.target.className}.${description.target.method}(${args})`
+        : `new ${description.target.className}(${description.target.constructorArgs.map(csharpLiteral).join(", ")}).${description.target.method}(${args})`;
     lines.push(`    try {`);
-    lines.push(`      var r = ${call};`);
-    lines.push(`      writer.Name("outcome").Value("return");`);
-    lines.push(`      writer.Name("returnValue");`);
-    lines.push(`      WriteValue(writer, r);`);
+    if (description.target.entryKind === "constructor") {
+      lines.push(`      ${call};`);
+      lines.push(`      writer.Name("outcome").Value("return");`);
+      lines.push(`      writer.Name("returnValue");`);
+      lines.push(`      WriteValue(writer, null);`);
+    } else {
+      lines.push(`      var r = ${call};`);
+      lines.push(`      writer.Name("outcome").Value("return");`);
+      lines.push(`      writer.Name("returnValue");`);
+      lines.push(`      WriteValue(writer, r);`);
+    }
     lines.push(`    } catch (System.Exception t) {`);
     lines.push(`      writer.Name("outcome").Value("exception");`);
     lines.push(`      writer.Name("exceptionType").Value(t.GetType().Name);`);

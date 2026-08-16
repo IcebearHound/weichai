@@ -61,23 +61,22 @@ public abstract class FileUploadBase
                 {
                     continue;
                 }
-                var fileName = dispositionParameters.GetValueOrDefault("filename");
-                if (fileCountMax >= 0 && items.Count >= fileCountMax)
+                var nestedBoundary = IsMultipartMixed(headers.GetHeader(CONTENT_TYPE)) ? GetBoundary(headers.GetHeader(CONTENT_TYPE)) : null;
+                if (nestedBoundary is not null)
                 {
-                    throw new FileCountLimitExceededException("attachment", fileCountMax);
+                    foreach (var nestedPart in new MultipartStream(new MemoryStream(part.Body, writable: false), nestedBoundary).ReadParts())
+                    {
+                        var nestedHeaders = GetParsedHeaders(nestedPart.RawHeaders);
+                        var nestedDisposition = ParseDisposition(nestedHeaders.GetHeader(CONTENT_DISPOSITION));
+                        var nestedFileName = nestedDisposition.GetValueOrDefault("filename");
+                        if (nestedFileName is not null)
+                        {
+                            AddItem(fieldName, nestedHeaders, nestedPart.Body, nestedFileName);
+                        }
+                    }
+                    continue;
                 }
-                if (fileSizeMax >= 0 && part.Body.LongLength > fileSizeMax)
-                {
-                    throw new FileSizeLimitExceededException($"The field {fieldName} exceeds its maximum permitted size of {fileSizeMax} bytes.", part.Body.LongLength, fileSizeMax);
-                }
-                var item = factory.CreateItem(fieldName, headers.GetHeader(CONTENT_TYPE), fileName is null, fileName);
-                using (var output = item.GetOutputStream())
-                {
-                    output.Write(part.Body, 0, part.Body.Length);
-                }
-                item.SetHeaders(headers);
-                items.Add(item);
-                listener?.Invoke(part.Body.LongLength, requestSize, items.Count);
+                AddItem(fieldName, headers, part.Body, dispositionParameters.GetValueOrDefault("filename"));
             }
             return items;
         }
@@ -89,7 +88,30 @@ public abstract class FileUploadBase
             }
             throw;
         }
+
+        void AddItem(string fieldName, FileItemHeadersImpl headers, byte[] body, string? fileName)
+        {
+            if (fileCountMax >= 0 && items.Count >= fileCountMax)
+            {
+                throw new FileCountLimitExceededException("attachment", fileCountMax);
+            }
+            if (fileSizeMax >= 0 && body.LongLength > fileSizeMax)
+            {
+                throw new FileSizeLimitExceededException($"The field {fieldName} exceeds its maximum permitted size of {fileSizeMax} bytes.", body.LongLength, fileSizeMax);
+            }
+            var item = factory.CreateItem(fieldName, headers.GetHeader(CONTENT_TYPE), fileName is null, fileName);
+            using (var output = item.GetOutputStream())
+            {
+                output.Write(body, 0, body.Length);
+            }
+            item.SetHeaders(headers);
+            items.Add(item);
+            listener?.Invoke(body.LongLength, requestSize, items.Count);
+        }
     }
+
+    public FileItemIterator GetItemIterator(RequestContext context)
+        => new MaterializedFileItemIterator(ParseRequest(context));
 
     public Dictionary<string, List<FileItem>> ParseParameterMap(RequestContext context)
     {
@@ -156,6 +178,9 @@ public abstract class FileUploadBase
         parser.SetLowerCaseNames(true);
         return parser.Parse(value, ';');
     }
+
+    private static bool IsMultipartMixed(string? contentType)
+        => contentType?.StartsWith(MULTIPART_MIXED, StringComparison.OrdinalIgnoreCase) == true;
 
     /// .NET 侧该类型记录实际大小与允许上限的基础大小异常。
     public class SizeException : FileUploadException

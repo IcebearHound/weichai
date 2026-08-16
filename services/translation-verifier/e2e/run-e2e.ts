@@ -21,7 +21,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { validateDescription, type TestDescription, type VerifierLanguage } from "../src/description.js";
-import { generateDriverSource } from "../src/driver/driver-codegen.js";
+import { generateDriverSource, generateSourceDriverSource } from "../src/driver/driver-codegen.js";
+import type { SourceInvocation } from "../src/driver/source-invocation.js";
 import { isToolchainAvailable, RealDriverExecutor, type SideSpec } from "../src/executor.js";
 import { verify, type VerificationJob, type VerificationReport } from "../src/verifier.js";
 import { formatReport } from "../src/cli-helpers.js";
@@ -104,8 +105,8 @@ export function parseArgs(argv: string[]): E2EOptions | { error: string } {
           options.targetFile = value;
           break;
         case "--source-lang": {
-          if (value !== "Java" && value !== "C#") {
-            return { error: `Invalid --source-lang: "${value}" (must be Java or C#).` };
+          if (value !== "Java" && value !== "C#" && value !== "Python" && value !== "TypeScript") {
+            return { error: `Invalid --source-lang: "${value}" (must be Java, C#, Python, or TypeScript).` };
           }
           options.sourceLang = value;
           break;
@@ -175,11 +176,20 @@ export function parseSourceClassName(source: string): string | null {
 
 /** 在类块内找第一个 public static 方法名(C# 源侧驱动需要源语言方法名)。 */
 export function parseSourceMethodName(source: string, className: string): string | null {
+  if (/\bdef\s+/.test(source)) {
+    const pythonMethod = /\bdef\s+(?!__init__\b)([A-Za-z_]\w*)\s*\(/.exec(source);
+    return pythonMethod?.[1] ?? null;
+  }
   const block = classBlock(source, className);
-  if (!block) return null;
+  if (!block) {
+    const moduleFunction = /\b(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_]\w*)\s*\(/.exec(source);
+    return moduleFunction?.[1] ?? null;
+  }
   const snippet = source.slice(block.start, block.end);
   const m = /public\s+static\s+[\w<>[\].?]+\s+(\w+)\s*\(/.exec(snippet);
-  return m?.[1] ?? null;
+  if (m?.[1]) return m[1];
+  const typeScriptMethod = /(?:static\s+)?(?:async\s+)?([A-Za-z_]\w*)\s*\([^)]*\)\s*(?::[^\{]+)?\s*\{/.exec(snippet);
+  return typeScriptMethod?.[1] ?? null;
 }
 
 /** 定位 class 声明块的起止(花括号配对;仅用于方法名声明行解析)。 */
@@ -329,9 +339,9 @@ export async function runE2E(argv: string[]): Promise<number> {
     console.error("error: javac is not available on PATH (Java target side verification requires it).");
     return 2;
   }
-  if (parsed.sourceLang === "C#" && !isToolchainAvailable("C#")) {
-    logger.error("dotnet 不可用:C# 源侧验证无法进行");
-    console.error("error: dotnet is not available on PATH (C# source side verification requires it).");
+  if (!isToolchainAvailable(parsed.sourceLang)) {
+    logger.error(`${parsed.sourceLang} 工具链不可用:源侧验证无法进行`);
+    console.error(`error: ${parsed.sourceLang} toolchain is not available (source side verification requires it).`);
     return 2;
   }
 
@@ -437,7 +447,7 @@ export async function runE2E(argv: string[]): Promise<number> {
 
   // 4. 源侧类名/方法名(从 agent 整理的完整方法体文件声明行解析)。
   const sourceClassName = parseSourceClassName(sourceContent);
-  const sourceMethodName = sourceClassName ? parseSourceMethodName(sourceContent, sourceClassName) : null;
+  const sourceMethodName = parseSourceMethodName(sourceContent, sourceClassName ?? "");
   if (!sourceClassName || !sourceMethodName) {
     logger.error(`无法从 source-method 解析源类名/方法名:${String(sourceClassName)}.${String(sourceMethodName)}`);
     console.error("error: cannot resolve the source class/method from --source-method (expects a single-class method-body file).");
@@ -452,19 +462,20 @@ export async function runE2E(argv: string[]): Promise<number> {
     driverSource: generateDriverSource(description),
     sourceFiles: [{ relativePath: `${targetClassName.split(".").pop()}.java`, content }],
   });
+  const sourceModule = parsed.sourceLang === "Python" ? "source" : parsed.sourceLang === "TypeScript" ? "source.ts" : undefined;
+  const sourceInvocation: SourceInvocation = {
+    language: parsed.sourceLang,
+    module: sourceModule,
+    className: sourceClassName ?? undefined,
+    method: sourceMethodName,
+    isStatic: true,
+    constructorArgs: [],
+  };
+  const sourceExtension = parsed.sourceLang === "Java" ? "java" : parsed.sourceLang === "C#" ? "cs" : parsed.sourceLang === "Python" ? "py" : "ts";
   const sourceSide: SideSpec = {
     language: parsed.sourceLang,
-    // 源侧驱动 ← 描述(源语言变体):方法名/类名用 C# 声明(如 DecodeText vs decodeText)。
-    driverSource: generateDriverSource({
-      ...description,
-      target: {
-        ...description.target,
-        language: parsed.sourceLang,
-        className: sourceClassName,
-        method: sourceMethodName,
-      },
-    }),
-    sourceFiles: [{ relativePath: `${sourceClassName.split(".").pop()}.cs`, content: sourceContent }],
+    driverSource: generateSourceDriverSource(description, sourceInvocation),
+    sourceFiles: [{ relativePath: `source.${sourceExtension}`, content: sourceContent }],
   };
   const makeJob = (target: SideSpec): VerificationJob => ({ description, source: sourceSide, target });
 

@@ -1,6 +1,6 @@
 /**
  * CodeAdaptationPort orchestration:
- * collect context -> analyze -> translate -> validate/repair -> patch preview.
+ * collect context -> analyze -> translate -> compile -> verify/repair -> patch preview.
  */
 
 import { createHash } from "node:crypto";
@@ -38,6 +38,10 @@ import {
   resolveProjectTargetFile,
   type CompileResult,
 } from "./compiler";
+import type {
+  AdaptationVerifier,
+  DifferentialVerificationResult,
+} from "./verification-adapter";
 
 const MAX_RETRIES = 3;
 const STANDALONE_CLASS_NAME = "ForeXploreStandalone";
@@ -53,6 +57,8 @@ export interface AdaptationAdapterOptions {
   contextCollector?: AdaptationContextCollector;
   translatorRequest?: typeof globalThis.fetch;
   validator?: AdaptationValidator;
+  /** Optional behavioral verifier; production servers provide it explicitly. */
+  verifier?: AdaptationVerifier;
 }
 
 export interface AdaptationAnalyzer {
@@ -87,6 +93,7 @@ export class AdaptationAdapter implements CodeAdaptationPort {
   #contextCollector: AdaptationContextCollector;
   #translatorOptions: TranslatorModelOptions;
   #validator: AdaptationValidator;
+  #verifier?: AdaptationVerifier;
 
   constructor(options: AdaptationAdapterOptions) {
     this.#skeletonProjectPath = options.skeletonProjectPath;
@@ -97,6 +104,7 @@ export class AdaptationAdapter implements CodeAdaptationPort {
       ? { apiKey: options.apiKey, request: options.translatorRequest }
       : { apiKey: options.apiKey };
     this.#validator = options.validator ?? defaultValidator;
+    this.#verifier = options.verifier;
   }
 
   async adapt(
@@ -127,12 +135,17 @@ export class AdaptationAdapter implements CodeAdaptationPort {
       },
       signal,
     );
+    const referenceFree = analysisReport.applicability.level === "reject";
+    const translationReport = referenceFree
+      ? referenceFreeAnalysisReport(analysisReport)
+      : analysisReport;
 
     const translationInput: AnalyzeTranslationRequest = {
-      candidateSource: request.candidate.preview,
+      candidateSource: referenceFree ? "" : request.candidate.preview,
       targetContext: projectTargetContext(collectedContext),
       requirement,
-      analysisReport,
+      analysisReport: translationReport,
+      referencePolicy: referenceFree ? "target-only" : "candidate",
     };
     let translationResult = await translateWithAnalysis(
       translationInput,
@@ -156,17 +169,60 @@ export class AdaptationAdapter implements CodeAdaptationPort {
       : null;
     let retries = 0;
     let repairResult = integratedResult ?? standaloneResult;
+    let differentialResult: DifferentialVerificationResult | undefined;
 
-    while (
-      !repairResult.success &&
-      !this.#validator.isUnavailable(repairResult) &&
-      retries < MAX_RETRIES
-    ) {
+    while (true) {
+      if (!repairResult.success) {
+        if (this.#validator.isUnavailable(repairResult) || retries >= MAX_RETRIES) break;
+        translationResult = await repairTranslation(
+          {
+            ...translationInput,
+            previousResult: translationResult,
+            validationFeedback: compilerFeedback(repairResult.errors),
+          },
+          this.#translatorOptions,
+          signal,
+        );
+        generatedCode = translationResult.generatedCode;
+        standaloneResult = this.#validator.compileStandalone(
+          request.target.language,
+          generatedCode,
+          STANDALONE_CLASS_NAME,
+        );
+        integratedResult = this.#skeletonProjectPath
+          ? this.#validator.compileIntegrated(
+              request.target.language,
+              generatedCode,
+              this.#skeletonProjectPath,
+              request.target.path,
+            )
+          : null;
+        repairResult = integratedResult ?? standaloneResult;
+        retries++;
+        continue;
+      }
+
+      if (!this.#verifier) break;
+      try {
+        differentialResult = await this.#verifier.verify(
+          { request, targetContext: collectedContext, generatedCode, projectRoot },
+          signal,
+        );
+      } catch (error: unknown) {
+        differentialResult = {
+          status: "unverified",
+          summary: `差分验证未执行：${error instanceof Error ? error.message : String(error)}`,
+          modificationPlan: [],
+          reason: "verifier-error",
+        };
+      }
+      if (differentialResult.status !== "fail" || retries >= MAX_RETRIES) break;
+
       translationResult = await repairTranslation(
         {
           ...translationInput,
           previousResult: translationResult,
-          validationFeedback: compilerFeedback(repairResult.errors),
+          validationFeedback: differentialFeedback(differentialResult),
         },
         this.#translatorOptions,
         signal,
@@ -209,16 +265,32 @@ export class AdaptationAdapter implements CodeAdaptationPort {
       strategy: request.strategy,
       targetLanguage: request.target.language,
       generatedCode,
-      interfaceMappings: translationResult.interfaceMappings,
+      interfaceMappings: [],
+      modificationPlan: differentialResult?.modificationPlan ?? [],
       validation: [
+        ...(referenceFree
+          ? [{
+              id: "reference-candidate",
+              label: "Reference candidate",
+              status: "warn" as const,
+              required: false,
+              summary:
+                "Analyzer rejected the selected candidate. The Translator generated from the target context and requirement without using that candidate; review is required before write-back.",
+              failureReason: "candidate-rejected-reference-free-generation",
+            }]
+          : []),
         {
           id: "analyzer",
-          label: "Analyzer",
-          status: "pass",
-          required: true,
-          summary: `${analysisReport.applicability.level} (${Math.round(
-            analysisReport.applicability.confidence * 100,
-          )}%)`,
+          label: referenceFree ? "Analyzer (reference-free fallback)" : "Analyzer",
+          status: referenceFree ? "warn" : "pass",
+          required: !referenceFree,
+          summary: referenceFree
+            ? `Analyzer rejected the selected candidate (${Math.round(
+                analysisReport.applicability.confidence * 100,
+              )}%). Generation continued without that reference.`
+            : `${analysisReport.applicability.level} (${Math.round(
+                analysisReport.applicability.confidence * 100,
+              )}%)`,
         },
         targetStandaloneCompileValidation(
           request.target.language,
@@ -243,6 +315,7 @@ export class AdaptationAdapter implements CodeAdaptationPort {
               summary: "No target skeleton project was configured, so integrated compilation was not run.",
               failureReason: "skeleton-project-not-configured",
             },
+        ...(differentialResult ? [differentialValidation(differentialResult)] : []),
         {
           id: "target-context-snapshot",
           label: "Target file snapshot",
@@ -276,6 +349,33 @@ function effectiveRequirement(request: AdaptationRequest): string {
   );
 }
 
+function referenceFreeAnalysisReport(report: AnalysisReport): AnalysisReport {
+  return {
+    ...report,
+    applicability: {
+      level: "reference",
+      confidence: 0,
+      reasons: [
+        "No selected candidate was accepted as a usable reference; generate from the target context and requirement.",
+        ...report.applicability.reasons,
+      ],
+    },
+    behaviorMapping: [],
+    contractMapping: [],
+    implementationPlan: [
+      "Implement the requirement using the existing target contract and collected target context without a reference candidate.",
+    ],
+    risks: [
+      ...report.risks,
+      "No reference candidate was used; developer review is required before write-back.",
+    ],
+    assumptions: [
+      ...report.assumptions,
+      "The Translator must derive behavior from the functional requirement and target context alone.",
+    ],
+  };
+}
+
 function compilerFeedback(errors: string[]): {
   status: "fail";
   issues: Array<{ category: "syntax"; message: string }>;
@@ -285,6 +385,30 @@ function compilerFeedback(errors: string[]): {
     issues: (errors.length > 0 ? errors : ["Compiler failed without diagnostics."]).map(
       (message) => ({ category: "syntax" as const, message }),
     ),
+  };
+}
+
+function differentialFeedback(result: DifferentialVerificationResult): {
+  status: "fail";
+  issues: Array<{ category: "behavior"; message: string }>;
+} {
+  const plan = result.modificationPlan.length > 0
+    ? result.modificationPlan
+    : [result.summary];
+  return {
+    status: "fail",
+    issues: plan.map((message) => ({ category: "behavior" as const, message })),
+  };
+}
+
+function differentialValidation(result: DifferentialVerificationResult): ValidationRecord {
+  return {
+    id: "differential-verification",
+    label: "Differential behavioral verification",
+    status: result.status === "pass" ? "pass" : result.status === "fail" ? "fail" : "unverified",
+    required: true,
+    summary: result.summary,
+    failureReason: result.status === "pass" ? undefined : result.reason,
   };
 }
 

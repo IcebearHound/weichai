@@ -70,21 +70,34 @@ export function PatchStage({ state, onApply, onBack, onOpenTarget }: PatchStageP
         ) : null}
       </section>
 
-      <section className="card">
-        <h3 className="section-title">
-          <FileSymlink size={14} /> 接口映射
-        </h3>
-        <ul className="mapping-list">
-          {result.interfaceMappings.map((mapping) => (
-            <li key={`${mapping.source}-${mapping.target}`}>
-              <code>{mapping.source}</code>
-              <span className="mapping-action">{mapping.action}</span>
-              <code>{mapping.target}</code>
-              <small>{mapping.note}</small>
-            </li>
-          ))}
-        </ul>
-      </section>
+      {result.interfaceMappings.length > 0 ? (
+        <section className="card">
+          <h3 className="section-title">
+            <FileSymlink size={14} /> 接口映射
+          </h3>
+          <ul className="mapping-list">
+            {result.interfaceMappings.map((mapping) => (
+              <li key={`${mapping.source}-${mapping.target}`}>
+                <code>{mapping.source}</code>
+                <span className="mapping-action">{mapping.action}</span>
+                <code>{mapping.target}</code>
+                <small>{mapping.note}</small>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {result.modificationPlan && result.modificationPlan.length > 0 ? (
+        <section className="card">
+          <h3 className="section-title">修改计划</h3>
+          <ol className="mapping-list">
+            {result.modificationPlan.map((item, index) => (
+              <li key={`${index}-${item}`}>{item}</li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
 
       {result.files.map((file) => (
         <section className="card file-diff" key={file.path}>

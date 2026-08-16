@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "e:\\CS\\devsys\\weichai\\fixtures\\code-corpus\\commons-fileupload-csharp\\Commons.FileUpload.csproj": {}
+    "E:\\cs\\devsys\\weichai\\fixtures\\code-corpus\\commons-fileupload-csharp\\Commons.FileUpload.csproj": {}
   },
   "projects": {
-    "e:\\CS\\devsys\\weichai\\fixtures\\code-corpus\\commons-fileupload-csharp\\Commons.FileUpload.csproj": {
+    "E:\\cs\\devsys\\weichai\\fixtures\\code-corpus\\commons-fileupload-csharp\\Commons.FileUpload.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "e:\\CS\\devsys\\weichai\\fixtures\\code-corpus\\commons-fileupload-csharp\\Commons.FileUpload.csproj",
+        "projectUniqueName": "E:\\cs\\devsys\\weichai\\fixtures\\code-corpus\\commons-fileupload-csharp\\Commons.FileUpload.csproj",
         "projectName": "Commons.FileUpload",
-        "projectPath": "e:\\CS\\devsys\\weichai\\fixtures\\code-corpus\\commons-fileupload-csharp\\Commons.FileUpload.csproj",
+        "projectPath": "E:\\cs\\devsys\\weichai\\fixtures\\code-corpus\\commons-fileupload-csharp\\Commons.FileUpload.csproj",
         "packagesPath": "C:\\Users\\25459\\.nuget\\packages\\",
-        "outputPath": "e:\\CS\\devsys\\weichai\\fixtures\\code-corpus\\commons-fileupload-csharp\\obj\\",
+        "outputPath": "E:\\cs\\devsys\\weichai\\fixtures\\code-corpus\\commons-fileupload-csharp\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"

@@ -108,12 +108,14 @@ describe("FakeDriverExecutor", () => {
 
 describe("isToolchainAvailable", () => {
   it("未知语言抛错", () => {
-    expect(() => isToolchainAvailable("Python" as VerifierLanguage)).toThrow(/Unsupported language/);
+    expect(() => isToolchainAvailable("Kotlin" as VerifierLanguage)).toThrow(/Unsupported language/);
   });
 
-  it("Java / C# 返回 boolean(探测 javac / dotnet 是否在 PATH)", () => {
+  it("Java / C# / Python / TypeScript 返回 boolean", () => {
     expect(typeof isToolchainAvailable("Java")).toBe("boolean");
     expect(typeof isToolchainAvailable("C#")).toBe("boolean");
+    expect(typeof isToolchainAvailable("Python")).toBe("boolean");
+    expect(typeof isToolchainAvailable("TypeScript")).toBe("boolean");
   });
 });
 

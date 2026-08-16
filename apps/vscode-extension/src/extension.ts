@@ -305,8 +305,14 @@ async function applyCurrentRun(context: vscode.ExtensionContext): Promise<void> 
       throw new Error(`必需验证未通过或尚未验证：${labels || '缺少可写回补丁'}。`);
     }
     await assertTargetUnchanged(run);
+    const referenceFree = adaptation.validation.some(
+      (record) => record.id === 'reference-candidate',
+    );
+    const confirmation = referenceFree
+      ? `Analyzer 已拒绝所选参考实现；当前 ${run.target.language} 代码仅依据目标上下文和需求自主生成。请重点审查后再写入 ${run.target.language} 文件。确认继续？`
+      : `将把已预览的补丁写入当前选中的 ${run.target.language} 文件，并创建可恢复检查点。确认继续？`;
     const choice = await vscode.window.showWarningMessage(
-      `将把已预览的补丁写入当前选中的 ${run.target.language} 文件，并创建可恢复检查点。确认继续？`,
+      confirmation,
       { modal: true },
       '应用补丁',
     );

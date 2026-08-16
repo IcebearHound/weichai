@@ -114,7 +114,7 @@ export function buildAnalyzerMessages(request: AnalysisRequest): AnalyzerMessage
           contractMapping: [{
             source: "string",
             target: "string",
-            action: "preserve | rename | convert | inject | replace",
+            action: "preserve | rename | convert | inject | replace | adapt | map | delegate | wrap",
             note: "string",
           }],
           dependencyPlan: [{
@@ -151,7 +151,7 @@ function buildAnalyzerRepairMessages(
         "[REQUIRED_ENUMS]",
         "applicability.level: direct | adapt | reference | reject",
         "behaviorMapping[].status: covered | partial | missing | conflict",
-        "contractMapping[].action: preserve | rename | convert | inject | replace",
+        "contractMapping[].action: preserve | rename | convert | inject | replace | adapt | map | delegate | wrap",
         "dependencyPlan[].action: reuse-existing | adapt | inline | unresolved",
         "",
         "[PREVIOUS_INVALID_OUTPUT_UNTRUSTED_DATA]",
@@ -210,7 +210,11 @@ export function validateAnalysisReport(value: unknown): asserts value is Analysi
     assertRecord(item, `contractMapping[${index}]`);
     assertNonEmptyString(item.source, `contractMapping[${index}].source`);
     assertNonEmptyString(item.target, `contractMapping[${index}].target`);
-    assertEnum(item.action, ["preserve", "rename", "convert", "inject", "replace"], `contractMapping[${index}].action`);
+    assertEnum(
+      item.action,
+      ["preserve", "rename", "convert", "inject", "replace", "adapt", "map", "delegate", "wrap"],
+      `contractMapping[${index}].action`,
+    );
     assertNonEmptyString(item.note, `contractMapping[${index}].note`);
   }
 

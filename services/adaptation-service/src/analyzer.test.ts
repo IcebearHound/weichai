@@ -135,7 +135,7 @@ describe("AnalyzerAgent", () => {
     invalid.contractMapping.push({
       source: "Audit record",
       target: "IAuditJournal",
-      action: "adapt" as never,
+      action: "unsupported" as never,
       note: "Use the target journal dependency.",
     });
     const corrected = report("adapt", "partial");
@@ -152,13 +152,23 @@ describe("AnalyzerAgent", () => {
     const repairMessages = calls[1] ?? [];
     expect(repairMessages.map((message) => message.role)).toEqual(["system", "user", "user"]);
     expect(repairMessages[2]?.content).toContain("contractMapping[1].action");
-    expect(repairMessages[2]?.content).toContain("preserve | rename | convert | inject | replace");
-    expect(repairMessages[2]?.content).toContain('"action":"adapt"');
+    expect(repairMessages[2]?.content).toContain(
+      "preserve | rename | convert | inject | replace | adapt | map | delegate | wrap",
+    );
+    expect(repairMessages[2]?.content).toContain('"action":"unsupported"');
+  });
+
+  it("accepts common contract action terminology", () => {
+    for (const action of ["adapt", "map", "delegate", "wrap"] as const) {
+      const value = report("adapt", "partial");
+      value.contractMapping[0]!.action = action;
+      expect(parseAnalysisReport(JSON.stringify(value)).contractMapping[0]?.action).toBe(action);
+    }
   });
 
   it("stops after two failed schema repairs", async () => {
     const invalid = report("adapt", "partial");
-    invalid.contractMapping[0].action = "adapt" as never;
+    invalid.contractMapping[0].action = "unsupported" as never;
     const complete = vi.fn(async () => JSON.stringify(invalid));
     const agent = new AnalyzerAgent({ client: { complete } });
 

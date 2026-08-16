@@ -9,6 +9,14 @@ export interface CaseComparison {
   source: CaseResult | null;
   target: CaseResult | null;
   details: string[];
+  /**
+   * 需求裁决(需求第一):差分验证是差异探测器而非裁判。
+   * 由 verifier 在黄金校验环节设置;compareCases 自身不产出该字段。
+   * 两侧不一致时,目标侧是否符合描述声明的 expected(需求黄金值):
+   * - "target-conforms": 目标侧符合需求,差异源于源侧;
+   * - "target-diverges": 目标侧也不符合需求。
+   */
+  requirementVerdict?: "target-conforms" | "target-diverges";
 }
 
 export interface ComparisonOptions {

@@ -221,7 +221,7 @@ interface ComparisonOptions {
 3. 一侧 return 一侧 exception → DIVERGENT。
 4. NaN / Infinity:两侧同时 NaN/Infinity 视为一致(可选开关)。
 5. 跨语言异常映射表(默认内置):
-   `IllegalArgumentException ↔ ArgumentException`、`NullPointerException ↔ ArgumentNullException`、
+   `IllegalArgumentException ↔ ArgumentException`、`NullPointerException ↔ NullReferenceException`、
    `IllegalStateException ↔ InvalidOperationException`、`IndexOutOfBoundsException ↔ ArgumentOutOfRangeException`、
    `UnsupportedOperationException ↔ NotSupportedException`、`ParseException ↔ ParseException` 等。
 

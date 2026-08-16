@@ -45,6 +45,8 @@ describe("DEFAULT_EXCEPTION_ALIASES", () => {
       InvalidCastException: "InvalidCastException",
       ParseException: "ParseException",
       IOException: "IOException",
+      FormatException: "ArgumentException",
+      UnsupportedCharsetException: "ArgumentException",
     });
   });
 });
@@ -118,6 +120,25 @@ describe("compareCases", () => {
     // 反向:目标名 → 源名
     const reversedSource = sourceSide([exceptionResult("c1", "ArgumentException")]);
     expect(compareCases(reversedSource, target)[0].verdict).toBe("pass");
+  });
+
+  it("异常映射:FormatException(C# 非法 base64) vs IllegalArgumentException(Java)→ pass", () => {
+    const source = sourceSide([exceptionResult("c1", "FormatException")]);
+    const target = targetSide([exceptionResult("c1", "IllegalArgumentException")]);
+    expect(compareCases(source, target)[0].verdict).toBe("pass");
+  });
+
+  it("异常映射:UnsupportedCharsetException(Java 未知字符集) vs ArgumentException(C#)→ pass", () => {
+    const source = sourceSide([exceptionResult("c1", "ArgumentException")]);
+    const target = targetSide([exceptionResult("c1", "UnsupportedCharsetException")]);
+    expect(compareCases(source, target)[0].verdict).toBe("pass");
+    // 黄金校验:声明期望 IllegalArgumentException 命中 Java UnsupportedCharsetException(其子类语义等价)
+    expect(
+      validateAgainstExpected(
+        exceptionResult("c1", "UnsupportedCharsetException"),
+        { kind: "exception", type: "IllegalArgumentException" },
+      ),
+    ).toEqual([]);
   });
 
   it("ignoreMessageSubstrings:消息含忽略片段且类型一致 → pass", () => {

@@ -43,7 +43,14 @@ export function generateJavaDriver(description: TestDescription): string {
   lines.push(`  static void writeValue(JsonWriter out, Object value) throws Exception {`);
   lines.push(`    if (value == null) { out.beginObject(); out.name("type").value("null").name("value").valueNull(); out.endObject(); return; }`);
   lines.push(`    if (value instanceof String) { out.beginObject(); out.name("type").value("string").name("value").value((String) value); out.endObject(); return; }`);
-  lines.push(`    if (value instanceof Number) {`);
+  lines.push(`    if (value instanceof Byte) {
+      // byte 在 Java 是有符号(-128..127),C# byte 是无符号(0..255);输出无符号值避免跨语言字节数组差分误报。
+      out.beginObject();
+      out.name("type").value("number").name("value").value(((Byte) value).byteValue() & 0xFF);
+      out.endObject();
+      return;
+    }
+    if (value instanceof Number) {`);
   lines.push(`      out.beginObject();`);
   lines.push(`      out.name("type").value("number").name("value").value(((Number) value).doubleValue());`);
   lines.push(`      out.endObject();`);

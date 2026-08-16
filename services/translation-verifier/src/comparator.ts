@@ -51,6 +51,10 @@ export const DEFAULT_EXCEPTION_ALIASES: Record<string, string> = {
   InvalidCastException: "InvalidCastException",
   ParseException: "ParseException",
   IOException: "IOException",
+  // C# Convert.FromBase64String 非法输入抛 FormatException,对应 Java Base64.Decoder 的 IllegalArgumentException
+  FormatException: "ArgumentException",
+  // Java Charset.forName 未知字符集抛 UnsupportedCharsetException(IllegalArgumentException 子类),对应 C# Encoding.GetEncoding 的 ArgumentException
+  UnsupportedCharsetException: "ArgumentException",
 };
 
 function normalizeExceptionType(type: string, aliases: Record<string, string>): string {

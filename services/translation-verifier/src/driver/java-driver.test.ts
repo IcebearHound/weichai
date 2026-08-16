@@ -520,6 +520,45 @@ describe("fix round 2:boolean 返回值输出 JSON boolean(非字符串)", () =>
       rmSync(dir, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it("真实 javac 编译运行:byte[] 返回值的元素按无符号 0-255 输出(与 C# byte 语义对齐,高位字节不泄漏符号)", () => {
+    const desc = validDescription({
+      target: {
+        language: "Java",
+        className: "BytesUtil",
+        method: "highBits",
+        isStatic: true,
+        constructorArgs: [],
+      },
+      cases: [
+        {
+          id: "bytes-e4-bd-a0",
+          inputs: [],
+          expected: { kind: "return", value: { type: "list", value: [] } },
+        },
+      ],
+    });
+    const driverClass = driverClassName(desc);
+    const dir = mkdtempSync(join(tmpdir(), "wc-java-driver-utf8-"));
+    try {
+      const outDir = join(dir, "out");
+      mkdirSync(outDir, { recursive: true });
+      // 0xE4 0xBD 0xA0 = “你” 的 UTF-8 字节,Java byte 有符号为 -28 -67 -96
+      writeFileSync(join(dir, "BytesUtil.java"), "public class BytesUtil { public static byte[] highBits() { return new byte[] { (byte)0xE4, (byte)0xBD, (byte)0xA0 }; } }\n");
+      writeFileSync(join(dir, `${driverClass}.java`), generateJavaDriver(desc));
+      execFileSync("javac", ["-d", outDir, join(dir, "BytesUtil.java"), join(dir, `${driverClass}.java`)], {
+        stdio: "pipe",
+      });
+      const stdout = execFileSync("java", ["-cp", outDir, driverClass], { encoding: "utf8" });
+      const parsed = JSON.parse(stdout) as {
+        results: Array<{ caseId: string; returnValue: { type: string; value: Array<{ type: string; value: number }> } }>;
+      };
+      const values = parsed.results[0]?.returnValue?.value?.map((v) => v.value) ?? [];
+      expect(values).toEqual([228, 189, 160]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
 
 describe("fix round 3:异构 null 集合公共类型推导", () => {

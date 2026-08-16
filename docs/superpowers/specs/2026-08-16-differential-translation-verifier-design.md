@@ -243,10 +243,45 @@ interface VerificationReport {
 }
 ```
 
+**判定语义(需求第一,差分验证是差异探测器而非裁判):**
+
+- `pass`(两侧一致):仍可信,标记为已验证行为一致。
+- `fail`(两侧不一致):**不直接等于目标侧错** —— 可能是源侧 bug/历史局限、目标侧翻译错误、或两者各有取舍。
+  此时必须结合需求裁决。
+- **需求裁决字段**:`CaseComparison.requirementVerdict?: "target-conforms" | "target-diverges"`。
+  当两侧不一致时,用描述中声明的 expected(由需求派生的黄金值)校验目标侧:
+  - 目标侧符合需求(expected)且源侧不符 → `requirementVerdict: "target-conforms"`,
+    details 注明 "target matches declared requirement; divergence is source-side"。
+    该 case 在报告中表达为"两侧不一致,但目标侧符合需求"——后续 AI 审查层以此为准,
+    与需求冲突时以需求优先,判定目标侧正确并记录后放行。
+  - 目标侧也不符合需求 → `requirementVerdict: "target-diverges"`,
+    details 注明目标侧与需求的具体偏差。
+  - 描述未声明 expected(纯差分模式)→ 不产生 requirementVerdict,保持纯差异探测。
+- 该字段在 verifier 黄金校验环节计算(目标侧与 expected 的比对复用 `validateAgainstExpected`)。
+
 ### 4.7 测试迁移 Agent(test-migrator.ts)
 
-复用 adaptation-service 导出的 `completeWithDeepSeek`(deepseek-v4-flash,jsonMode):
-输入 = 源语言 + 源方法代码(+ 可选现有测试代码 + 可选需求),输出 = TestDescription JSON。
+复用 adaptation-service 导出的 `completeWithDeepSeek`(deepseek-v4-flash,jsonMode)。
+
+**两阶段:检索与迁移分离。**
+
+1. **检索阶段(agent 驱动,脚本不硬抠方法名)**:基于**用户需求**,由 agent 使用
+   代码检索工具(rg/find/read)在代码库中检索相关方法、测试、文档,输出**候选集合**
+   (方法源码 + 相关测试 + 相关文档)。agent 判断相关性;脚本不按方法名硬抠(历史代码库中
+   方法可能重载、测试分散多文件、常带 mock/fixture)。
+2. **迁移阶段(TestMigratorAgent)**:输入 = 需求(第一优先级)+ 候选集合(参考实现),
+   输出 = TestDescription JSON。
+
+**需求第一原则**:
+
+- `MigrationInput.requirement` 为**必填**核心输入(不再 optional)。
+- `buildMigrationPrompt` 中 REQUIREMENT 段放在最前面;源码/测试段随后并标注为参考。
+- `MIGRATOR_SYSTEM_PROMPT` 规则重写:
+  - 删除 "do not invent behavior not present in the source" 这类以源码为准的规则;
+  - 新规则:用户需求是最高优先级;源码/测试仅作参考实现,帮助理解逻辑;当源码行为与需求冲突时,
+    以需求为准,并在产出的 case 描述中标注该冲突;不要继承源码的缺陷(忽略空白字符、边界错误、
+    历史怪癖)。
+
 **校验**:LLM 输出经 `validateDescription` 严格校验,不合格则重试(最多 2 次)后失败。
 单元测试用注入的 fake fetch;真实调用只出现在 e2e。
 
@@ -259,11 +294,13 @@ verify ── 有 FAIL/DIVERGENT case ──► 构建诊断反馈 ──► LLM
 ```
 
 - 诊断反馈内容(与用户计划一致):失败输入、源侧结果 A、目标侧结果 B、差异详情、编译错误。
-- Java 目标方向:verifier 内 `RepairAgent`(prompt 结构与 translateToJava 对齐 + 差分反馈),
-  经 `completeWithDeepSeek` 生成新方法代码。
+  另附需求原文与 `requirementVerdict`(目标侧是否符合需求)——修复 Agent 以需求为准,
+  仅当目标侧偏离需求时才需要修复;若两侧不一致但目标侧已符合需求,该差异不进入修复目标。
+- Java 目标方向:verifier 内 `RepairAgent`(prompt 结构与 translateToJava 对齐 + 差分诊断 +
+  需求判据),经 `completeWithDeepSeek` 生成新方法代码。
 - C# 目标方向:复用 adaptation-service 的 `repairTranslation`(已有结构化反馈入口)。
 - 每轮结束记录:轮次、修复后通过率、仍在失败的 case。
-- 收敛条件:全部 PASS 或达到 maxRounds(默认 3)。
+- 收敛条件:全部 PASS(含 target-conforms 视为通过)或达到 maxRounds(默认 3)。
 
 ### 4.9 CLI(cli.ts)
 

@@ -814,7 +814,7 @@ export function generateJavaDriver(description: TestDescription): string {
   lines.push(`      out.name("type").value("number").name("value").value(((Number) value).doubleValue());`);
   lines.push(`      return;`);
   lines.push(`    }`);
-  lines.push(`    if (value instanceof Boolean) { out.name("type").value("boolean").name("value").value(value.toString()); return; }`);
+  lines.push(`    if (value instanceof Boolean) { out.name("type").value("boolean").name("value").value(((Boolean) value).booleanValue()); return; }`);
   lines.push(`    if (value instanceof java.util.Map) {`);
   lines.push(`      out.name("type").value("map").name("value").beginObject();`);
   lines.push(`      for (Object entryObj : ((java.util.Map<?, ?>) value).entrySet()) {`);
@@ -976,6 +976,8 @@ case "number": {
 
 - [ ] **Step 4: 运行确认通过**
 
+
+> **注记(fix round 1)**:生成器源码中的 Java/C# 字符串转义以真实编译器验证为准(计划代码为参考,已由 javac/dotnet 验证);writeValue 输出统一为 `{type,value}` 对象形式(含外层 beginObject/endObject);boolean 输出 JSON boolean 而非字符串。
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -1056,7 +1058,7 @@ export function generateCSharpDriver(description: TestDescription): string {
   lines.push(`  static void WriteValue(JsonWriter out, object? value) {`);
   lines.push(`    if (value == null) { out.Name("type").Value("null").Name("value").ValueNull(); return; }`);
   lines.push(`    if (value is string s) { out.Name("type").Value("string").Name("value").Value(s); return; }`);
-  lines.push(`    if (value is bool b) { out.Name("type").Value("boolean").Name("value").Value(b ? "true" : "false"); return; }`);
+  lines.push(`    if (value is bool b) { out.Name("type").Value("boolean").Name("value").Value(b); return; }`);
   lines.push(`    if (value is int || value is long || value is short || value is byte) {`);
   lines.push(`      out.Name("type").Value("number").Name("value").Value(System.Convert.ToInt64(value));`);
   lines.push(`      return;`);
@@ -1199,6 +1201,7 @@ function csharpJsonWriterSource(): string {
     `    public JsonWriter ValueNull() { out.Write("null"); return this; }`,
     `    public JsonWriter Value(string value) { out.Write("\\\""); out.Write(Escape(value)); out.Write("\\\""); return this; }`,
     `    public JsonWriter Value(long value) { out.Write(System.Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)); return this; }`,
+    `    public JsonWriter Value(bool value) { out.Write(value ? "true" : "false"); return this; }`,
     `    public JsonWriter Value(double value) {`,
     `      if (double.IsNaN(value)) { out.Write("\\\"NaN\\\""); return this; }`,
     `      if (double.IsInfinity(value)) { out.Write(value > 0 ? "\\\"Infinity\\\"" : "\\\"-Infinity\\\""); return this; }`,
@@ -1627,9 +1630,25 @@ git commit -m "feat(translation-verifier): 双语言执行器(编译+运行, 可
 - Produces:
   - `export interface VerificationJob { description: TestDescription; source: SideSpec; target: SideSpec; options?: ComparisonOptions; }`
   - `export interface SideRunInfo { language: VerifierLanguage; compile: CompileOutcome; run: RunOutcome | null; results: SideResults | null; }`
-  - `export interface CaseComparison`(从 comparator 复用)
+  - `export interface CaseComparison`(从 comparator 复用;`CaseComparison` 需在 comparator.ts 增加可选字段 `requirementVerdict?: "target-conforms" | "target-diverges"`)
   - `export interface VerificationReport { schemaVersion: "1.0"; source: SideRunInfo; target: SideRunInfo; comparisons: CaseComparison[]; passRate: number; totalCases: number; passedCases: number; divergentCases: number; failedCases: number; }`
   - `export async function verify(job: VerificationJob, executor: DriverExecutor): Promise<VerificationReport>`
+
+- [ ] **Step 0: 在 comparator.ts 增加 requirementVerdict 字段**(需求裁决:差分验证是差异探测器而非裁判)
+
+在 `CaseComparison` 接口增加:
+
+```ts
+export interface CaseComparison {
+  caseId: string;
+  verdict: CaseVerdict;
+  source: CaseResult | null;
+  target: CaseResult | null;
+  details: string[];
+  /** 需求裁决:两侧不一致时,目标侧是否符合描述声明的 expected(需求黄金值)。 */
+  requirementVerdict?: "target-conforms" | "target-diverges";
+}
+```
 
 - [ ] **Step 1: 写失败测试**(全部用 FakeDriverExecutor)
 
@@ -1641,6 +1660,9 @@ git commit -m "feat(translation-verifier): 双语言执行器(编译+运行, 可
 6. 描述声明 expected 但两侧一致且都不符合 expected → 黄金校验将其标记 fail("declared expectation mismatch")。
 7. 报告字段齐全:schemaVersion、totalCases、passed/failed/divergentCases 数值正确。
 8. 顺序:caseId 顺序与描述 cases 顺序一致(比较按 caseId 对齐)。
+9. **需求裁决(差异探测器)**:两侧不一致(源侧 return "x"、目标侧 return "y"),描述 expected={"y"} → verdict 保持 fail,且 `requirementVerdict === "target-conforms"`,details 含 "target matches declared requirement"。
+10. **需求裁决(目标侧也偏离)**:两侧不一致,expected={"z"}(与两侧都不同)→ `requirementVerdict === "target-diverges"`,details 含目标侧与需求偏差。
+11. **纯差分模式**:描述 case 无 expected(用 `{ kind: "return" }` 缺 value?不 —— 描述 schema 要求 expected 必填;此场景指 expected 与两侧比较无关 —— 实际上 expected 必填,所以第 9/10 即覆盖;本条改为:expected 与目标侧一致时,verdict 从 fail 变 pass?不 —— 需求裁决不改变 verdict。删除本条,改为:expected 声明但两侧一致且符合 → pass 且无 requirementVerdict(可选字段不出现)。
 
 - [ ] **Step 2: 运行确认失败**
 
@@ -1695,14 +1717,26 @@ export async function verify(job: VerificationJob, executor: DriverExecutor): Pr
   let comparisons: CaseComparison[];
   if (sourceResults && targetResults) {
     comparisons = compareCases(sourceResults, targetResults, job.options);
-    // 黄金校验:两侧一致但都偏离声明期望时,标记 fail。
+    // 黄金校验 + 需求裁决(需求第一:差分验证是差异探测器而非裁判)。
     const expectedByCase = new Map(job.description.cases.map((c) => [c.id, c.expected]));
     for (const comparison of comparisons) {
-      if (comparison.verdict !== "pass") continue;
       const expected = expectedByCase.get(comparison.caseId);
       if (!expected || !comparison.target) continue;
       const issues = validateAgainstExpected(comparison.target, expected);
-      if (issues.length > 0) {
+      if (comparison.verdict !== "pass") {
+        // 两侧不一致:需求裁决 —— 目标侧是否符合需求(expected)。
+        if (issues.length === 0) {
+          comparison.requirementVerdict = "target-conforms";
+          comparison.details = [
+            "target matches declared requirement; divergence is source-side",
+            ...comparison.details,
+          ];
+        } else {
+          comparison.requirementVerdict = "target-diverges";
+          comparison.details = [...comparison.details, ...issues];
+        }
+      } else if (issues.length > 0) {
+        // 两侧一致但都偏离声明期望 → fail。
         comparison.verdict = "fail";
         comparison.details = issues;
       }
@@ -1755,9 +1789,18 @@ git commit -m "feat(translation-verifier): 双轨道验证编排器与量化报�
 
 **Interfaces:**
 - Produces:
-  - `export interface MigrationInput { sourceLanguage: string; sourceCode: string; existingTests?: string; requirement?: string; target: { language: VerifierLanguage; className: string; method: string; isStatic: boolean; }; }`
+  - `export interface MigrationInput { sourceLanguage: string; sourceCode: string; existingTests?: string; requirement: string; target: { language: VerifierLanguage; className: string; method: string; isStatic: boolean; }; }`(**requirement 必填**)
   - `export interface TestMigratorOptions { apiKey: string; request?: typeof globalThis.fetch; }`
   - `export class TestMigratorAgent { constructor(options); async extractDescription(input: MigrationInput, signal?: AbortSignal): Promise<TestDescription>; }`
+
+**两阶段架构(检索与迁移分离,需求第一):**
+
+1. **检索阶段(agent 驱动,不在本模块)**:由调用方(CLI/E2E)基于用户需求,用代码检索工具
+   (rg/find/read)在代码库中检索相关方法、测试、文档,产出**候选集合**(方法源码 + 相关测试 +
+   相关文档)。agent 判断相关性;脚本不按方法名硬抠(历史代码库中方法可能重载、测试分散多文件、
+   常带 mock/fixture)。
+2. **迁移阶段(本模块 TestMigratorAgent)**:输入 = 需求(第一优先级)+ 候选集合(参考实现),
+   输出 = TestDescription JSON。
 
 - [ ] **Step 1: 写失败测试**(fake fetch)
 
@@ -1768,6 +1811,8 @@ git commit -m "feat(translation-verifier): 双轨道验证编排器与量化报�
 5. 第一次返回非法、第二次返回合法 → 重试成功(重试 ≤2)。
 6. 连续失败 3 次 → 抛错。
 7. 无 apiKey → 抛错。
+8. **requirement 必填 + 需求第一**:`buildMigrationPrompt` 的 user 消息以 `REQUIREMENT` 段开头(段序最前),断言输出第一个 section 是 `REQUIREMENT\n...`;源码段标记为参考(assert 含 `REFERENCE_IMPLEMENTATION`)。
+9. **需求第一规则**:MIGRATOR_SYSTEM_PROMPT 含 "highest priority" 与 "do not inherit" 类表述,且**不包含**旧规则 "do not invent behavior not present in the source"。
 
 - [ ] **Step 2: 运行确认失败**
 
@@ -1781,7 +1826,8 @@ export interface MigrationInput {
   sourceLanguage: string;
   sourceCode: string;
   existingTests?: string;
-  requirement?: string;
+  /** 用户需求,最高优先级(必填)。 */
+  requirement: string;
   target: {
     language: "Java" | "C#";
     className: string;
@@ -1797,10 +1843,11 @@ export interface TestMigratorOptions {
 
 const MAX_MIGRATION_RETRIES = 2;
 
-const MIGRATOR_SYSTEM_PROMPT = `You are a test migration specialist. Given a source-language method and
-optionally its existing tests, produce a language-agnostic test description that captures input/output
-behavior and exceptions. The description must exercise nominal, boundary, and error paths. Output one
-JSON object matching this exact schema (no markdown):
+const MIGRATOR_SYSTEM_PROMPT = `You are a test migration specialist. Given a user requirement and a
+candidate implementation (source method plus optional existing tests) retrieved from a codebase, produce
+a language-agnostic test description that captures the required behavior: inputs, outputs, exceptions.
+The description must exercise nominal, boundary, and error paths. Output one JSON object matching this
+exact schema (no markdown):
 {
   "schemaVersion": "1.0",
   "target": {
@@ -1819,9 +1866,15 @@ JSON object matching this exact schema (no markdown):
     }
   ]
 }
-Rules: keep expected values language-agnostic; for exceptions use "kind": "exception" with "type" and
-optional "messageContains"; include at least 3 cases; values must be JSON-safe; do not invent behavior
-not present in the source.`;
+Priority rules:
+1. The user REQUIREMENT is the highest priority. The source method and its tests are only a REFERENCE
+   IMPLEMENTATION that helps you understand the logic; they are not the ground truth.
+2. When the reference implementation conflicts with the requirement, follow the requirement, and note the
+   conflict in the case description (e.g. "reference impl diverges from requirement here").
+3. Do not inherit defects of the reference implementation (ignored whitespace, off-by-one errors,
+   historical quirks).
+4. Keep expected values language-agnostic; for exceptions use "kind": "exception" with "type" and
+   optional "messageContains"; include at least 3 cases; values must be JSON-safe.`;
 
 export class TestMigratorAgent {
   readonly #options: TestMigratorOptions;
@@ -1859,7 +1912,12 @@ function stripFences(raw: string): string {
 }
 
 export function buildMigrationPrompt(input: MigrationInput): string {
-  return `Source language: ${input.sourceLanguage}
+  // 需求第一:REQUIREMENT 段在最前;源码/测试为参考实现。
+  return `REQUIREMENT
+${input.requirement}
+
+REFERENCE_IMPLEMENTATION
+Source language: ${input.sourceLanguage}
 Target contract:
 - language: ${input.target.language}
 - className: ${input.target.className}
@@ -1870,7 +1928,11 @@ SOURCE_METHOD
 \`\`\`
 ${input.sourceCode}
 \`\`\`
-${input.existingTests ? `EXISTING_TESTS\n\`\`\`\n${input.existingTests}\n\`\`\`\n` : ""}${input.requirement ? `REQUIREMENT\n${input.requirement}\n` : ""}`;
+${input.existingTests ? `EXISTING_TESTS
+\`\`\`
+${input.existingTests}
+\`\`\`
+` : ""}`;
 }
 ```
 
@@ -1880,7 +1942,7 @@ ${input.existingTests ? `EXISTING_TESTS\n\`\`\`\n${input.existingTests}\n\`\`\`\
 
 ```bash
 git add services/translation-verifier/src/test-migrator.ts services/translation-verifier/src/test-migrator.test.ts
-git commit -m "feat(translation-verifier): 测试迁移 Agent(DeepSeek 生成语言无关描述)"
+git commit -m "feat(translation-verifier): 测试迁移 Agent(需求第一, 源码仅参考)"
 ```
 
 ---
@@ -2125,13 +2187,25 @@ git commit -m "feat(translation-verifier): CLI 编排入口"
 
 **说明(不是占位符,是脚本行为的完整规范):**
 
-`run-e2e.ts` 流程:
-1. 读取 `fixtures/code-corpus/commons-fileupload-csharp/src/Commons/FileUpload/Util/Utilities.cs`,提取 `MimeUtility.DecodeText` 方法体与 `Base64Decoder.Decode` 方法体(按方法名定位)。
-2. 若 `DEEPSEEK_API_KEY` 存在:调用 `translateToJava`(源 C# → Java 目标签名 `public static String decodeText(String value)` 与 `public static byte[] decode(String value)`),得到 Java 方法代码。
-3. 组装 Java 目标文件(public class + 方法),生成 Java driver,与源 C# 方法一起:源侧 = C# driver + Utilities.cs;目标侧 = Java driver + 目标文件。
-4. `verify` → 打印报告;断言:没有 DEEPSEEK_API_KEY 时输出跳过说明;有 key 时打印 passRate 与逐 case 结果。
-5. 注入 bug 演示:把翻译结果中 `DecodeText` 的实现替换为固定返回 `"buggy"` → 重新 verify → 断言检出 FAIL(输出演示信息)。
-6. 修复闭环演示(有 key 且注入 bug 后):RepairLoop + 真实 RepairAgent → 最多 3 轮 → 打印最终报告。
+`run-e2e.ts` 流程(检索与迁移分离,需求第一):
+
+0. **检索阶段(agent 驱动)**:定义一条**用户需求**(如"解码 MIME 编码文本(如 =?UTF-8?B?...?=),非编码文本原样返回")。
+   基于需求,用代码检索工具(rg)在语料库中检索相关方法/测试/文档 —— 由 agent 判断相关性,
+   脚本**不按方法名硬抠**。脚本暴露检索入口(接收候选文件路径清单),把候选集合
+   (方法源码 + 相关测试)喂给 TestMigratorAgent。
+1. **迁移阶段**:调用 `TestMigratorAgent.extractDescription({ requirement, sourceLanguage: "C#",
+   sourceCode: <候选方法源码>, existingTests: <候选测试>, target: {...} })` 生成语言无关描述;
+   无 DEEPSEEK_API_KEY 时改用 fixture(`e2e/fixtures/mime-util-description.json` 等)保证可离线跑通。
+2. 若 `DEEPSEEK_API_KEY` 存在:调用 `translateToJava`(源 C# → Java 目标签名
+   `public static String decodeText(String value)`),得到 Java 方法代码。
+3. 组装 Java 目标文件(public class + 方法),生成 Java driver;源侧 = C# driver + 候选源文件;
+   目标侧 = Java driver + 目标文件。
+4. `verify` → 打印报告;无 key 时输出跳过说明;有 key 时打印 passRate、逐 case 结果与
+   requirementVerdict。
+5. 注入 bug 演示:把翻译结果中 `decodeText` 的实现替换为固定返回 `"buggy"` → 重新 verify →
+   断言检出 FAIL(输出演示信息)。
+6. 修复闭环演示(有 key 且注入 bug 后):RepairLoop + 真实 RepairAgent(需求第一:诊断携带需求原文与
+   requirementVerdict)→ 最多 3 轮 → 打印最终报告。
 
 若此过程中发现 adaptation-service 真实链路缺陷(如 `translateToJava` 输出无法编译、`compileJavaStandalone` 的 wrapper 与真实类冲突、deepseek-client 请求格式问题等):
 - 按 TDD 修复:先在 `services/adaptation-service/src/*.test.ts` 写失败测试,再修复源码,确认全绿后单独 commit。

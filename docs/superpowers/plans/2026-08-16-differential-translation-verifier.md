@@ -154,6 +154,8 @@ export interface TestCase {
 
 export interface TestDescription {
   schemaVersion: "1.0";
+  /** 用户需求原文(可选;需求第一原则下由调用方随描述传递)。 */
+  requirement?: string;
   target: {
     language: VerifierLanguage;
     className: string;
@@ -1988,6 +1990,8 @@ export interface RepairDiagnosis {
   source: CaseResult | null;
   target: CaseResult | null;
   details: string[];
+  /** 需求裁决(差异探测器语义):目标侧是否符合需求。 */
+  requirementVerdict?: "target-conforms" | "target-diverges";
 }
 
 export interface RepairAgentOptions {
@@ -2000,6 +2004,8 @@ export interface RepairInput {
   sourceCode: string;
   target: { language: "Java"; className: string; method: string; signature: string };
   previousMethodCode: string;
+  /** 用户需求原文(需求第一:修复以需求为准)。 */
+  requirement: string;
   diagnosis: RepairDiagnosis[];
 }
 
@@ -2035,9 +2041,12 @@ export class RepairAgent implements RepairAgentLike {
 
 export function buildRepairPrompt(input: RepairInput): string {
   const diagnosisText = input.diagnosis
-    .map((d) => JSON.stringify({ caseId: d.caseId, inputs: d.inputs, source: d.source, target: d.target, details: d.details }))
+    .map((d) => JSON.stringify({ caseId: d.caseId, inputs: d.inputs, source: d.source, target: d.target, details: d.details, requirementVerdict: d.requirementVerdict }))
     .join("\n");
-  return `Source language: ${input.sourceLanguage}
+  return `USER_REQUIREMENT (highest priority)
+${input.requirement}
+
+Source language: ${input.sourceLanguage}
 Target signature: ${input.target.signature}
 
 SOURCE_METHOD
@@ -2100,6 +2109,7 @@ export class RepairLoop {
           signature: `${currentJob.description.target.className}.${currentJob.description.target.method}`,
         },
         previousMethodCode: firstSourceContent(currentJob.target),
+        requirement: currentJob.description.requirement ?? "",
         diagnosis,
       });
       currentJob = { ...currentJob, target: this.#rebuildTargetSide(methodCode) };

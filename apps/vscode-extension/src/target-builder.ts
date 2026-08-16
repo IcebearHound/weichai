@@ -13,14 +13,12 @@ const languageByLanguageId: Record<string, Language> = {
   go: 'Go',
 };
 
-const supportedLanguageIds = new Set(['java']);
-
 export function languageFromLanguageId(languageId: string): Language | null {
   return languageByLanguageId[languageId.toLowerCase()] ?? null;
 }
 
 export function isSupportedLanguageId(languageId: string): boolean {
-  return supportedLanguageIds.has(languageId.toLowerCase());
+  return languageFromLanguageId(languageId) !== null;
 }
 
 /**
@@ -73,9 +71,7 @@ const MAX_SIGNATURE_LENGTH = 240;
  */
 export function buildModuleTarget(input: EditorSelectionInput): ModuleTarget | null {
   const language = languageFromLanguageId(input.languageId);
-  // The selected editor code is the Java target. Candidates may come from any
-  // supported corpus language and are translated into this Java contract.
-  if (language !== 'Java') return null;
+  if (!language) return null;
   const relativePath = path.relative(input.workspaceRoot, input.filePath);
   if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
     return null;

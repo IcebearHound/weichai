@@ -108,7 +108,7 @@ function declaration(
       {
         kind: 'class',
         pattern:
-          /^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/,
+          /^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?(?:class|interface)\s+([A-Za-z_$][\w$]*)/,
       },
       {
         kind: 'function',
@@ -168,7 +168,7 @@ function declaration(
       {
         kind: 'class',
         pattern:
-          /^\s*(?:(?:public|internal|protected|private|static|abstract|sealed|partial|readonly|ref)\s+)*(?:class|interface|record(?:\s+(?:class|struct))?|struct|enum)\s+([A-Za-z_][\w]*)/,
+          /^\s*(?:(?:public|internal|protected|private|static|abstract|sealed|partial|readonly|ref)\s+)*(?:class|interface|record(?:\s+(?:class|struct))?|struct|enum|delegate)\s+(?:[\w.[\]<>?,]+\s+)?([A-Za-z_][\w]*)/,
       },
       ...(atTypeMemberLevel
         ? [{

@@ -26,6 +26,8 @@ package org.apache.commons.fileupload;
  *
  * @since 1.3
  */
+
+/** 该上传类型扩展请求上下文以提供长整型内容长度。 */
 public interface UploadContext extends RequestContext {
 
     /**

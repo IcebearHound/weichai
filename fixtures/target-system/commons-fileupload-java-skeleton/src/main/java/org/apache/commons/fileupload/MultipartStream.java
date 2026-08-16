@@ -81,6 +81,8 @@ import org.apache.commons.fileupload.util.Streams;
  *   }
  * </pre>
  */
+
+/** 该上传类型按 multipart 边界从请求字节流中依次分离头与正文。 */
 public class MultipartStream {
 
     /**
@@ -795,6 +797,8 @@ public class MultipartStream {
     /**
      * An {@link InputStream} for reading an items contents.
      */
+
+    /** 该上传类型为单个 multipart 条目提供可关闭的只读输入流。 */
     public class ItemInputStream extends InputStream implements Closeable {
 
         /**

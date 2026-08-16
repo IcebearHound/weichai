@@ -22,6 +22,8 @@ import java.io.IOException;
  * An iterator, as returned by
  * {@link FileUploadBase#getItemIterator(RequestContext)}.
  */
+
+/** 该上传类型顺序迭代上传条目的流式读取接口。 */
 public interface FileItemIterator {
 
     /**

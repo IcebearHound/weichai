@@ -46,7 +46,7 @@ Covered cases:
 - malformed model output;
 - structured Validator repair and pass idempotency;
 - repair of an earlier contract violation;
-- compatibility of the existing Java-to-C# entry point.
+- the removed historical compatibility entry point.
 
 ## Environment limitations
 

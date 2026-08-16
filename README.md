@@ -24,8 +24,9 @@ prototype; it is not the primary product entry point.
 ## Local configuration
 
 Run all commands below from the repository root. The full workflow requires
-Node.js/npm, Docker with Compose for SeekDB, and a JDK for Java target compile
-validation. The retrieval layer can run without a JDK.
+Node.js/npm, Docker with Compose for SeekDB, and the compiler for the selected
+target language. The adaptation registry supports TypeScript (`tsc`), Python,
+Java, C#, Rust, and Go; the retrieval layer needs none of them.
 
 Install the workspace dependencies and create local environment files:
 
@@ -92,18 +93,10 @@ scores candidates on behavioural-semantic match (not just vector distance or
 full-text relevance). Edit `services/retrieval-service/.env`:
 
 ```env
-RERANK_PROVIDER=openai
-RERANK_OPENAI_URL=https://api.deepseek.com/v1/chat/completions
-RERANK_OPENAI_API_KEY=<server-side-key>
-RERANK_OPENAI_MODEL=deepseek-chat
-```
-
-For a local model (Ollama, vLLM, etc.):
-
-```env
-RERANK_PROVIDER=local
-RERANK_LOCAL_URL=http://127.0.0.1:11434/v1/chat/completions
-RERANK_LOCAL_MODEL=qwen2.5:7b
+RERANK_PROVIDER=deepseek
+DEEPSEEK_API_BASE=https://api.deepseek.com/v1
+DEEPSEEK_API_KEY=<server-side-key>
+DEEPSEEK_MODEL=deepseek-v4-flash
 ```
 
 Leave `RERANK_PROVIDER=none` (the default) to skip LLM reranking entirely.
@@ -111,7 +104,7 @@ Individual requests can also set `"rerank": false` on the `SearchRequest`
 payload to opt out per-request while keeping the global config.
 
 See `services/retrieval-service/README.md` for the full reranking pipeline
-description, scoring dimensions, and silent-degradation behaviour.
+description, scoring dimensions, and candidate-contract repair behaviour.
 
 ### Configure adaptation
 
@@ -123,8 +116,9 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 # DEEPSEEK_API_BASE=https://api.deepseek.com/v1
 ```
 
-The extension's candidate-language-to-Java adaptation validates generated code with `javac`.
-Set `JAVA_HOME` or place `javac` on `PATH` in the adaptation-service environment.
+The adaptation service selects validation from the target language: `tsc`,
+`python -m py_compile`, `javac`, `dotnet build`, `rustc`/`cargo check`, or
+`go test`. Make the selected compiler available on `PATH`.
 
 ### Configure the MCP translation server
 
@@ -145,6 +139,9 @@ Flash:
 export DEEPSEEK_API_KEY=<server-side-key>
 npm run claude:deepseek
 ```
+
+For a candidate reranking session that validates the complete candidate-ID
+contract through MCP, run `npm run claude:reranker`.
 
 The launcher routes Claude Code's Anthropic-compatible model calls directly to
 DeepSeek. The project MCP server keeps the Analyzer and Translator as separate,
@@ -207,9 +204,10 @@ npm run build:adaptation
 npm test
 ```
 
-The primary entry point is the VS Code extension, which derives its target from
-the active Java workspace. The default fixture is
-`fixtures/target-system/commons-fileupload-java-skeleton`.
+The primary entry point is the VS Code extension. Its current workspace UI
+selects Java modules and defaults to
+`fixtures/target-system/commons-fileupload-java-skeleton`; the adaptation
+service and Claude Code workflow themselves are language-neutral.
 
 ## Development guide
 

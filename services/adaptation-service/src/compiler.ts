@@ -1,5 +1,5 @@
 /**
- * C# and Java compiler validation helpers.
+ * Language-registry compiler validation helpers.
  */
 
 import { execFileSync, execSync } from "node:child_process";
@@ -15,11 +15,58 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
+import type { Language } from "@forexplore/contracts";
 
 export interface CompileResult {
   success: boolean;
   errors: string[];
   output: string;
+}
+
+/**
+ * Language-neutral validation entry points used by the adaptation workflow.
+ * Individual compilers remain implementation details behind this registry.
+ */
+export function compileTargetStandalone(
+  language: Language,
+  code: string,
+  targetName: string,
+): CompileResult {
+  switch (language) {
+    case "Java": return compileJavaStandalone(code, targetName);
+    case "C#": return compileStandalone(code, targetName);
+    case "TypeScript": return compileTypeScriptStandalone(code, targetName);
+    case "Python": return compilePythonStandalone(code, targetName);
+    case "Rust": return compileRustStandalone(code, targetName);
+    case "Go": return compileGoStandalone(code, targetName);
+  }
+}
+
+export function compileTargetIntegrated(
+  language: Language,
+  code: string,
+  projectPath: string,
+  targetFilePath: string,
+): CompileResult {
+  switch (language) {
+    case "Java": return compileJavaIntegrated(code, projectPath, targetFilePath);
+    case "C#": return compileIntegrated(code, projectPath, targetFilePath);
+    case "TypeScript": return compileTypeScriptIntegrated(code, projectPath, targetFilePath);
+    case "Python": return compilePythonIntegrated(code, projectPath, targetFilePath);
+    case "Rust": return compileRustIntegrated(code, projectPath, targetFilePath);
+    case "Go": return compileGoIntegrated(code, projectPath, targetFilePath);
+  }
+}
+
+export function compilerCommand(language: Language): string {
+  switch (language) {
+    case "Java": return "javac";
+    case "C#": return "dotnet build --nologo -v q";
+    case "TypeScript": return "tsc --noEmit";
+    case "Python": return "python -m py_compile";
+    case "Rust": return "rustc";
+    case "Go": return "go test";
+  }
 }
 
 export interface ResolvedProjectTarget {
@@ -67,7 +114,7 @@ export function compileStandalone(
 }
 
 /**
- * 集成编译 — 在临时副本中替换目标方法并编译完整 C# skeleton。
+ * 集成编译 — 在临时副本中替换目标方法或类并编译完整 C# skeleton。
  */
 export function compileIntegrated(
   csharpCode: string,
@@ -112,7 +159,7 @@ export function compileIntegrated(
     });
     const temporaryTarget = join(temporaryProject, relativeTarget);
     const original = readFileSync(temporaryTarget, "utf8");
-    writeFileSync(temporaryTarget, replaceTargetMethod(original, csharpCode), "utf8");
+    writeFileSync(temporaryTarget, replaceTargetCode(original, csharpCode), "utf8");
     return compileWithDotnet(dotnet, temporaryProject, false);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -144,7 +191,7 @@ function findDotnet(): string | null {
 
 export function isCompilerUnavailable(result: CompileResult): boolean {
   return result.errors.some((error) =>
-    /(?:\.NET SDK|C# compiler|JDK|javac).*(?:not installed|not available)/i.test(error),
+    /(?:\.NET SDK|C# compiler|JDK|javac|TypeScript compiler|Python|Rust compiler|Go compiler).*(?:not installed|not available)/i.test(error),
   );
 }
 
@@ -293,10 +340,58 @@ function isOutsideProject(projectRoot: string, sourcePath: string): boolean {
   );
 }
 
+function replaceTargetCode(source: string, generatedCode: string): string {
+  const code = stripGeneratedFence(generatedCode);
+  return looksLikeTypeDeclaration(code)
+    ? replaceTargetClass(source, code)
+    : replaceTargetMethod(source, code);
+}
+
+function replacePythonTargetCode(source: string, generatedCode: string): string {
+  const code = stripGeneratedFence(generatedCode);
+  return /^\s*class\s+[A-Za-z_]\w*\b/m.test(code)
+    ? replacePythonTargetClass(source, code)
+    : replacePythonTargetMethod(source, code);
+}
+
+function stripGeneratedFence(generatedCode: string): string {
+  return generatedCode
+    .trim()
+    .replace(/^```(?:[A-Za-z0-9_+-]+)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim();
+}
+
+function looksLikeTypeDeclaration(code: string): boolean {
+  return /^\s*(?:(?:public|private|protected|internal|abstract|sealed|final|static|export|partial|pub)\s+)*(?:(?:class|record|struct|interface)\b|type\s+[A-Za-z_]\w*\s+struct\b)/m.test(code);
+}
+
+function replaceTargetClass(source: string, generatedCode: string): string {
+  const code = stripGeneratedFence(generatedCode);
+  const declaration = /\b(?:class|record|struct|interface)\s+([A-Za-z_]\w*)\b/.exec(code)
+    ?? /\btype\s+([A-Za-z_]\w*)\s+struct\b/.exec(code);
+  const className = declaration?.[1];
+  if (!className) throw new Error("Generated code must contain a named target class.");
+
+  const sourceDeclaration = new RegExp(
+    `^[\\t ]*(?:(?:public|private|protected|internal|abstract|sealed|final|static|export|partial|pub)\\s+)*(?:class|record|struct|interface|type)\\s+${escapeRegExp(className)}\\b[^\\n]*`,
+    "gm",
+  ).exec(source);
+  if (!sourceDeclaration?.index && sourceDeclaration?.index !== 0) {
+    throw new Error(`Target class ${className} was not found in the skeleton source.`);
+  }
+  const sourceOpeningBrace = source.indexOf("{", sourceDeclaration.index);
+  if (sourceOpeningBrace < 0) throw new Error(`Target class ${className} does not have a block body.`);
+  const sourceClosingBrace = matchingBrace(source, sourceOpeningBrace);
+  const declarationStart = source.lastIndexOf("\n", sourceDeclaration.index) + 1;
+  const indentation = source.slice(declarationStart).match(/^\s*/)?.[0] ?? "";
+  return `${source.slice(0, declarationStart)}${indentCode(code, indentation)}${source.slice(sourceClosingBrace + 1)}`;
+}
+
 function replaceTargetMethod(source: string, generatedCode: string): string {
   const code = generatedCode
     .trim()
-    .replace(/^```(?:csharp|cs|java)?\s*/i, "")
+    .replace(/^```(?:[A-Za-z0-9_+-]+)?\s*/i, "")
     .replace(/\s*```$/, "")
     .trim();
   const openingBrace = code.indexOf("{");
@@ -307,7 +402,7 @@ function replaceTargetMethod(source: string, generatedCode: string): string {
   if (!methodName) throw new Error("Unable to determine the generated method name.");
 
   const declarationPattern = new RegExp(
-    `^[\\t ]*(?:(?:public|private|protected|internal|static|abstract|virtual|override|sealed|async|extern|unsafe|new|partial)\\s+)+[^\\n;=]*\\b${escapeRegExp(methodName)}\\s*\\(`,
+    `^[\\t ]*(?!(?:if|for|foreach|while|switch|catch|return|new)\\b)[^\\n;=]*\\b${escapeRegExp(methodName)}\\s*\\(`,
     "gm",
   );
   const expectedParameters = parameterList(code, 0);
@@ -455,8 +550,12 @@ export function compileJavaStandalone(
   }
 
   const dir = mkdtempSync(join(tmpdir(), ".forexplore-java-standalone-"));
-  const fullSource = buildJavaWrapperSource(javaCode, className);
-  const javaFile = join(dir, `${className}.java`);
+  const directClass = looksLikeTypeDeclaration(javaCode);
+  const fullSource = directClass ? stripGeneratedFence(javaCode) : buildJavaWrapperSource(javaCode, className);
+  const declaredName = directClass
+    ? /\b(?:class|record|interface|enum)\s+([A-Za-z_]\w*)\b/.exec(fullSource)?.[1]
+    : className;
+  const javaFile = join(dir, `${declaredName ?? className}.java`);
   writeFileSync(javaFile, fullSource, "utf-8");
 
   try {
@@ -477,7 +576,7 @@ export function compileJavaStandalone(
 }
 
 /**
- * 集成编译 — 在临时副本中替换目标方法并编译完整 Java skeleton 项目。
+ * 集成编译 — 在临时副本中替换目标方法或类并编译完整 Java skeleton 项目。
  * Maven projects are compiled through their declared dependency graph; bare
  * source trees fall back to javac.
  */
@@ -532,7 +631,7 @@ export function compileJavaIntegrated(
     });
     const temporaryTarget = join(temporaryProject, relativeTarget);
     const original = readFileSync(temporaryTarget, "utf8");
-    writeFileSync(temporaryTarget, replaceTargetMethod(original, javaCode), "utf8");
+    writeFileSync(temporaryTarget, replaceTargetCode(original, javaCode), "utf8");
 
     const maven = existsSync(join(temporaryProject, "pom.xml")) ? findMaven() : null;
     if (maven) {
@@ -619,10 +718,267 @@ function parseJavaErrors(output: string): string[] {
   return errors;
 }
 
+// ---- TypeScript, Python, Rust, and Go compilers ----
+
+function compileTypeScriptStandalone(code: string, className: string): CompileResult {
+  const tsc = findTypeScriptCompiler();
+  if (!tsc) return missingCompiler("TypeScript compiler", "Install TypeScript or make tsc available on PATH.");
+  const source = /^\s*(?:export\s+)?(?:async\s+)?function\b/.test(code)
+    ? `${code.trim()}\n`
+    : `export class ${safeWrapperClassName(code, className)} {\n${code}\n}\n`;
+  return compileTemporary(
+    ".forexplore-typescript-standalone-",
+    `${className}.ts`,
+    source,
+    tsc,
+    ["--noEmit", "--pretty", "false", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext"],
+  );
+}
+
+function compilePythonStandalone(code: string, className: string): CompileResult {
+  const python = findPython();
+  if (!python) return missingCompiler("Python", "Install Python 3 or set PYTHON_COMMAND.");
+  return compileTemporary(
+    ".forexplore-python-standalone-",
+    `${className}.py`,
+    `${code.trim()}\n`,
+    python,
+    ["-m", "py_compile"],
+  );
+}
+
+function compileRustStandalone(code: string, className: string): CompileResult {
+  const rustc = findExecutable([process.env.RUSTC_COMMAND?.trim(), "rustc"]);
+  if (!rustc) return missingCompiler("Rust compiler", "Install Rust or set RUSTC_COMMAND.");
+  const source = /^\s*(?:pub\s+)?struct\b/.test(code) ||
+    (/^\s*(?:pub\s+)?(?:async\s+)?fn\b/.test(code) && !/\(\s*&?(?:mut\s+)?self\b/.test(code))
+    ? `${code.trim()}\n`
+    : `pub struct ${safeWrapperClassName(code, className)};\n\nimpl ${safeWrapperClassName(code, className)} {\n${code}\n}\n`;
+  return compileTemporary(
+    ".forexplore-rust-standalone-",
+    `${className}.rs`,
+    source,
+    rustc,
+    ["--crate-type", "lib"],
+  );
+}
+
+function compileGoStandalone(code: string, className: string): CompileResult {
+  const go = findExecutable([process.env.GO_COMMAND?.trim(), "go"]);
+  if (!go) return missingCompiler("Go compiler", "Install Go or set GO_COMMAND.");
+  const receiverType = /func\s*\([^)]*\b\*?([A-Za-z_]\w*)\s*\)/.exec(code)?.[1];
+  const receiverDeclaration = receiverType ? `type ${receiverType} struct{}\n` : "";
+  return compileTemporary(
+    ".forexplore-go-standalone-",
+    `${className}.go`,
+    `package forexplore\n\n${receiverDeclaration}${code.trim()}\n`,
+    go,
+    ["test"],
+    "go.mod",
+    "module forexplore\n\ngo 1.20\n",
+  );
+}
+
+function compileTypeScriptIntegrated(code: string, projectPath: string, targetFilePath: string): CompileResult {
+  const tsc = findTypeScriptCompiler();
+  if (!tsc) return missingCompiler("TypeScript compiler", "Install TypeScript or make tsc available on PATH.");
+  return compileIntegratedProject(code, projectPath, targetFilePath, "typescript", (dir, target) =>
+    runCompiler(tsc, existsSync(join(dir, "tsconfig.json"))
+      ? ["--noEmit", "--pretty", "false", "-p", join(dir, "tsconfig.json")]
+      : ["--noEmit", "--pretty", "false", target]),
+  );
+}
+
+function compilePythonIntegrated(code: string, projectPath: string, targetFilePath: string): CompileResult {
+  const python = findPython();
+  if (!python) return missingCompiler("Python", "Install Python 3 or set PYTHON_COMMAND.");
+  return compileIntegratedProject(code, projectPath, targetFilePath, "python", (_dir, target) =>
+    runCompiler(python, ["-m", "py_compile", target]),
+  );
+}
+
+function compileRustIntegrated(code: string, projectPath: string, targetFilePath: string): CompileResult {
+  const rustc = findExecutable([process.env.RUSTC_COMMAND?.trim(), "rustc"]);
+  if (!rustc) return missingCompiler("Rust compiler", "Install Rust or set RUSTC_COMMAND.");
+  const cargo = findExecutable([process.env.CARGO_COMMAND?.trim(), "cargo"]);
+  return compileIntegratedProject(code, projectPath, targetFilePath, "rust", (dir, target) => {
+    if (cargo && existsSync(join(dir, "Cargo.toml"))) return runCompiler(cargo, ["check", "--quiet"], dir);
+    return runCompiler(rustc, ["--crate-type", "lib", target]);
+  });
+}
+
+function compileGoIntegrated(code: string, projectPath: string, targetFilePath: string): CompileResult {
+  const go = findExecutable([process.env.GO_COMMAND?.trim(), "go"]);
+  if (!go) return missingCompiler("Go compiler", "Install Go or set GO_COMMAND.");
+  return compileIntegratedProject(code, projectPath, targetFilePath, "go", (dir, target) => {
+    if (existsSync(join(dir, "go.mod"))) return runCompiler(go, ["test", "./..."], dir);
+    return runCompiler(go, ["test", target]);
+  });
+}
+
+function compileIntegratedProject(
+  code: string,
+  projectPath: string,
+  targetFilePath: string,
+  language: "typescript" | "python" | "rust" | "go",
+  compile: (temporaryProject: string, temporaryTarget: string) => CompileResult,
+): CompileResult {
+  const projectRoot = resolve(projectPath);
+  const resolvedTarget = resolveProjectTargetFile(projectRoot, targetFilePath);
+  if (!resolvedTarget) {
+    return { success: false, errors: [`Target file does not exist in the project: ${targetFilePath}`], output: "" };
+  }
+  const temporaryProject = mkdtempSync(join(dirname(projectRoot), `.forexplore-${language}-integrated-`));
+  try {
+    cpSync(projectRoot, temporaryProject, {
+      recursive: true,
+      filter: (source) => !["bin", "obj", "build", "dist", "target", "out", "node_modules", "__pycache__"].includes(source.split(/[\\/]/).at(-1) ?? ""),
+    });
+    const temporaryTarget = join(temporaryProject, resolvedTarget.relativePath);
+    const original = readFileSync(temporaryTarget, "utf8");
+    writeFileSync(
+      temporaryTarget,
+      language === "python" ? replacePythonTargetCode(original, code) : replaceTargetCode(original, code),
+      "utf8",
+    );
+    return compile(temporaryProject, temporaryTarget);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, errors: [message], output: message };
+  } finally {
+    rmSync(temporaryProject, { recursive: true, force: true });
+  }
+}
+
+function compileTemporary(
+  prefix: string,
+  fileName: string,
+  source: string,
+  command: string,
+  args: string[],
+  extraFileName?: string,
+  extraFileContent?: string,
+): CompileResult {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const target = join(dir, fileName);
+  writeFileSync(target, source, "utf8");
+  if (extraFileName && extraFileContent) writeFileSync(join(dir, extraFileName), extraFileContent, "utf8");
+  try {
+    return runCompiler(command, [...args, target], dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function runCompiler(command: string, args: string[], cwd?: string): CompileResult {
+  try {
+    const output = execFileSync(command, args, {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 90_000,
+      stdio: "pipe",
+    });
+    return { success: true, errors: [], output };
+  } catch (error: unknown) {
+    const output = collectErrorOutput(error);
+    return { success: false, errors: parseGenericErrors(output), output };
+  }
+}
+
+function findExecutable(candidates: Array<string | undefined>): string | null {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      execFileSync(candidate, ["--version"], { stdio: "ignore" });
+      return candidate;
+    } catch {
+      // Continue to the next configured executable.
+    }
+  }
+  return null;
+}
+
+function findTypeScriptCompiler(): string | null {
+  return findExecutable([
+    process.env.TSC_COMMAND?.trim(),
+    join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? "tsc.cmd" : "tsc"),
+    "tsc",
+  ]);
+}
+
+function findPython(): string | null {
+  return findExecutable([process.env.PYTHON_COMMAND?.trim(), "python3", "python"]);
+}
+
+function missingCompiler(name: string, instruction: string): CompileResult {
+  return { success: false, errors: [`${name} not installed or not available. ${instruction}`], output: "" };
+}
+
+function parseGenericErrors(output: string): string[] {
+  const lines = output.split("\n").map((line) => line.trim()).filter(Boolean);
+  return lines.slice(-8).length > 0 ? lines.slice(-8) : ["Compiler failed without diagnostics."];
+}
+
+function replacePythonTargetClass(source: string, generatedCode: string): string {
+  const code = stripGeneratedFence(generatedCode);
+  const declaration = /^class\s+([A-Za-z_]\w*)\b/m.exec(code);
+  const name = declaration?.[1];
+  if (!name) throw new Error("Generated Python code must contain one class declaration.");
+  const match = new RegExp(`^[\\t ]*class\\s+${escapeRegExp(name)}\\b`, "m").exec(source);
+  if (!match || match.index === undefined) throw new Error(`Target Python class ${name} was not found in the project source.`);
+  const start = match.index;
+  const startLineEnd = source.indexOf("\n", start);
+  const baseIndent = source.slice(start, startLineEnd < 0 ? source.length : startLineEnd).match(/^\s*/)?.[0].length ?? 0;
+  let end = source.length;
+  for (let index = startLineEnd < 0 ? source.length : startLineEnd + 1; index < source.length;) {
+    const next = source.indexOf("\n", index);
+    const lineEnd = next < 0 ? source.length : next;
+    const line = source.slice(index, lineEnd);
+    if (line.trim() && !line.trimStart().startsWith("#") && (line.match(/^\s*/)?.[0].length ?? 0) <= baseIndent) {
+      end = index;
+      break;
+    }
+    index = next < 0 ? source.length : next + 1;
+  }
+  const indentation = source.slice(start, startLineEnd < 0 ? source.length : startLineEnd).match(/^\s*/)?.[0] ?? "";
+  return `${source.slice(0, start)}${indentCode(code, indentation)}\n${source.slice(end)}`;
+}
+
+function replacePythonTargetMethod(source: string, generatedCode: string): string {
+  const code = generatedCode.trim().replace(/^```(?:python|py)?\s*/i, "").replace(/\s*```$/, "").trim();
+  const declaration = /^(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/m.exec(code);
+  const name = declaration?.[1];
+  if (!name) throw new Error("Generated Python code must contain one def declaration.");
+  const match = new RegExp(`^[\\t ]*(?:async\\s+)?def\\s+${escapeRegExp(name)}\\s*\\(`, "m").exec(source);
+  if (!match || match.index === undefined) throw new Error(`Target Python method ${name} was not found in the project source.`);
+  const start = match.index;
+  const startLineEnd = source.indexOf("\n", start);
+  const baseIndent = source.slice(start, startLineEnd < 0 ? source.length : startLineEnd).match(/^\s*/)?.[0].length ?? 0;
+  let end = source.length;
+  for (let index = startLineEnd < 0 ? source.length : startLineEnd + 1; index < source.length;) {
+    const next = source.indexOf("\n", index);
+    const lineEnd = next < 0 ? source.length : next;
+    const line = source.slice(index, lineEnd);
+    if (line.trim() && !line.trimStart().startsWith("#") && (line.match(/^\s*/)?.[0].length ?? 0) <= baseIndent) {
+      end = index;
+      break;
+    }
+    index = next < 0 ? source.length : next + 1;
+  }
+  const indentation = source.slice(start, startLineEnd < 0 ? source.length : startLineEnd).match(/^\s*/)?.[0] ?? "";
+  return `${source.slice(0, start)}${indentCode(code, indentation)}\n${source.slice(end)}`;
+}
+
 export const compilerInternals = {
   buildWrapperSource,
   buildJavaWrapperSource,
   replaceTargetMethod,
+  replaceTargetCode,
+  replaceTargetClass,
   resolveProjectTargetFile,
   parseJavaErrors,
+  replacePythonTargetCode,
+  replacePythonTargetClass,
+  replacePythonTargetMethod,
 };

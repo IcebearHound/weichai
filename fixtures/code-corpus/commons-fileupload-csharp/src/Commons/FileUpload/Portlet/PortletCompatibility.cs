@@ -4,6 +4,7 @@ using Apache.Commons.FileUpload.Disk;
 
 namespace Apache.Commons.FileUpload.Portlet;
 
+/// 它把 Portlet 的正文和请求信息桥接到公共解析流程。
 public interface PortletRequest
 {
     string? CharacterEncoding { get; }
@@ -12,6 +13,7 @@ public interface PortletRequest
     Stream OpenBody();
 }
 
+/// PortletRequest 会在这里被转换为统一的上传视图。
 public class PortletRequestContext : UploadContext
 {
     private readonly PortletRequest request;
@@ -23,6 +25,7 @@ public class PortletRequestContext : UploadContext
     public Stream GetInputStream() => request.OpenBody();
 }
 
+/// 这是供 Portlet 宿主调用的 multipart 上传门面。
 public class PortletFileUpload : FileUpload
 {
     public PortletFileUpload() : this(new DiskFileItemFactory()) { }

@@ -1,6 +1,6 @@
 import type { SearchCandidate, SearchRequest } from '@forexplore/contracts';
 import { describe, expect, it, vi } from 'vitest';
-import { buildRerankPrompt, OpenAiCompatibleReranker } from './reranker.js';
+import { buildRerankPrompt, DeepSeekReranker } from './reranker.js';
 
 const request: SearchRequest = {
   target: {
@@ -35,7 +35,7 @@ function candidate(id: string): SearchCandidate {
   };
 }
 
-function successfulResponse(id = 'first'): Response {
+function successfulResponse(id = 'C1'): Response {
   return new Response(
     JSON.stringify({
       choices: [{ message: { content: JSON.stringify([{ id, score: 0.9 }]) } }],
@@ -43,8 +43,8 @@ function successfulResponse(id = 'first'): Response {
   );
 }
 
-function reranker(fetchImpl: typeof globalThis.fetch): OpenAiCompatibleReranker {
-  return new OpenAiCompatibleReranker(
+function reranker(fetchImpl: typeof globalThis.fetch): DeepSeekReranker {
+  return new DeepSeekReranker(
     'test-model',
     'https://rerank.example.test/v1/chat/completions',
     'test-key',
@@ -64,11 +64,22 @@ describe('buildRerankPrompt', () => {
     expect(prompt.user).toContain('QuoteCache, QuoteProvider');
     expect(prompt.user).toContain('stale data');
     expect(prompt.user).toContain('return cache.load(request)');
-    expect(prompt.user).toContain('必须且只能为每个给定 id 输出一项');
+    expect(prompt.user).toContain('必须且只能为每个候选 ID 输出一项');
+  });
+
+  it('includes structured contract feedback in a repair prompt', () => {
+    const prompt = buildRerankPrompt(request, [candidate('cache')], {
+      attempt: 1,
+      message: 'Missing candidate IDs (1): cache',
+    });
+
+    expect(prompt.user).toContain('上一次输出未通过结果约束校验');
+    expect(prompt.user).toContain('Missing candidate IDs (1): cache');
+    expect(prompt.user).toContain('禁止新增、遗漏、重复或改写 ID');
   });
 });
 
-describe('OpenAiCompatibleReranker', () => {
+describe('DeepSeekReranker', () => {
   it.each([429, 503])('retries retryable HTTP %i responses', async (status) => {
     const fetchImpl = vi
       .fn<() => Promise<Response>>()
@@ -99,5 +110,37 @@ describe('OpenAiCompatibleReranker', () => {
     await expect(reranker(fetchImpl as unknown as typeof fetch).rerank(request, [candidate('first')]))
       .rejects.toThrow('bad request');
     expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('disables DeepSeek thinking mode for bounded structured ranking output', async () => {
+    const fetchImpl = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValue(successfulResponse());
+
+    await reranker(fetchImpl as unknown as typeof fetch).rerank(request, [candidate('first')]);
+
+    const [, options] = fetchImpl.mock.calls[0] ?? [];
+    expect(JSON.parse(String(options?.body))).toMatchObject({
+      thinking: { type: 'disabled' },
+      max_tokens: 2048,
+    });
+  });
+
+  it('maps a stable prompt ID back to the full candidate ID before validation', async () => {
+    const fetchImpl = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValue(successfulResponse('C1'));
+
+    await expect(reranker(fetchImpl as unknown as typeof fetch).rerank(request, [candidate('full:repository:path:line')]))
+      .resolves.toEqual([{ id: 'full:repository:path:line', score: 0.9, reason: 'rank 1' }]);
+  });
+
+  it('includes a bounded body preview when a successful response is not JSON', async () => {
+    const fetchImpl = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValue(new Response('<html>gateway response</html>'));
+
+    await expect(reranker(fetchImpl as unknown as typeof fetch).rerank(request, [candidate('first')]))
+      .rejects.toThrow('Body (first 300 chars): <html>gateway response</html>');
   });
 });

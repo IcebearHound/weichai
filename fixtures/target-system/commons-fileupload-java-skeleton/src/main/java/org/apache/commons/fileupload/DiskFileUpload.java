@@ -38,6 +38,7 @@ import javax.servlet.http.HttpServletRequest;
  *             <code>DiskFileItemFactory</code> instead.
  */
 @Deprecated
+/** 该上传类型保留旧式磁盘上传配置入口的兼容解析器。 */
 public class DiskFileUpload
     extends FileUploadBase {
 

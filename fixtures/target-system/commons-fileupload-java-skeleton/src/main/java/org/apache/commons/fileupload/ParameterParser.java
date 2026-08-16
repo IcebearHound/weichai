@@ -34,6 +34,8 @@ import org.apache.commons.fileupload.util.mime.MimeUtility;
  *  <code>param1 = value; param2 = "anything goes; really"; param3</code>
  * </p>
  */
+
+/** 该上传类型解析 Content-Type 和 Content-Disposition 中可带引号的参数。 */
 public class ParameterParser {
 
     /**

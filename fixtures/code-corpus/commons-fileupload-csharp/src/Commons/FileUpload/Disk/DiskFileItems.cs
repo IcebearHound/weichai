@@ -4,6 +4,7 @@ using System.Text;
 
 namespace Apache.Commons.FileUpload.Disk;
 
+/// 该条目先缓存小文件，达到阈值后再转存临时目录。
 public class DiskFileItem : FileItem, FileItemHeadersSupport
 {
     public const string DEFAULT_CHARSET = "ISO-8859-1";
@@ -119,6 +120,7 @@ public class DiskFileItem : FileItem, FileItemHeadersSupport
     public void SetDefaultCharset(string value) => defaultCharset = value;
     public string GetDefaultCharset() => defaultCharset;
 
+    /// .NET 侧该类型在内存阈值被超过时切换到临时文件的写入流。
     private sealed class SpillOutputStream : Stream
     {
         private readonly int threshold;
@@ -203,6 +205,7 @@ public class DiskFileItem : FileItem, FileItemHeadersSupport
     }
 }
 
+/// 工厂复用存储阈值、临时目录和编码设置来生成磁盘条目。
 public class DiskFileItemFactory : FileItemFactory
 {
     public const int DEFAULT_SIZE_THRESHOLD = 10240;

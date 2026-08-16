@@ -22,6 +22,8 @@ import java.io.PrintWriter;
 /**
  * Exception for errors encountered while processing the request.
  */
+
+/** 该上传类型封装解析或处理 multipart 请求时的基础异常。 */
 public class FileUploadException extends Exception {
 
     /**

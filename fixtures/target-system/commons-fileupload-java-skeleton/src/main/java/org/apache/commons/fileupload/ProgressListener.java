@@ -20,6 +20,8 @@ package org.apache.commons.fileupload;
  * The {@link ProgressListener} may be used to display a progress bar
  * or do stuff like that.
  */
+
+/** 该上传类型接收已读取字节数、总长度和已处理条目数的上传进度回调。 */
 public interface ProgressListener {
 
     /**

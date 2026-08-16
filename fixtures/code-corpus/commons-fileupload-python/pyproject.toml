@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "commons-fileupload-python"
+version = "1.5.0"
+requires-python = ">=3.11"
+description = "Python reference implementation of Commons FileUpload core behavior"
+license = { text = "Apache-2.0" }
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

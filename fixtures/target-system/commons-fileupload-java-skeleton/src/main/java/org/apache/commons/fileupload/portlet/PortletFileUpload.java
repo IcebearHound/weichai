@@ -46,6 +46,8 @@ import org.apache.commons.fileupload.FileUploadException;
  *
  * @since FileUpload 1.1
  */
+
+/** 该上传类型面向 Portlet 请求的高层 multipart 上传解析器。 */
 public class PortletFileUpload extends FileUpload {
 
     // ---------------------------------------------------------- Class methods

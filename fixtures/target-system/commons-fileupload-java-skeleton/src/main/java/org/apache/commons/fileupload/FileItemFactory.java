@@ -21,6 +21,8 @@ package org.apache.commons.fileupload;
  * can provide their own custom configuration, over and above that provided
  * by the default file upload implementation.</p>
  */
+
+/** 该上传类型按字段名、内容类型与文件名创建上传条目。 */
 public interface FileItemFactory {
 
     /**

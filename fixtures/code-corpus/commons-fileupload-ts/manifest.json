@@ -1,0 +1,56 @@
+{
+  "repository": "commons-fileupload-ts",
+  "language": "TypeScript",
+  "languageVersion": "5.8/Node 22",
+  "sourceRoot": "src",
+  "retrievalClassAliases": {
+    "FileUploadException": "uploadProcessingError",
+    "InvalidContentTypeException": "missingBoundaryError",
+    "InvalidFileNameException": "unsafeUploadNameError",
+    "SizeException": "uploadSizeError",
+    "SizeLimitExceededException": "requestSizeLimitError",
+    "FileSizeLimitExceededException": "itemSizeLimitError",
+    "FileCountLimitExceededException": "attachmentLimitError",
+    "MalformedStreamException": "invalidMultipartStreamError",
+    "IllegalBoundaryException": "invalidBoundaryError",
+    "InMemoryRequestContext": "memoryRequestSource",
+    "FileItemHeaders": "multipartHeaderBag",
+    "ParameterParser": "headerParameterReader",
+    "MultipartStream": "boundaryStreamReader",
+    "DiskFileItem": "diskBackedItem",
+    "DiskFileItemFactory": "diskItemFactory",
+    "FileUploadBase": "multipartUploadCore",
+    "FileUpload": "fileUploadEngine"
+    ,"RequestContext": "requestSource"
+    ,"FileItem": "uploadItemContract"
+    ,"FileItemFactory": "uploadItemFactoryContract"
+    ,"FileItemHeadersSupport": "headerAwareItem"
+    ,"UploadContext": "sizedRequestSource"
+    ,"ProgressListener": "transferProgressHook"
+    ,"FileItemStream": "streamedUploadPart"
+    ,"FileItemIterator": "uploadPartIterator"
+    ,"DefaultFileItem": "legacyUploadItem"
+    ,"DefaultFileItemFactory": "legacyItemFactory"
+    ,"DiskFileUpload": "legacyDiskUpload"
+    ,"FileItemHeadersImpl": "multipartHeaderStore"
+    ,"ServletRequestContext": "servletRequestBridge"
+    ,"ServletFileUpload": "servletUploadParser"
+    ,"PortletRequestContext": "portalRequestBridge"
+    ,"PortletFileUpload": "portalUploadParser"
+    ,"FileCleanerCleanup": "temporaryItemCleaner"
+    ,"Closeable": "closeStateAware"
+    ,"LimitedInputStream": "boundedReadStream"
+    ,"Streams": "uploadStreamTools"
+    ,"Base64Decoder": "base64HeaderDecoder"
+    ,"QuotedPrintableDecoder": "quotedPrintableDecoder"
+    ,"MimeUtility": "mimeTextToolkit"
+    ,"ParseException": "mimeParseFault"
+  },
+  "testRoot": "tests",
+  "build": "npm run build",
+  "test": "npm test",
+  "license": "Apache-2.0",
+  "dependencies": [],
+  "benchmarkIncluded": false,
+  "upstream": "Apache Commons FileUpload 1.5"
+}

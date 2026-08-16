@@ -1,6 +1,8 @@
 {
   "candidateSource": "public double calculate(String key) { return cache.get(key); }",
   "targetContext": {
+    "targetKind": "function",
+    "targetLanguage": "C#",
     "targetSignature": "public async Task<decimal> CalculateAsync(string key, CancellationToken cancellationToken)",
     "targetFilePath": "src/Application/Calculator.cs",
     "enclosingType": "Calculator",

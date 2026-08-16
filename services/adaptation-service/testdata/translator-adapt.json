@@ -1,6 +1,8 @@
 {
   "candidateSource": "public Result settle(List<Item> items) { return gateway.send(items); }",
   "targetContext": {
+    "targetKind": "function",
+    "targetLanguage": "C#",
     "targetSignature": "public async Task<SettlementOutcome> SettleAsync(IReadOnlyList<SettlementInstruction> instructions, CancellationToken cancellationToken)",
     "targetFilePath": "src/Application/SettlementService.cs",
     "enclosingType": "SettlementService",

@@ -24,6 +24,8 @@ import java.io.InputStream;
  * An input stream, which limits its data size. This stream is
  * used, if the content length is unknown.
  */
+
+/** 该上传类型计数读取字节并在未知长度请求超限时报告错误的输入流。 */
 public abstract class LimitedInputStream extends FilterInputStream implements Closeable {
 
     /**

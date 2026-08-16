@@ -4,11 +4,13 @@ using System.Text;
 
 namespace Apache.Commons.FileUpload.Util;
 
+/// 资源实现此约定后可以向调用方报告是否已经关闭。
 public interface Closeable
 {
     bool IsClosed();
 }
 
+/// 读取包装器会累计字节数，并在未知长度的请求超额时中止。
 public abstract class LimitedInputStream : Stream, Closeable
 {
     private readonly Stream input;
@@ -58,6 +60,7 @@ public abstract class LimitedInputStream : Stream, Closeable
     }
 }
 
+/// 该帮助类负责还原 RFC 2047 格式的邮件头文本。
 public static class MimeUtility
 {
     public static string DecodeText(string value)
@@ -72,11 +75,13 @@ public static class MimeUtility
     }
 }
 
+/// 该解码器处理 MIME 头里的 Base64 载荷。
 public static class Base64Decoder
 {
     public static byte[] Decode(string value) => Convert.FromBase64String(value);
 }
 
+/// 该解码器将 Quoted-Printable 头值还原为字节。
 public static class QuotedPrintableDecoder
 {
     public static byte[] Decode(string value)
@@ -98,6 +103,7 @@ public static class QuotedPrintableDecoder
     }
 }
 
+/// MIME 编码字段无法读取时会抛出这一异常。
 public class ParseException : Exception
 {
     public ParseException(string message) : base(message) { }

@@ -32,6 +32,8 @@ import org.apache.commons.fileupload.FileItemHeaders;
  *
  * @since 1.2.1
  */
+
+/** 该上传类型以大小写不敏感字典保存可重复的 multipart 请求头。 */
 public class FileItemHeadersImpl implements FileItemHeaders, Serializable {
 
     /**

@@ -3,7 +3,7 @@ import {
   HashEmbeddingProvider,
   OpenAiCompatibleEmbeddingProvider,
 } from './embedding.js';
-import { OpenAiCompatibleReranker } from './reranker.js';
+import { DeepSeekReranker } from './reranker.js';
 import { RerankingSearchEngine } from './reranking-engine.js';
 import { SeekDbSearchEngine } from './search-engine.js';
 import { SeekDbStore } from './seekdb-store.js';
@@ -25,13 +25,10 @@ export function createEmbeddingProvider(config: RetrievalConfig): EmbeddingProvi
 export function createReranker(config: RetrievalConfig): LlmReranker | null {
   if (config.reranking.provider === 'none') return null;
 
-  const apiKey =
-    config.reranking.provider === 'openai' ? config.reranking.apiKey : '';
-
-  return new OpenAiCompatibleReranker(
+  return new DeepSeekReranker(
     config.reranking.model,
     config.reranking.url,
-    apiKey,
+    config.reranking.apiKey,
     config.reranking.timeoutMs,
     config.reranking.maxRetries,
   );
@@ -49,7 +46,14 @@ export function createRuntime(config: RetrievalConfig) {
     reranker ? 20 : undefined,
   );
   const engine: SearchEngine = reranker
-    ? new RerankingSearchEngine(baseEngine, reranker)
+    ? new RerankingSearchEngine(
+        baseEngine,
+        reranker,
+        20,
+        config.reranking.provider === 'deepseek'
+          ? config.reranking.validationRetries
+          : 0,
+      )
     : baseEngine;
   return { store, embeddings, engine };
 }

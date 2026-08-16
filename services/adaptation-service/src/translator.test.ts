@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   repairTranslation,
   TranslatorAgent,
-  translateJavaToCSharp,
   translateWithAnalysis,
   translatorInternals,
   type AnalyzeTranslationRequest,
@@ -369,31 +368,68 @@ describe("Translator Agent", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("keeps the legacy Java-to-C# entry point compatible", async () => {
-    const targetSignature = "public decimal Calculate()";
-    const legacyPlan = [
-      "Preserve the exact target signature and asynchronous convention.",
-      "Implement the stated requirement using only target-available dependencies.",
-    ];
-    const response: TranslationResult = {
-      schemaVersion: "1.0",
-      generatedCode: `${targetSignature} { return 1.0m; }`,
+  it("accepts a complete class target and rejects a second top-level type", async () => {
+    const request = fixture("translator-direct");
+    request.targetContext.targetKind = "class";
+    request.targetContext.targetLanguage = "Java";
+    request.targetContext.targetSignature = "public class Calculator";
+    request.targetContext.targetCode = [
+      "public class Calculator {",
+      "    private final Map<String, Double> cache = new HashMap<>();",
+      "    public double calculate(String key) { return cache.getOrDefault(key, 0.0); }",
+      "}",
+    ].join("\n");
+    request.analysisReport.implementationPlan = ["Preserve the complete target class contract."];
+    request.analysisReport.contractMapping = [];
+
+    const generatedCode = [
+      "@Deprecated",
+      "public class Calculator {",
+      "    private final Map<String, Double> cache = new HashMap<>();",
+      "    public double calculate(String key) {",
+      "        return cache.getOrDefault(key, 0.0);",
+      "    }",
+      "}",
+    ].join("\n");
+    const expected = {
+      schemaVersion: "1.0" as const,
+      generatedCode,
       interfaceMappings: [],
-      completedSteps: legacyPlan,
+      completedSteps: [...request.analysisReport.implementationPlan],
       unresolved: [],
     };
-    vi.stubGlobal("fetch", modelRequest(response));
 
     await expect(
-      translateJavaToCSharp(
-        {
-          javaSource: "public double calculate() { return 1.0; }",
-          csharpSignature: targetSignature,
-          requirement: "Translate calculation.",
-          matchType: "exact",
-        },
-        "test-key",
-      ),
-    ).resolves.toBe(`${targetSignature} { return 1.0m; }`);
+      translateWithAnalysis(request, {
+        apiKey: "test-key",
+        request: modelRequest(expected),
+      }),
+    ).resolves.toEqual(expected);
+
+    const extraType = {
+      ...expected,
+      generatedCode: `${generatedCode}\nclass Unexpected {}`,
+    };
+    await expect(
+      translateWithAnalysis(request, {
+        apiKey: "test-key",
+        request: modelRequest(extraType),
+      }),
+    ).rejects.toThrow("exactly one target class");
   });
+
+  it("validates a Python class target without requiring braces", () => {
+    const request = fixture("translator-direct");
+    request.targetContext.targetKind = "class";
+    request.targetContext.targetLanguage = "Python";
+    request.targetContext.targetSignature = "class Calculator";
+    request.analysisReport.contractMapping = [];
+    const result = resultFor(
+      request,
+      "class Calculator:\n    def calculate(self, value):\n        return value",
+    );
+
+    expect(() => translatorInternals.validateTranslationResult(result, request)).not.toThrow();
+  });
+
 });

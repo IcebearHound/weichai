@@ -35,6 +35,7 @@ import org.apache.commons.fileupload.disk.DiskFileItem;
  * @deprecated 1.1 Use <code>DiskFileItem</code> instead.
  */
 @Deprecated
+/** 该上传类型兼容旧 API 的磁盘型上传条目别名。 */
 public class DefaultFileItem
     extends DiskFileItem {
 

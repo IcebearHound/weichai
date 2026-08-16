@@ -43,6 +43,8 @@ import org.apache.commons.fileupload.FileUploadException;
  * used to create them; a given part may be in memory, on disk, or somewhere
  * else.</p>
  */
+
+/** 该上传类型面向 Servlet 请求的高层 multipart 上传解析器。 */
 public class ServletFileUpload extends FileUpload {
 
     /**

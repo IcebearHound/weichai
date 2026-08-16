@@ -1,8 +1,8 @@
 /**
  * @forexplore/adaptation-service
  *
- * 任意已支持候选语言 → Java 代码适配服务：
- *   LLM 翻译 → 编译校验 → 自动修复 → 回填
+ * Language-neutral code adaptation service:
+ *   Analyzer report → Translator → target validation → protected patch
  */
 
 export { AdaptationAdapter } from "./adaptation-adapter";
@@ -17,20 +17,15 @@ export { BackfillAdapter } from "./backfill-adapter";
 export type { BackfillAdapterOptions } from "./backfill-adapter";
 
 export {
-  fixCompileErrors,
   projectTargetContext,
   repairTranslation,
   TranslatorAgent,
-  translateToJava,
-  translateJavaToCSharp,
   translateWithAnalysis,
 } from "./translator";
 export type {
   AnalyzeTranslationRequest,
   ApplicabilityLevel,
-  TranslateToJavaRequest,
   RepairTranslationRequest,
-  TranslateRequest,
   TranslationMapping,
   TranslationResult,
   TranslatorAnalysisReport,
@@ -59,6 +54,9 @@ export {
   compileIntegrated,
   compileJavaStandalone,
   compileJavaIntegrated,
+  compileTargetStandalone,
+  compileTargetIntegrated,
+  compilerCommand,
 } from "./compiler";
 export type { CompileResult } from "./compiler";
 

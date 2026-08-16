@@ -39,6 +39,7 @@ import org.apache.commons.fileupload.disk.DiskFileItemFactory;
  * @deprecated 1.1 Use <code>DiskFileItemFactory</code> instead.
  */
 @Deprecated
+/** 该上传类型兼容旧 API 的磁盘型上传条目工厂别名。 */
 public class DefaultFileItemFactory extends DiskFileItemFactory {
 
     // ----------------------------------------------------------- Constructors

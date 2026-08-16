@@ -26,6 +26,8 @@ package org.apache.commons.fileupload;
  * C library, it might create a file named "foo.exe", as the NUL
  * character is the string terminator in C.
  */
+
+/** 该上传类型拒绝包含 NUL 等不安全字符的上传文件名。 */
 public class InvalidFileNameException extends RuntimeException {
 
     /**

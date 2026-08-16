@@ -26,6 +26,8 @@ import java.io.IOException;
  *
  * @since FileUpload 1.1
  */
+
+/** 该上传类型抽象请求的字符集、内容类型、长度与输入流。 */
 public interface RequestContext {
 
     /**

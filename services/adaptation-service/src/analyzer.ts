@@ -25,7 +25,7 @@ export interface AnalyzerAgentOptions {
   modelConfig?: DeepSeekModelConfig;
 }
 
-const analyzerSystemPrompt = `You are the Analyzer Agent in a Java-to-C# adaptation workflow.
+const analyzerSystemPrompt = `You are the Analyzer Agent in a target-contract code adaptation workflow.
 Your job is to compare the target module facts, the user requirement, and one retrieved candidate.
 Do not write translated code. Produce one JSON object matching AnalysisReport schemaVersion 1.0.
 

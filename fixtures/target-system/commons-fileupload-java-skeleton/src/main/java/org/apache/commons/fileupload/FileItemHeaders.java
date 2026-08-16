@@ -25,6 +25,8 @@ import java.util.Iterator;
  *
  * @since 1.2.1
  */
+
+/** 该上传类型提供大小写不敏感且允许重复值的 multipart 头集合。 */
 public interface FileItemHeaders {
 
     /**

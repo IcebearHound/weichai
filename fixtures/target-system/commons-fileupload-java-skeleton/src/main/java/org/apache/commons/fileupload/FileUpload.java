@@ -30,6 +30,8 @@ package org.apache.commons.fileupload;
  * used to create them; a given part may be in memory, on disk, or somewhere
  * else.</p>
  */
+
+/** 该上传类型持有可配置 FileItemFactory 的高层 multipart 解析入口。 */
 public class FileUpload
     extends FileUploadBase {
 

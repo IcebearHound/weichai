@@ -28,6 +28,8 @@ import java.util.Map;
  *
  * @since 1.3
  */
+
+/** 该上传类型解码 RFC 2047 编码的 MIME 头文本。 */
 public final class MimeUtility {
 
     /**

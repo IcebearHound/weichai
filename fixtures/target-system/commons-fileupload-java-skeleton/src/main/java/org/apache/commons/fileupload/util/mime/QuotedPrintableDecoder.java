@@ -22,6 +22,8 @@ import java.io.OutputStream;
 /**
  * @since 1.3
  */
+
+/** 该上传类型解码 MIME 头中使用的 Quoted-Printable 数据。 */
 final class QuotedPrintableDecoder {
 
     /**

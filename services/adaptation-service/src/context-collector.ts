@@ -104,12 +104,16 @@ export function collectTargetContext(
 
   const content = normalizeNewlines(readFileSync(targetPath, "utf8"));
   const methodRange = findTargetRange(content, target);
-  const containingType = findContainingType(content, methodRange.declarationStart);
+  const containingType = findContainingType(
+    content,
+    methodRange.declarationStart,
+    target.language,
+  );
   const typeRange = containingType ?? methodRange;
   const sourceLines = content.split("\n");
   const namespace = findNamespace(content);
   const usings = sourceLines
-    .filter((line) => /^\s*using\s+[^;]+;\s*$/.test(line))
+    .filter((line) => /^\s*(?:using|import)\s+(?:static\s+)?[^;]+;\s*$/.test(line) || /^\s*from\s+\S+\s+import\s+/.test(line))
     .map((line) => line.trim());
 
   const method = content.slice(methodRange.declarationStart, methodRange.end + 1).trim();
@@ -195,6 +199,7 @@ export function serializeTargetContext(context: TargetModuleContext): string {
 }
 
 function findTargetRange(source: string, target: ModuleTarget): CodeRange {
+  if (target.language === "Python") return findPythonTargetRange(source, target);
   const escapedName = escapeRegExp(target.name);
   const pattern =
     target.kind === "function"
@@ -230,7 +235,35 @@ function findTargetRange(source: string, target: ModuleTarget): CodeRange {
   return candidates[0];
 }
 
-function findContainingType(source: string, offset: number): CodeRange | null {
+function findPythonTargetRange(source: string, target: ModuleTarget): CodeRange {
+  const pattern = target.kind === "function"
+    ? new RegExp(`^[\\t ]*(?:async\\s+)?def\\s+${escapeRegExp(target.name)}\\s*\\(`, "gm")
+    : new RegExp(`^[\\t ]*class\\s+${escapeRegExp(target.name)}\\b`, "gm");
+  const candidates: CodeRange[] = [];
+  for (const match of source.matchAll(pattern)) {
+    if (match.index === undefined) continue;
+    const declarationStart = match.index;
+    const lineEnd = source.indexOf("\n", declarationStart);
+    const openingBrace = lineEnd < 0 ? source.length : lineEnd;
+    candidates.push({
+      declarationStart,
+      openingBrace,
+      end: pythonBlockEnd(source, declarationStart),
+      declaration: source.slice(declarationStart, openingBrace).trim(),
+    });
+  }
+  if (candidates.length === 0) throw new Error(`Target ${target.name} was not found in ${target.path}.`);
+  if (target.line !== undefined) {
+    const targetOffset = lineStartOffset(source, target.line);
+    return candidates
+      .map((candidate) => ({ candidate, distance: Math.abs(candidate.declarationStart - targetOffset) }))
+      .sort((left, right) => left.distance - right.distance)[0]?.candidate ?? candidates[0];
+  }
+  return candidates[0];
+}
+
+function findContainingType(source: string, offset: number, language: ModuleTarget["language"]): CodeRange | null {
+  if (language === "Python") return findPythonContainingType(source, offset);
   const typePattern = /\b(class|record|struct|interface|enum)\s+([A-Za-z_]\w*)\b/g;
   const candidates: CodeRange[] = [];
   for (const match of source.matchAll(typePattern)) {
@@ -248,6 +281,40 @@ function findContainingType(source: string, offset: number): CodeRange | null {
     }
   }
   return candidates.sort((left, right) => right.openingBrace - left.openingBrace)[0] ?? null;
+}
+
+function findPythonContainingType(source: string, offset: number): CodeRange | null {
+  const candidates: CodeRange[] = [];
+  for (const match of source.matchAll(/^[\t ]*class\s+[A-Za-z_]\w*\b/gm)) {
+    if (match.index === undefined || match.index > offset) continue;
+    const end = pythonBlockEnd(source, match.index);
+    if (offset > end) continue;
+    const lineEnd = source.indexOf("\n", match.index);
+    candidates.push({
+      declarationStart: match.index,
+      openingBrace: lineEnd < 0 ? source.length : lineEnd,
+      end,
+      declaration: source.slice(match.index, lineEnd < 0 ? source.length : lineEnd).trim(),
+    });
+  }
+  return candidates.sort((left, right) => right.declarationStart - left.declarationStart)[0] ?? null;
+}
+
+function pythonBlockEnd(source: string, start: number): number {
+  const startLineEnd = source.indexOf("\n", start);
+  const baseIndent = source.slice(start, startLineEnd < 0 ? source.length : startLineEnd).match(/^\s*/)?.[0].length ?? 0;
+  let end = source.length;
+  for (let index = startLineEnd < 0 ? source.length : startLineEnd + 1; index < source.length;) {
+    const next = source.indexOf("\n", index);
+    const lineEnd = next < 0 ? source.length : next;
+    const line = source.slice(index, lineEnd);
+    if (line.trim() && !line.trimStart().startsWith("#") && (line.match(/^\s*/)?.[0].length ?? 0) <= baseIndent) {
+      end = index - 1;
+      break;
+    }
+    index = next < 0 ? source.length : next + 1;
+  }
+  return end;
 }
 
 function matchingBrace(source: string, openingBrace: number): number {
@@ -292,7 +359,7 @@ function extractFields(typeSource: string): string[] {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("///")) continue;
     if (
-      /^\s*(?:(?:public|private|protected|internal|static|readonly|volatile|const|new|unsafe)\s+)+[A-Za-z_]\w*(?:\s*<[^;=()]+>)?(?:\[\])?\s+[A-Za-z_]\w*\s*(?:=.*)?;\s*$/.test(
+      /^\s*(?:(?:public|private|protected|internal|static|readonly|volatile|const|new|unsafe|final|transient|synchronized)\s+)+[A-Za-z_]\w*(?:\s*<[^;=()]+>)?(?:\[\])?\s+[A-Za-z_]\w*\s*(?:=.*)?;\s*$/.test(
         line,
       )
     ) {
@@ -354,7 +421,7 @@ function extractConstraints(
 }
 
 function findNamespace(source: string): string | undefined {
-  return /^\s*namespace\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*(?:;|\{)/m.exec(source)?.[1];
+  return /^\s*(?:namespace|package)\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*(?:;|\{)/m.exec(source)?.[1];
 }
 
 function collectDependencyNames(

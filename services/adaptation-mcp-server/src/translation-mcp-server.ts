@@ -2,18 +2,16 @@ import {
   AdaptationAdapter,
   AnalyzerAgent,
   collectTargetContext,
-  compileIntegrated,
-  compileStandalone,
+  compileTargetIntegrated,
+  compileTargetStandalone,
   projectTargetContext,
   repairTranslation,
-  translateJavaToCSharp,
-  translateToJava,
   translateWithAnalysis,
   type AdaptationAnalyzer,
   type AdaptationValidator,
   type TranslatorModelOptions,
 } from "@forexplore/adaptation-service";
-import type { ModuleTarget } from "@forexplore/contracts";
+import { validateRerankContract, type ModuleTarget } from "@forexplore/contracts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 
@@ -120,6 +118,12 @@ const validationFeedbackSchema = z.object({
   })).max(1_000),
 });
 
+const rerankResultSchema = z.object({
+  id: z.string().trim().min(1).max(4_096),
+  score: z.number().finite(),
+  reason: z.string().max(8_000).optional(),
+});
+
 export interface AdaptationMcpServerOptions {
   apiKey: string;
   projectRoot: string;
@@ -188,9 +192,24 @@ export function createAdaptationMcpServer(
     }, extra.signal);
   }));
 
+  server.registerTool("forexplore_validate_rerank", {
+    title: "Validate Rerank Contract",
+    description: "Validate that a reranking result scores every supplied candidate ID exactly once, without unknown, missing, or duplicate IDs.",
+    inputSchema: {
+      candidateIds: z.array(z.string().trim().min(1).max(4_096)).min(1).max(250),
+      results: z.array(rerankResultSchema).max(250),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  }, async ({ candidateIds, results }) => ({
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify(validateRerankContract(candidateIds, results), null, 2),
+    }],
+  }));
+
   server.registerTool("forexplore_generate_translation", {
     title: "Generate Translation",
-    description: "Generate one target method from source code and a validated AnalysisReport; it does not write files.",
+    description: "Generate one target method or complete target class from source code and a validated AnalysisReport; it does not write files.",
     inputSchema: {
       target: targetSchema,
       candidateSource: z.string().min(1).max(MAX_CODE_CHARS),
@@ -209,7 +228,7 @@ export function createAdaptationMcpServer(
 
   server.registerTool("forexplore_repair_translation", {
     title: "Repair Translation",
-    description: "Repair a generated target method from structured compiler or contract feedback; it does not write files.",
+    description: "Repair a generated target method or class from structured compiler or contract feedback; it does not write files.",
     inputSchema: {
       target: targetSchema,
       candidateSource: z.string().min(1).max(MAX_CODE_CHARS),
@@ -231,25 +250,33 @@ export function createAdaptationMcpServer(
     validationFeedback,
   }, translatorOptions, extra.signal)));
 
-  server.registerTool("forexplore_validate_csharp_translation", {
-    title: "Validate C# Translation",
-    description: "Compile generated C# as a standalone method or inside a temporary copy of the configured skeleton project.",
+  server.registerTool("forexplore_validate_translation", {
+    title: "Validate Translation",
+    description: "Compile generated code using the selected target language as a standalone method or inside a temporary copy of the configured project.",
     inputSchema: {
+      target: targetSchema,
       generatedCode: z.string().min(1).max(MAX_CODE_CHARS),
       mode: z.enum(["standalone", "integrated"]),
       className: z.string().trim().min(1).max(512).optional(),
-      target: targetSchema.optional(),
     },
     annotations: { readOnlyHint: true, destructiveHint: false },
   }, async ({ generatedCode, mode, className, target }) => runTool(() => {
     if (mode === "standalone") {
-      return compileStandalone(generatedCode, className ?? "ForeXploreStandalone");
+      return compileTargetStandalone(
+        target.language,
+        generatedCode,
+        className ?? "ForeXploreStandalone",
+      );
     }
     if (!options.skeletonProjectPath) {
       throw new Error("Integrated validation requires ADAPTATION_SKELETON_PROJECT_PATH.");
     }
-    if (!target) throw new Error("Integrated validation requires the selected target.");
-    return compileIntegrated(generatedCode, options.skeletonProjectPath, target.path);
+    return compileTargetIntegrated(
+      target.language,
+      generatedCode,
+      options.skeletonProjectPath,
+      target.path,
+    );
   }));
 
   server.registerTool("forexplore_adapt_translation", {
@@ -269,36 +296,6 @@ export function createAdaptationMcpServer(
     strategy: "translate",
     decisionNotes,
   }, extra.signal)));
-
-  server.registerTool("forexplore_translate_java_to_csharp", {
-    title: "Translate Java to C#",
-    description: "Compatibility translation tool for one Java method to a C# method signature; use the guarded workflow for production adaptation.",
-    inputSchema: {
-      javaSource: z.string().min(1).max(MAX_CODE_CHARS),
-      csharpSignature: z.string().trim().min(1).max(16_000),
-      requirement: z.string().trim().min(1).max(MAX_REQUIREMENT_CHARS),
-      matchType: z.enum(["exact", "partial", "different"]),
-    },
-    annotations: { destructiveHint: false },
-  }, async (request, extra) => runTool(() => translateJavaToCSharp(request, options.apiKey, extra.signal)));
-
-  server.registerTool("forexplore_translate_csharp_to_java", {
-    title: "Translate C# to Java",
-    description: "Translate one C# method to a Java method signature without writing files.",
-    inputSchema: {
-      csharpSource: z.string().min(1).max(MAX_CODE_CHARS),
-      javaSignature: z.string().trim().min(1).max(16_000),
-      requirement: z.string().trim().min(1).max(MAX_REQUIREMENT_CHARS),
-      matchType: z.enum(["exact", "partial", "different"]),
-    },
-    annotations: { destructiveHint: false },
-  }, async (request, extra) => runTool(() => translateToJava({
-    sourceLanguage: "C#",
-    sourceCode: request.csharpSource,
-    javaSignature: request.javaSignature,
-    requirement: request.requirement,
-    matchType: request.matchType,
-  }, options.apiKey, extra.signal, { request: translatorOptions.request })));
 
   return server;
 }

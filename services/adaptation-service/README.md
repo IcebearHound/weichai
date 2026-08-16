@@ -1,6 +1,7 @@
 # Adaptation Service (Module 3)
 
-Supported candidate language → Java code adaptation: DeepSeek translation → Java compile validation → protected patch generation.
+Language-neutral code adaptation: Analyzer report → Translator generation →
+target-language compilation → protected patch generation.
 
 ## Analyzer-driven Translator Agent
 
@@ -28,10 +29,9 @@ messages or conversation history. Its response is parsed as a structured
 and unresolved items.
 
 Runtime guards reject Analyzer `reject` decisions, unresolved dependencies,
-changed target signatures, omitted plan steps/mappings, and output that expands
-into using/namespace/enclosing-type changes. The existing
-`translateJavaToCSharp()` and `fixCompileErrors()` exports remain compatible for
-legacy callers. The HTTP adapter now runs the integrated sequence:
+changed target signatures, omitted plan steps/mappings, and output that escapes
+the requested method or class scope with imports, namespaces, or extra types. The HTTP adapter runs the
+integrated sequence:
 
 ```text
 collectTargetContext -> AnalyzerAgent.analyze -> AnalysisReport artifact
@@ -62,16 +62,20 @@ A passing feedback result is idempotent and performs no model request. Failed
 feedback must contain structured syntax, contract, dependency, or behavior
 issues. Fixed member-C samples live in `testdata/translator-*.json`.
 
-`AdaptationAdapter` accepts the `translate` strategy for both Java → C# and
-Any supported candidate language → Java. The VS Code extension writes into the Commons
-FileUpload Java target workspace; unsupported language pairs are rejected
-before any LLM request is made.
+`AdaptationAdapter` accepts all source and target languages represented by the
+shared `Language` contract. It selects context collection, method-boundary
+patching, and standalone/integrated compiler validation from one language
+registry for TypeScript, Python, Java, C#, Rust, and Go. A missing local
+compiler is reported as unavailable; it is not a language-pair rejection. The
+current VS Code extension happens to select a Java workspace, but that host
+choice does not constrain the Analyzer or Translator protocol.
 
 When `skeletonProjectPath` is configured, integration validation copies the
-target skeleton to a temporary directory and replaces only the target method.
-The Java direction uses `javac` validation; the real workspace is never
-modified during validation. The Java → C# branch retains its repair loop; the
-candidate language → Java branch returns an explicitly reviewed patch and compiler evidence.
+target project to a temporary directory and replaces only the requested target
+method or complete target class.
+The registry uses `tsc`, `python -m py_compile`, `javac`, `dotnet build`,
+`rustc`/`cargo check`, or `go test` for the target language. The real workspace
+is never modified during validation.
 
 The DeepSeek endpoint and model name are loaded by `src/model-config.ts` so the
 agents do not own provider configuration. `DEEPSEEK_MODEL` defaults to
@@ -88,7 +92,7 @@ bundle.
 cp services/adaptation-service/.env.example services/adaptation-service/.env
 # Edit the copied file and set DEEPSEEK_API_KEY.
 
-# Required for Java validation.
+# Make the selected target compiler available on PATH, for example:
 javac --version
 
 npm install
@@ -141,7 +145,7 @@ code-indexer (module 1) → retrieval-service (module 2) → adaptation-service 
 | `testdata/translator-*.json` | direct/adapt/reject member-C fixtures |
 | `src/context-collector.ts` | Collects bounded target-module facts and direct dependencies |
 | `src/analyzer.ts` | Independent Analyzer Agent that returns validated `AnalysisReport` JSON |
-| `src/compiler.ts` | C# and Java compiler checks |
+| `src/compiler.ts` | Language-registry compiler checks for all contract languages |
 | `src/model-config.ts` | Isolated temporary model provider configuration |
 | `src/adaptation-adapter.ts` | Main adapter, orchestrates context → analyze → translate → compile → repair |
 | `src/backfill-adapter.ts` | Backfill results into corpus |

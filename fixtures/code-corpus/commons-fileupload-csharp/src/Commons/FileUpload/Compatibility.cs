@@ -5,6 +5,7 @@ using Apache.Commons.FileUpload.Disk;
 namespace Apache.Commons.FileUpload;
 
 [Obsolete("Use DiskFileItem instead.")]
+/// 旧接口仍可借由这个磁盘条目适配器继续工作。
 public class DefaultFileItem : DiskFileItem
 {
     public DefaultFileItem(string? fieldName, string? contentType, bool isFormField, string? fileName, int sizeThreshold, string? repository)
@@ -12,6 +13,7 @@ public class DefaultFileItem : DiskFileItem
 }
 
 [Obsolete("Use DiskFileItemFactory instead.")]
+/// 这是为旧调用方保留的磁盘条目工厂外观。
 public class DefaultFileItemFactory : DiskFileItemFactory
 {
     public DefaultFileItemFactory() { }
@@ -26,6 +28,7 @@ public class DefaultFileItemFactory : DiskFileItemFactory
 }
 
 [Obsolete("Use FileUpload with DiskFileItemFactory instead.")]
+/// 该适配器延续早期磁盘上传的配置方式。
 public class DiskFileUpload : FileUpload
 {
     public DiskFileUpload() : this(new DefaultFileItemFactory()) { }
@@ -38,6 +41,7 @@ public class DiskFileUpload : FileUpload
     public void SetRepositoryPath(string value) => ((DefaultFileItemFactory)GetFileItemFactory()!).SetRepository(value);
 }
 
+/// 该接口支持逐项读取 multipart 内容，无须提前缓存整个请求。
 public interface FileItemStream : FileItemHeadersSupport
 {
     Stream OpenStream();
@@ -47,12 +51,14 @@ public interface FileItemStream : FileItemHeadersSupport
     bool IsFormField();
 }
 
+/// 它定义了按请求顺序拉取流式条目的迭代协议。
 public interface FileItemIterator
 {
     bool HasNext();
     FileItemStream Next();
 }
 
+/// .NET 侧该类型把已物化的 FileItem 列表适配为流式条目迭代器。
 public sealed class MaterializedFileItemIterator : FileItemIterator
 {
     private readonly IEnumerator<FileItem> items;
@@ -82,6 +88,7 @@ public sealed class MaterializedFileItemIterator : FileItemIterator
         return new Item(item);
     }
 
+    /// .NET 侧该类型把已物化 FileItem 包装为可流式读取的单个条目。
     private sealed class Item : FileItemStream
     {
         private readonly FileItem item;

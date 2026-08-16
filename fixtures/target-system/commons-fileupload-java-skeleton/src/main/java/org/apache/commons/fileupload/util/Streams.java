@@ -27,6 +27,8 @@ import org.apache.commons.io.IOUtils;
 /**
  * Utility class for working with streams.
  */
+
+/** 该上传类型复制输入流并校验上传文件名的通用工具。 */
 public final class Streams {
 
     /**

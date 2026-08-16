@@ -3,4 +3,5 @@ export * from './backfill';
 export * from './indexing';
 export * from './module';
 export * from './retrieval';
+export * from './rerank-validation';
 export * from './validation';

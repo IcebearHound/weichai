@@ -112,4 +112,28 @@ describe("collectTargetContext", () => {
 
     expect(() => collectTargetContext({ projectRoot, target, signal: controller.signal })).toThrow();
   });
+
+  it("collects a Python module without using brace-based method parsing", () => {
+    const pythonProjectRoot = fileURLToPath(
+      new URL("../../../fixtures/code-corpus/multipart-vault-py", import.meta.url),
+    );
+    const context = collectTargetContext({
+      projectRoot: pythonProjectRoot,
+      target: {
+        id: "parse-attributes",
+        name: "parse_attributes",
+        kind: "function",
+        path: "src/multipart_vault/core.py",
+        language: "Python",
+        signature: "def parse_attributes(value: str | None) -> dict[str, str]",
+        line: 31,
+      },
+    });
+
+    expect(context.source.method).toContain("def parse_attributes");
+    expect(context.source.usings).toEqual(
+      expect.arrayContaining(["from __future__ import annotations"]),
+    );
+    expect(projectTargetContext(context).targetLanguage).toBe("Python");
+  });
 });

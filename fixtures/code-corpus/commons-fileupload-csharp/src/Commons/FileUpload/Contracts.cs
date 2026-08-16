@@ -5,6 +5,7 @@ using System.Text;
 
 namespace Apache.Commons.FileUpload;
 
+/// 该接口描述上传字段的内容访问、元数据和落盘能力。
 public interface FileItem
 {
     Stream GetInputStream();
@@ -26,11 +27,13 @@ public interface FileItem
     void SetHeaders(FileItemHeaders? headers);
 }
 
+/// 该工厂根据表单元数据实例化对应的上传对象。
 public interface FileItemFactory
 {
     FileItem CreateItem(string? fieldName, string? contentType, bool isFormField, string? fileName);
 }
 
+/// 该集合按忽略大小写的方式维护可重复的 multipart 头值。
 public interface FileItemHeaders
 {
     string? GetHeader(string name);
@@ -38,12 +41,14 @@ public interface FileItemHeaders
     IEnumerator<string> GetHeaderNames();
 }
 
+/// 该约定让上传对象携带并更新关联的 MIME 头。
 public interface FileItemHeadersSupport
 {
     FileItemHeaders? GetHeaders();
     void SetHeaders(FileItemHeaders? headers);
 }
 
+/// 它把宿主请求包装为解析器所需的元数据和正文来源。
 public interface RequestContext
 {
     string? GetCharacterEncoding();
@@ -52,13 +57,16 @@ public interface RequestContext
     Stream GetInputStream();
 }
 
+/// 此上下文额外暴露不会截断的大请求长度。
 public interface UploadContext : RequestContext
 {
     long ContentLength();
 }
 
+/// 上传过程会通过这个委托报告字节数、总量和条目计数。
 public delegate void ProgressListener(long bytesRead, long contentLength, int items);
 
+/// 上传管线发生解析或存储问题时会使用此基础异常。
 public class FileUploadException : Exception
 {
     public FileUploadException() { }
@@ -66,6 +74,7 @@ public class FileUploadException : Exception
     public FileUploadException(string message, Exception cause) : base(message, cause) { }
 }
 
+/// 附件个数越过配置阈值时由该异常报告。
 public sealed class FileCountLimitExceededException : FileUploadException
 {
     public FileCountLimitExceededException(string message, long limit) : base(message)
@@ -76,6 +85,7 @@ public sealed class FileCountLimitExceededException : FileUploadException
     public long Limit { get; }
 }
 
+/// 文件名含有 NUL 等危险字符时会在此处被拒绝。
 public sealed class InvalidFileNameException : ArgumentException
 {
     public InvalidFileNameException(string? name, string message) : base(message)
@@ -86,6 +96,7 @@ public sealed class InvalidFileNameException : ArgumentException
     public string? Name { get; }
 }
 
+/// .NET 侧该类型以大小写不敏感字典保存可重复的 multipart 请求头。
 public class FileItemHeadersImpl : FileItemHeaders
 {
     private readonly Dictionary<string, List<string>> headers = new(StringComparer.OrdinalIgnoreCase);
@@ -129,6 +140,7 @@ public class FileItemHeadersImpl : FileItemHeaders
     }
 }
 
+/// 它读取媒体头参数，并正确保留引号中的分隔符。
 public sealed class ParameterParser
 {
     public bool IsLowerCaseNames { get; private set; }
@@ -222,6 +234,7 @@ public sealed class ParameterParser
     }
 }
 
+/// 这里集中放置流复制和安全文件名检查的辅助逻辑。
 public static class Streams
 {
     public const int DEFAULT_BUFFER_SIZE = 8192;

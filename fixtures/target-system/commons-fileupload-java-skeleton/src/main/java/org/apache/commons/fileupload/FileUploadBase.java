@@ -54,6 +54,8 @@ import org.apache.commons.io.IOUtils;
  * used to create them; a given part may be in memory, on disk, or somewhere
  * else.</p>
  */
+
+/** 该上传类型协调请求大小限制、边界解析、头解码与上传条目创建。 */
 public abstract class FileUploadBase {
 
     // ---------------------------------------------------------- Class methods
@@ -692,6 +694,8 @@ public abstract class FileUploadBase {
         /**
          * Default implementation of {@link FileItemStream}.
          */
+
+        /** 该上传类型默认的流式上传条目实现，按需暴露当前分段内容。 */
         class FileItemStreamImpl implements FileItemStream {
 
             /**

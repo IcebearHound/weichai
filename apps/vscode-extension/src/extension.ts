@@ -108,17 +108,17 @@ async function startTranslation(
 ): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
-    void vscode.window.showInformationMessage('请先打开并选中一个 Java 目标方法。');
+    void vscode.window.showInformationMessage('请先打开并选中一个目标方法。');
     return;
   }
   if (editor.selection.isEmpty) {
-    void vscode.window.showWarningMessage('请先选中待实现的 Java 目标方法或其签名。');
+    void vscode.window.showWarningMessage('请先选中待实现的目标方法或其签名。');
     return;
   }
 
   const document = editor.document;
   if (document.uri.scheme !== 'file') {
-    void vscode.window.showErrorMessage('仅支持工作区中的本地 Java 文件。');
+    void vscode.window.showErrorMessage('仅支持工作区中的本地受支持语言文件。');
     return;
   }
   if (document.isDirty) {
@@ -141,7 +141,7 @@ async function startTranslation(
   });
   if (!target) {
     void vscode.window.showErrorMessage(
-      `当前翻译流程写入 Java 目标：请在工作区内选择 Java 目标方法（当前为 ${document.languageId}）。`,
+      `请在工作区内选择受支持语言的目标方法（当前为 ${document.languageId}）。`,
     );
     return;
   }
@@ -195,7 +195,7 @@ async function showPanel(
     await startTranslation(context, services, health);
     return;
   }
-  void vscode.window.showInformationMessage('请先在 Java 文件中选中待实现的目标方法。');
+  void vscode.window.showInformationMessage('请先在受支持语言文件中选中待实现的目标方法。');
 }
 
 async function handlePanelMessage(
@@ -306,7 +306,7 @@ async function applyCurrentRun(context: vscode.ExtensionContext): Promise<void> 
     }
     await assertTargetUnchanged(run);
     const choice = await vscode.window.showWarningMessage(
-      '将把已预览的补丁写入当前选中的 Java 文件，并创建可恢复检查点。确认继续？',
+      `将把已预览的补丁写入当前选中的 ${run.target.language} 文件，并创建可恢复检查点。确认继续？`,
       { modal: true },
       '应用补丁',
     );
@@ -400,8 +400,8 @@ function validateHostOwnedResult(
   const failures: string[] = [];
   let files: FilePatch[] = result.files;
 
-  if (result.strategy !== 'translate' || result.targetLanguage !== 'Java') {
-    failures.push('服务返回的策略或目标语言超出任意候选语言 → Java translate 边界。');
+  if (result.strategy !== 'translate' || result.targetLanguage !== run.target.language) {
+    failures.push('服务返回的策略或目标语言与当前选中的目标不一致。');
   }
   if (files.length !== 1) {
     failures.push('写回只接受当前目标文件的一个修改补丁。');
@@ -471,7 +471,7 @@ function deduplicateValidation(records: ValidationRecord[]): ValidationRecord[] 
 }
 
 function requireActiveRun(): ActiveMigrationRun {
-  if (!activeRun) throw new Error('请先从已保存的 Java 目标方法启动一次迁移。');
+  if (!activeRun) throw new Error('请先从已保存的目标方法启动一次迁移。');
   return activeRun;
 }
 

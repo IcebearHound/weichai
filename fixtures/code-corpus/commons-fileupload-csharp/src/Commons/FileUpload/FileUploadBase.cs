@@ -4,6 +4,7 @@ using System.Text;
 
 namespace Apache.Commons.FileUpload;
 
+/// .NET 基类在这里编排容量校验、分段读取、头处理和对象构造。
 public abstract class FileUploadBase
 {
     public const string MULTIPART = "multipart/";
@@ -156,6 +157,7 @@ public abstract class FileUploadBase
         return parser.Parse(value, ';');
     }
 
+    /// .NET 侧该类型记录实际大小与允许上限的基础大小异常。
     public class SizeException : FileUploadException
     {
         protected SizeException(string message, long actualSize, long permittedSize) : base(message)
@@ -167,21 +169,25 @@ public abstract class FileUploadBase
         public long PermittedSize { get; }
     }
 
+    /// 请求总体积越过限制后将抛出这个大小错误。
     public sealed class SizeLimitExceededException : SizeException
     {
         public SizeLimitExceededException(string message, long actualSize, long permittedSize) : base(message, actualSize, permittedSize) { }
     }
 
+    /// 单个附件过大时由这个异常给出具体失败。
     public sealed class FileSizeLimitExceededException : SizeException
     {
         public FileSizeLimitExceededException(string message, long actualSize, long permittedSize) : base(message, actualSize, permittedSize) { }
     }
 
+    /// Content-Type 中没有可用 boundary 时会出现此错误。
     public sealed class InvalidContentTypeException : FileUploadException
     {
         public InvalidContentTypeException(string message) : base(message) { }
     }
 
+    /// .NET 侧该类型携带上传处理上下文的底层输入输出异常。
     public sealed class FileUploadIOException : IOException
     {
         public FileUploadIOException(FileUploadException cause) : base(cause.Message, cause)
@@ -192,11 +198,13 @@ public abstract class FileUploadBase
         public FileUploadException Cause { get; }
     }
 
+    /// .NET 侧该类型将输入输出失败包装为文件上传异常。
     public sealed class IOFileUploadException : FileUploadException
     {
         public IOFileUploadException(string message, IOException cause) : base(message, cause) { }
     }
 
+    /// .NET 侧该类型在请求长度未知且读取超限时抛出。
     public sealed class UnknownSizeException : SizeException
     {
         public UnknownSizeException(string message, long actualSize, long permittedSize) : base(message, actualSize, permittedSize) { }

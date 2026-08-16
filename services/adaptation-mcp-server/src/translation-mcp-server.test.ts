@@ -139,12 +139,11 @@ describe("ForeXplore adaptation MCP server", () => {
     expect(tools.tools.map((tool) => tool.name)).toEqual([
       "forexplore_collect_target_context",
       "forexplore_analyze_translation",
+      "forexplore_validate_rerank",
       "forexplore_generate_translation",
       "forexplore_repair_translation",
-      "forexplore_validate_csharp_translation",
+      "forexplore_validate_translation",
       "forexplore_adapt_translation",
-      "forexplore_translate_java_to_csharp",
-      "forexplore_translate_csharp_to_java",
     ]);
     expect(tools.tools.map((tool) => tool.name)).not.toContain("forexplore_apply_patch");
   });
@@ -183,5 +182,28 @@ describe("ForeXplore adaptation MCP server", () => {
 
     expect(isToolError(result)).toBe(true);
     expect(contentText(result)).toContain("Target path must stay inside the project root");
+  });
+
+  it("validates reranking candidate IDs through the MCP tool", async () => {
+    const { client } = await connectedClient();
+    const result = await client.callTool({
+      name: "forexplore_validate_rerank",
+      arguments: {
+        candidateIds: ["first", "second"],
+        results: [
+          { id: "first", score: 0.9 },
+          { id: "invented", score: 0.8 },
+        ],
+      },
+    });
+
+    expect(isToolError(result)).toBe(false);
+    expect(JSON.parse(contentText(result))).toMatchObject({
+      valid: false,
+      issues: expect.arrayContaining([
+        expect.stringContaining("unknown candidate ID: invented"),
+        expect.stringContaining("Missing candidate IDs"),
+      ]),
+    });
   });
 });

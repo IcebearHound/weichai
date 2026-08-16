@@ -1,5 +1,5 @@
 import type { SearchCandidate, SearchRequest } from '@forexplore/contracts';
-import type { LlmReranker, RerankResult } from './types.js';
+import type { LlmReranker, RerankResult, RerankValidationFeedback } from './types.js';
 
 // ── Retry / error-handling utilities (mirrors embedding.ts patterns) ──────
 
@@ -79,6 +79,7 @@ const SYSTEM_PROMPT = [
 export function buildRerankPrompt(
   request: SearchRequest,
   candidates: SearchCandidate[],
+  feedback?: RerankValidationFeedback,
 ): { system: string; user: string } {
   const queryLines = [
     `目标: ${request.target.name}(${request.target.kind}) ${request.target.signature}`,
@@ -90,14 +91,15 @@ export function buildRerankPrompt(
     // The preview is evidence for ranking, not instructions for the model. A
     // bounded excerpt keeps one unusually large symbol from crowding out every
     // other candidate in the batch.
-    const preview = candidate.preview.trim().slice(0, 1_000) || '(无预览)';
+    const preview = candidate.preview.trim().slice(0, 500) || '(无预览)';
     const dependencies = candidate.dependencies.length > 0
       ? candidate.dependencies.join(', ')
       : '(无)';
     const risks = candidate.risks.length > 0 ? candidate.risks.join(', ') : '(无)';
 
     return [
-      `[${index}] id=${candidate.id}`,
+      `候选序号（禁止作为输出 id）: ${index}`,
+      `候选 ID（输出时必须逐字复制）: ${candidate.id}`,
       `位置: ${candidate.repository}/${candidate.path}`,
       `符号: ${candidate.title} (${candidate.language}/${candidate.kind})`,
       `签名: ${candidate.signature}`,
@@ -115,8 +117,16 @@ export function buildRerankPrompt(
     `候选 (${candidates.length}条):`,
     candidateBlocks.join('\n'),
     '',
-    '按行为语义匹配度排序。必须且只能为每个给定 id 输出一项，输出JSON:',
-    '[{"id":"id值","score":0.95}]',
+    '按行为语义匹配度排序。必须且只能为每个候选 ID 输出一项。',
+    'id 必须逐字复制“候选 ID”字段，禁止输出候选序号或自行改写 ID。只输出JSON:',
+    '[{"id":"候选 ID 原文","score":0.95}]',
+    ...(feedback
+      ? [
+          '',
+          `上一次输出未通过结果约束校验（第 ${feedback.attempt} 次修复）：${feedback.message}`,
+          '请重新输出完整 JSON 数组。必须包含且仅包含上方每个候选 ID 各一项，禁止新增、遗漏、重复或改写 ID。',
+        ]
+      : []),
   ].join('\n');
 
   return { system: SYSTEM_PROMPT, user };
@@ -227,14 +237,15 @@ export function parseRerankResponse(text: string): RerankResult[] {
 
 // ── OpenAI-compatible chat/completions reranker ───────────────────────────
 
-export class OpenAiCompatibleReranker implements LlmReranker {
+/** DeepSeek chat-completions reranker shared with the Claude Code workflow. */
+export class DeepSeekReranker implements LlmReranker {
   readonly model: string;
 
   constructor(
     model: string,
     private readonly url: string,
     private readonly apiKey: string,
-    private readonly timeoutMs: number = 30_000,
+    private readonly timeoutMs: number = 90_000,
     private readonly maxRetries: number = 2,
     private readonly baseDelayMs: number = 1000,
     private readonly batchSize: number = 20,
@@ -246,11 +257,12 @@ export class OpenAiCompatibleReranker implements LlmReranker {
   async rerank(
     request: SearchRequest,
     candidates: SearchCandidate[],
+    feedback?: RerankValidationFeedback,
   ): Promise<RerankResult[]> {
     if (candidates.length === 0) return [];
 
     if (candidates.length <= this.batchSize) {
-      return this.rerankBatch(request, candidates);
+      return this.rerankBatch(request, candidates, feedback);
     }
 
     // Split into batches and call in parallel.
@@ -260,7 +272,7 @@ export class OpenAiCompatibleReranker implements LlmReranker {
     }
 
     const batchResults = await Promise.all(
-      batches.map((batch) => this.rerankBatch(request, batch)),
+      batches.map((batch) => this.rerankBatch(request, batch, feedback)),
     );
 
     // Merge all batches, sort by score descending.
@@ -274,13 +286,26 @@ export class OpenAiCompatibleReranker implements LlmReranker {
   private async rerankBatch(
     request: SearchRequest,
     candidates: SearchCandidate[],
+    feedback?: RerankValidationFeedback,
   ): Promise<RerankResult[]> {
-    const { system, user } = buildRerankPrompt(request, candidates);
+    // Long repository/path/line IDs are evidence identifiers, not good model
+    // output tokens. Use stable batch-local IDs and restore real IDs before
+    // the shared contract validator runs.
+    const candidateIds = new Map<string, string>();
+    const promptCandidates = candidates.map((candidate, index) => {
+      const promptId = `C${index + 1}`;
+      candidateIds.set(promptId, candidate.id);
+      return { ...candidate, id: promptId };
+    });
+    const { system, user } = buildRerankPrompt(request, promptCandidates, feedback);
 
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
       try {
-        return await this.tryRerank(system, user);
+        return (await this.tryRerank(system, user)).map((result) => ({
+          ...result,
+          id: candidateIds.get(result.id) ?? result.id,
+        }));
       } catch (error: unknown) {
         lastError = error;
         if (attempt === this.maxRetries || !isRetryable(error)) throw error;
@@ -315,24 +340,34 @@ export class OpenAiCompatibleReranker implements LlmReranker {
           { role: 'system', content: system },
           { role: 'user', content: user },
         ],
+        // Ranking needs structured output quickly; DeepSeek thinking mode is
+        // enabled by default and can consume the entire output budget before
+        // producing the JSON array in `content`.
+        thinking: { type: 'disabled' },
         temperature: 0.1,
-        max_tokens: 4096,
+        max_tokens: 2048,
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
 
+    const responseText = await response.text();
     let body: unknown;
     try {
-      body = await response.json();
+      // Some API gateways prepend a BOM or whitespace. Parsing the text here
+      // accepts that response while retaining a bounded diagnostic if a proxy
+      // returned HTML/plain text under a successful HTTP status.
+      body = JSON.parse(responseText.trim());
     } catch {
+      const preview = responseText.trim().replace(/\s+/g, ' ').slice(0, 300);
+      const details = preview ? ` Body (first 300 chars): ${preview}` : '';
       if (!response.ok) {
         throw new RerankHttpError(
           response.status,
-          `Rerank API returned invalid JSON (HTTP ${response.status}).`,
+          `Rerank API returned invalid JSON (HTTP ${response.status}).${details}`,
         );
       }
       throw new Error(
-        `Rerank API returned invalid JSON (HTTP ${response.status}).`,
+        `Rerank API returned invalid JSON (HTTP ${response.status}).${details}`,
       );
     }
 

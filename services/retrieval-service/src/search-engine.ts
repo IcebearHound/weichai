@@ -31,18 +31,10 @@ function expandedLimit(topK: number): number {
   return Math.min(250, Math.max(50, topK * 5));
 }
 
-const CLASS_RRF_BOOST = 0.02;
-
-function hybridScore(
-  reciprocalRank: number,
-  targetKind: SearchRequest['target']['kind'] | undefined,
-  candidateKind: IndexedCodeDocument['kind'],
-): number {
-  const classBoost =
-    targetKind === 'class' && candidateKind === 'class'
-      ? 1 + CLASS_RRF_BOOST
-      : 1;
-  return reciprocalRank * classBoost;
+function candidateKinds(
+  targetKind: SearchRequest['target']['kind'],
+): IndexedCodeDocument['kind'][] {
+  return [targetKind];
 }
 
 function queryText(request: SearchRequest): string {
@@ -73,7 +65,6 @@ function documentText(document: IndexedCodeDocument): string {
 function mergeResults(
   semantic: RetrievedCodeDocument[],
   text: RetrievedCodeDocument[],
-  targetKind?: SearchRequest['target']['kind'],
 ): RetrievedCodeDocument[] {
   const merged = new Map<
     string,
@@ -101,7 +92,7 @@ function mergeResults(
   return [...merged.values()]
     .map(({ document, reciprocalRank }) => ({
       ...document,
-      hybridScore: hybridScore(reciprocalRank, targetKind, document.kind),
+      hybridScore: reciprocalRank,
     }))
     .sort((left, right) => (right.hybridScore ?? 0) - (left.hybridScore ?? 0));
 }
@@ -179,6 +170,7 @@ export class SeekDbSearchEngine implements SearchEngine {
     const filters: SearchFilters = {
       repositories: repositoryScopes(request.repositoryScopes),
       languages,
+      kinds: candidateKinds(request.target.kind),
     };
     const candidateLimit = this.candidateLimitOverride ?? expandedLimit(request.topK);
     const [embedding] = await this.embeddings.embed([text]);
@@ -187,13 +179,14 @@ export class SeekDbSearchEngine implements SearchEngine {
       this.store.semanticSearch(embedding, filters, candidateLimit),
       this.store.textSearch(text, filters, candidateLimit),
     ]);
-    const documents = mergeResults(semantic, fullText, request.target.kind);
+    const documents = mergeResults(semantic, fullText);
 
     const allowedLanguages = new Set(languages);
     return documents
       .filter(
         (document) =>
-          allowedLanguages.size === 0 || allowedLanguages.has(document.language),
+          document.kind === request.target.kind &&
+          (allowedLanguages.size === 0 || allowedLanguages.has(document.language)),
       )
       .map((document) => candidate(document, request))
       .sort((left, right) => {
@@ -206,6 +199,7 @@ export class SeekDbSearchEngine implements SearchEngine {
 
 export const searchInternals = {
   candidateLanguages,
+  candidateKinds,
   expandedLimit,
   mergeResults,
   overlap,

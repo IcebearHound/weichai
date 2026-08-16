@@ -46,8 +46,15 @@ export async function verify(job: VerificationJob, executor: DriverExecutor): Pr
   const sourceResults = sourceRun && sourceRun.exitCode === 0 ? parseSideResults("source", sourceRun.stdout) : null;
   const targetResults = targetRun && targetRun.exitCode === 0 ? parseSideResults("target", targetRun.stdout) : null;
 
+  // 「可用结果」= 该侧解析成功且至少有一个 case 结果。parseSideResults 在 stdout 非法/无 results 数组时
+  // 返回 results=[] + parseErrors 的非空对象(而非 null),仅靠 truthiness 判断会误入比较分支,
+  // 两侧都解析失败时 compareCases 产出空 comparisons → totalCases=0。这里显式要求两侧均有可用结果,
+  // 否则按描述 case 全 DIVERGENT 兜底。
+  const sourceUsable = sourceResults !== null && sourceResults.results.length > 0;
+  const targetUsable = targetResults !== null && targetResults.results.length > 0;
+
   let comparisons: CaseComparison[];
-  if (sourceResults && targetResults) {
+  if (sourceUsable && targetUsable) {
     comparisons = compareCases(sourceResults, targetResults, job.options);
     // 黄金校验 + 需求裁决(需求第一:差分验证是差异探测器而非裁判)。
     const expectedByCase = new Map(job.description.cases.map((c) => [c.id, c.expected]));
@@ -77,8 +84,8 @@ export async function verify(job: VerificationJob, executor: DriverExecutor): Pr
       source: null,
       target: null,
       details: [
-        sourceResults ? "" : "Source side produced no usable results.",
-        targetResults ? "" : "Target side produced no usable results.",
+        sourceUsable ? "" : "Source side produced no usable results.",
+        targetUsable ? "" : "Target side produced no usable results.",
       ].filter(Boolean),
     }));
   }

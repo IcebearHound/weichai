@@ -214,15 +214,18 @@ describe("verify: 双轨道验证编排器", () => {
     expect(report.target).toMatchObject({ language: "Java" });
   });
 
-  it("8. caseId 顺序与描述 cases 顺序一致(按 caseId 对齐)", async () => {
+  it("8. caseId 顺序与描述 cases 顺序一致(两侧驱动输出乱序时仍按描述顺序排序)", async () => {
     const desc = description([caseReturn("a1", str("1")), caseReturn("b2", str("2")), caseReturn("c3", str("3"))]);
     const sourceSpec = side("C#", "source");
     const targetSpec = side("Java", "target");
+    // 目标侧驱动输出乱序(任务指定);源侧也乱序 —— compareCases 按 caseId 集合迭代时
+    // 先取源侧顺序,若 verifier 末尾不按描述 case 顺序排序,comparisons 顺序会泄漏源侧
+    // 驱动顺序(b2→a1→c3),断言即失败;排序守卫由此真实(删除 sort 必须让本测试失败)。
     const executor = agreeingExecutor(
       sourceSpec,
-      stdoutFor([returnResult("a1", str("1")), returnResult("b2", str("2")), returnResult("c3", str("3"))]),
+      stdoutFor([returnResult("b2", str("2")), returnResult("a1", str("1")), returnResult("c3", str("3"))]),
       targetSpec,
-      stdoutFor([returnResult("a1", str("1")), returnResult("b2", str("2")), returnResult("c3", str("3"))]),
+      stdoutFor([returnResult("c3", str("3")), returnResult("b2", str("2")), returnResult("a1", str("1"))]),
     );
 
     const report = await verify({ description: desc, source: sourceSpec, target: targetSpec }, executor);
@@ -286,6 +289,29 @@ describe("verify: 双轨道验证编排器", () => {
     expect(report.comparisons[0]?.verdict).toBe("pass");
     expect(report.comparisons[0]?.requirementVerdict).toBeUndefined();
     expect("requirementVerdict" in report.comparisons[0]!).toBe(false);
+  });
+
+  it("12. 两侧驱动输出均解析失败 → 兜底为全部 case DIVERGENT,totalCases=描述 case 数", async () => {
+    const desc = description([caseReturn("c1", str("hi")), caseReturn("c2", num(42))]);
+    const sourceSpec = side("C#", "source");
+    const targetSpec = side("Java", "target");
+    const executor = agreeingExecutor(sourceSpec, "not-json", targetSpec, "not-json");
+
+    const report = await verify({ description: desc, source: sourceSpec, target: targetSpec }, executor);
+
+    expect(report.source.results?.parseErrors.length).toBeGreaterThan(0);
+    expect(report.target.results?.parseErrors.length).toBeGreaterThan(0);
+    expect(report.totalCases).toBe(desc.cases.length);
+    expect(report.divergentCases).toBe(desc.cases.length);
+    expect(report.passedCases).toBe(0);
+    expect(report.failedCases).toBe(0);
+    for (const cmp of report.comparisons) {
+      expect(cmp.verdict).toBe("divergent");
+    }
+    expect(report.comparisons.map((c) => c.caseId)).toEqual(["c1", "c2"]);
+    const details = report.comparisons.flatMap((c) => c.details);
+    expect(details).toContain("Source side produced no usable results.");
+    expect(details).toContain("Target side produced no usable results.");
   });
 
   it("comparator 自身保持差异探测器语义:compareCases 的 CaseComparison 不带 requirementVerdict", () => {

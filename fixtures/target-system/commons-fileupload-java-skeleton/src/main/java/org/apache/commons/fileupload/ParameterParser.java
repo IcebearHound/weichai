@@ -296,9 +296,41 @@ public class ParameterParser {
         int offset,
         int length,
         char separator) {
-        // TODO(translation): retain the upstream quoted-token, MIME decoding,
-        // escaping, and optional lower-case-name rules.
-        throw new UnsupportedOperationException("TODO: parse header parameters");
+        Map<String, String> params = new HashMap<String, String>();
+        if (charArray == null || length <= 0) {
+            return params;
+        }
+        this.chars = charArray;
+        this.pos = offset;
+        this.len = offset + length;
+        this.i1 = 0;
+        this.i2 = 0;
+
+        while (hasChar()) {
+            String name = parseToken(new char[] { '=', separator });
+            String value = null;
+            if (hasChar() && chars[pos] == '=') {
+                pos++;
+                value = parseQuotedToken(new char[] { separator });
+            }
+            if (hasChar() && chars[pos] == separator) {
+                pos++;
+            }
+            if (name != null && name.length() > 0) {
+                if (lowerCaseNames) {
+                    name = name.toLowerCase(Locale.ROOT);
+                }
+                if (value != null) {
+                    try {
+                        value = MimeUtility.decodeText(value);
+                    } catch (UnsupportedEncodingException e) {
+                        // Ignore and preserve the original value.
+                    }
+                }
+                params.put(name, value);
+            }
+        }
+        return params;
     }
 
 }

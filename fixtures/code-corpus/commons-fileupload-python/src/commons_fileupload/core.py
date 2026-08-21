@@ -550,7 +550,7 @@ class FileUploadBase:
     def get_boundary(content_type: str | None) -> bytes | None:
         parser = ParameterParser()
         parser.set_lower_case_names(True)
-        boundary = parser.parse(content_type).get("boundary")
+        boundary = parser.parse(content_type, (";", ",")).get("boundary")
         return boundary.encode("ascii") if boundary else None
 
     @staticmethod

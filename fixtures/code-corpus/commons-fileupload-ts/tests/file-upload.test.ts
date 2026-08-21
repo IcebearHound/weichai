@@ -115,6 +115,21 @@ test('FileUpload materializes fields and spills larger files', () => {
   attachment.delete();
 });
 
+test('FileUpload accepts comma-separated boundary parameter', () => {
+  const body = Buffer.from(
+    '--comma-boundary\r\n'
+      + 'Content-Disposition: form-data; name="title"\r\n\r\n'
+      + 'report\r\n'
+      + '--comma-boundary--\r\n',
+    'ascii',
+  );
+  const items = new FileUpload(new DiskFileItemFactory()).parseRequest(
+    new InMemoryRequestContext('multipart/form-data, boundary=comma-boundary', body),
+  );
+  assert.equal(items.length, 1);
+  assert.equal(items[0]!.getString(), 'report');
+});
+
 test('FileUpload unfolds headers and reports progress', () => {
   const body = Buffer.from(
     `--${boundary}\r\n`

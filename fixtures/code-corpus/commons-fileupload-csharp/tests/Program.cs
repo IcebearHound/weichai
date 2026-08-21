@@ -12,6 +12,7 @@ static class Program
         MimeDecodersMatchApacheVectors();
         DiskItemsCrossTheConfiguredThreshold();
         UploadParsesFieldsAndFilesInWireOrder();
+        UploadAcceptsCommaSeparatedBoundaryParameter();
         UploadUnfoldsHeadersAndReportsProgress();
         UploadFlattensNestedMultipartMixed();
         UploadItemIteratorPreservesOrder();
@@ -82,6 +83,17 @@ static class Program
         Assert(items[0].IsFormField() && items[0].GetString() == "report", "form field differs");
         Assert(!items[1].IsFormField() && items[1].GetName() == "a.txt", "file item differs");
         Assert(items[1].GetString() == "hello", "file body differs");
+    }
+
+    private static void UploadAcceptsCommaSeparatedBoundaryParameter()
+    {
+        const string body = "--comma-boundary\r\n"
+            + "Content-Disposition: form-data; name=\"title\"\r\n\r\n"
+            + "report\r\n"
+            + "--comma-boundary--\r\n";
+        var upload = new FileUpload(new DiskFileItemFactory());
+        var items = upload.ParseRequest(new MemoryRequestContext(body, "multipart/form-data, boundary=comma-boundary"));
+        Assert(items.Count == 1 && items[0].GetString() == "report", "comma-separated boundary differs");
     }
 
     private static void UploadUnfoldsHeadersAndReportsProgress()

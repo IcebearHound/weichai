@@ -133,7 +133,7 @@ public abstract class FileUploadBase
     {
         var parser = new ParameterParser();
         parser.SetLowerCaseNames(true);
-        var boundary = parser.Parse(contentType, ';').GetValueOrDefault("boundary");
+        var boundary = parser.Parse(contentType, ';', ',').GetValueOrDefault("boundary");
         return string.IsNullOrEmpty(boundary) ? null : Encoding.ASCII.GetBytes(boundary);
     }
 

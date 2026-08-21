@@ -124,6 +124,19 @@ class CommonsFileUploadTests(unittest.TestCase):
             items[1].delete()
             self.assertFalse(Path(directory, "missing").exists())
 
+    def test_parse_request_accepts_comma_separated_boundary_parameter(self) -> None:
+        body = (
+            "--comma-boundary\r\n"
+            'Content-Disposition: form-data; name="title"\r\n\r\n'
+            "report\r\n"
+            "--comma-boundary--\r\n"
+        ).encode("ascii")
+        items = FileUpload(DiskFileItemFactory()).parse_request(
+            InMemoryRequestContext("multipart/form-data, boundary=comma-boundary", body)
+        )
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].get_string(), "report")
+
     def test_parse_request_unfolds_headers_and_reports_progress(self) -> None:
         body = (
             f"--{BOUNDARY}\r\n"

@@ -249,7 +249,8 @@ public final class MimeUtility {
             } else if (encoding.equals(QUOTEDPRINTABLE_ENCODING_MARKER)) { // maybe quoted printable.
                 QuotedPrintableDecoder.decode(encodedData, out);
             } else {
-                throw new UnsupportedEncodingException("Unknown RFC 2047 encoding: " + encoding);
+                // Unknown encoding: return the original word as-is, matching source behavior.
+                return word;
             }
             // get the decoded byte data and convert into a string.
             byte[] decodedData = out.toByteArray();

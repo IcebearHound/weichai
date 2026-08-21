@@ -114,7 +114,8 @@ export class ParameterParser {
     if (separators.length === 0) return parsed;
     const selected = separators.reduce((earliest, item) => {
       const found = value.indexOf(item);
-      return found >= 0 && found < value.indexOf(earliest) ? item : earliest;
+      const earliestFound = value.indexOf(earliest);
+      return found >= 0 && (earliestFound < 0 || found < earliestFound) ? item : earliest;
     }, separators[0]!);
 
     for (const fragment of ParameterParser.split(value, selected)) {
@@ -463,7 +464,7 @@ export abstract class FileUploadBase {
   static getBoundary(contentType: string | undefined): Buffer | undefined {
     const parser = new ParameterParser();
     parser.setLowerCaseNames(true);
-    const boundary = parser.parse(contentType).get('boundary');
+    const boundary = parser.parse(contentType, [';', ',']).get('boundary');
     return boundary ? Buffer.from(boundary, 'ascii') : undefined;
   }
 

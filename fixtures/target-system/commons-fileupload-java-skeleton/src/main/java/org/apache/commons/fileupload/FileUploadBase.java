@@ -332,9 +332,11 @@ public abstract class FileUploadBase {
      */
     public FileItemIterator getItemIterator(RequestContext ctx)
     throws FileUploadException, IOException {
-        // TODO(translation): construct the streaming iterator while preserving
-        // the upstream size-limit and nested multipart semantics.
-        throw new UnsupportedOperationException("TODO: implement multipart item iteration");
+        try {
+            return new FileItemIteratorImpl(ctx);
+        } catch (FileUploadIOException e) {
+            throw (FileUploadException) e.getCause();
+        }
     }
 
     /**
@@ -351,9 +353,51 @@ public abstract class FileUploadBase {
      */
     public List<FileItem> parseRequest(RequestContext ctx)
             throws FileUploadException {
-        // TODO(translation): materialize items in wire order, clean up partly
-        // created files on failure, and preserve item/file/request limits.
-        throw new UnsupportedOperationException("TODO: parse multipart request");
+        List<FileItem> items = new ArrayList<FileItem>();
+        boolean successful = false;
+        try {
+            FileItemIterator iter = getItemIterator(ctx);
+            FileItemFactory fac = getFileItemFactory();
+            final byte[] buffer = new byte[Streams.DEFAULT_BUFFER_SIZE];
+            if (fac == null) {
+                throw new NullPointerException("No FileItemFactory has been set.");
+            }
+            while (iter.hasNext()) {
+                if (items.size() == fileCountMax) {
+                    throw new FileCountLimitExceededException(ATTACHMENT, getFileCountMax());
+                }
+                final FileItemStream item = iter.next();
+                final String fileName = ((FileItemIteratorImpl.FileItemStreamImpl) item).name;
+                FileItem fileItem = fac.createItem(item.getFieldName(), item.getContentType(),
+                                                   item.isFormField(), fileName);
+                items.add(fileItem);
+                try {
+                    Streams.copy(item.openStream(), fileItem.getOutputStream(), true, buffer);
+                } catch (FileUploadIOException e) {
+                    throw (FileUploadException) e.getCause();
+                } catch (IOException e) {
+                    throw new IOFileUploadException(format("Processing of %s request failed. %s",
+                                                           MULTIPART_FORM_DATA, e.getMessage()), e);
+                }
+                fileItem.setHeaders(item.getHeaders());
+            }
+            successful = true;
+            return items;
+        } catch (FileUploadIOException e) {
+            throw (FileUploadException) e.getCause();
+        } catch (IOException e) {
+            throw new FileUploadException(e.getMessage(), e);
+        } finally {
+            if (!successful) {
+                for (FileItem fileItem : items) {
+                    try {
+                        fileItem.delete();
+                    } catch (Exception ignored) {
+                        // Best-effort cleanup preserves the original parsing failure.
+                    }
+                }
+            }
+        }
     }
 
     /**

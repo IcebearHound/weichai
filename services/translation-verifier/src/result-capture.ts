@@ -9,7 +9,8 @@ export interface CaseResult {
 }
 
 export interface SideResults {
-  side: "source" | "target";
+  /** 侧标记:现有双轨为 "source" / "target";变体轨道为 "Variant_<k>" 等,仅作日志/报告标签。 */
+  side: string;
   results: CaseResult[];
   rawStdout: string;
   parseErrors: string[];
@@ -18,7 +19,7 @@ export interface SideResults {
 const MAX_DEPTH = 12;
 const MAX_ITEMS = 200;
 
-export function parseSideResults(side: "source" | "target", stdout: string): SideResults {
+export function parseSideResults(side: string, stdout: string): SideResults {
   const parseErrors: string[] = [];
   let results: CaseResult[] = [];
   let raw: unknown;

@@ -16,3 +16,6 @@ export type {
 export { generateDriverSource, generateSourceDriverSource } from "./driver/driver-codegen.js";
 export type { SourceInvocation } from "./driver/source-invocation.js";
 export type { TestDescription, TypedValue, VerifierLanguage } from "./description.js";
+
+// AID / TrickCatcher 变体轨道(参考组 vs 目标的行为差异差分,oracle 来自共识/行为差异)。
+export * from "./variant/index.js";

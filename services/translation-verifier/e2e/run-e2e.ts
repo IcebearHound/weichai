@@ -11,6 +11,9 @@
  * - 描述生成:有 DEEPSEEK_API_KEY → TestMigratorAgent(claude 子进程,需求第一);
  *   无 key → 用 --fixture(手写语言无关描述 JSON)保证离线可跑通。
  * - 验证机制:双侧真实工具链(javac/dotnet)编译运行 → 差分比较 + 需求黄金校验。
+ * - 阶段 D(可选 --analyzer):DISTINCT 描述引导的分支一致性分析 —— 缺陷源实现 + 忠实镜像的
+ *   翻译产物(双侧共享缺陷)在旧流程下差分全 PASS(行为等价率高但漏检);Analyzer 以 NLD 为锚
+ *   把"两侧一致但都偏离需求"的 case 标 diverges/flag-fail,演示检错率(DDR)提升。需 LLM key。
  * - 注入 bug 演示:把目标方法体替换为固定错误返回值 → 重新 verify → 断言检出 FAIL。
  * - 修复闭环演示(有 key):RepairLoop + RepairAgent(claude 子进程)从注入 bug 的
  *   目标文件出发,最多 maxRounds 轮修复,rebuildTargetSide 用修复产物替换目标文件。
@@ -28,6 +31,8 @@ import { verify, type VerificationJob, type VerificationReport } from "../src/ve
 import { formatReport } from "../src/cli-helpers.js";
 import { TestMigratorAgent } from "../src/test-migrator.js";
 import { RepairAgent, RepairLoop } from "../src/repair-loop.js";
+import { LlmAnalyzer } from "../src/analyzer.js";
+import { runConsistencyVerification } from "../src/consistency-verifier.js";
 import { createLogger, type Logger } from "../src/logger.js";
 
 // ---------------------------------------------------------------------------
@@ -47,6 +52,8 @@ export interface E2EOptions {
   maxRounds: number;
   timeoutMs: number;
   json: boolean;
+  /** --analyzer:开启阶段 D(DISTINCT 分支一致性分析,双侧共享缺陷演示)。 */
+  analyzer: boolean;
 }
 
 const VALUE_FLAGS = new Set([
@@ -62,7 +69,7 @@ const VALUE_FLAGS = new Set([
   "--max-rounds",
   "--timeout-ms",
 ]);
-const BOOLEAN_FLAGS = new Set(["--json"]);
+const BOOLEAN_FLAGS = new Set(["--json", "--analyzer"]);
 
 /**
  * 解析 CLI 参数(`--key value` 格式)。必填:--requirement/--source-method/--target-file;
@@ -80,11 +87,13 @@ export function parseArgs(argv: string[]): E2EOptions | { error: string } {
     maxRounds: 3,
     timeoutMs: 300_000,
     json: false,
+    analyzer: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i] as string;
     if (BOOLEAN_FLAGS.has(flag)) {
       if (flag === "--json") options.json = true;
+      if (flag === "--analyzer") options.analyzer = true;
       continue;
     }
     if (VALUE_FLAGS.has(flag)) {
@@ -498,7 +507,86 @@ export async function runE2E(argv: string[]): Promise<number> {
     logger.error("阶段[A] 未全 PASS:翻译产物与源侧存在差异(或偏离需求)");
   }
 
-  // 7. 阶段 B:注入 bug 演示 —— 把目标方法体替换为固定错误返回值,验证差分机制能检出 FAIL。
+  // 7. 阶段 D(可选,--analyzer):DISTINCT 描述引导的分支一致性分析 —— 双侧共享缺陷演示。
+  //    旧流程预期:缺陷源实现 + 忠实镜像的翻译产物 → 差分两侧一致 → 全 PASS(行为等价率高但漏检);
+  //    Analyzer 以 NLD 为锚:分支清单判定缺陷分支 nldConsistent=false → expected 偏离需求 →
+  //    标记 diverges/flag-fail → 阶段 D 判定检出(对应论文 DDR 提升)。需要 DEEPSEEK_API_KEY。
+  //    演示 job 使用 --fixture 描述(确定性:expected 复制缺陷 → 差分全 PASS → Analyzer 改判检出;
+  //    真实 LLM 描述在增强 prompt 下可能已含正确 expected,阶段 A 即检出,Analyzer 增量不可见)。
+  if (parsed.analyzer) {
+    if (!apiKey || apiKey.trim() === "") {
+      logger.error("阶段[D] 需要 DEEPSEEK_API_KEY(--api-key 可覆盖)");
+      console.error("error: --analyzer requires DEEPSEEK_API_KEY (or --api-key).");
+      return 2;
+    }
+    logger.info("阶段[D]:Analyzer 分支一致性分析(双侧共享缺陷演示,LLM 判定,无插桩)");
+    let stageDDescription: TestDescription = description;
+    try {
+      stageDDescription = validateDescription(JSON.parse(readFileSync(resolve(parsed.fixture), "utf-8")));
+      logger.info(`阶段[D] 使用 fixture 描述(确定性演示):${parsed.fixture}`);
+    } catch (error) {
+      logger.warn(`阶段[D] fixture 描述不可用,回退当前描述:${errorMessage(error)}`);
+    }
+    stageDDescription = {
+      ...stageDDescription,
+      target: {
+        ...stageDDescription.target,
+        language: "Java",
+        className: targetClassName,
+        method: targetMethodName,
+        isStatic: true,
+      },
+      requirement: parsed.requirement,
+    };
+    // 按 stageDDescription 重建双侧驱动(与阶段 A 的 sourceSide/targetSide 分离)。
+    const stageDSourceSide: SideSpec = {
+      language: parsed.sourceLang,
+      driverSource: generateSourceDriverSource(stageDDescription, sourceInvocation),
+      sourceFiles: [{ relativePath: `source.${sourceExtension}`, content: sourceContent }],
+    };
+    const stageDTargetSide = (content: string): SideSpec => ({
+      language: "Java",
+      driverSource: generateDriverSource(stageDDescription),
+      sourceFiles: [{ relativePath: `${targetClassName.split(".").pop()}.java`, content }],
+    });
+    const analyzer = new LlmAnalyzer({ apiKey, logger, timeoutMs: parsed.timeoutMs });
+    let consistencyResult;
+    try {
+      consistencyResult = await runConsistencyVerification(
+        { description: stageDDescription, source: stageDSourceSide, target: stageDTargetSide(targetContent) },
+        executor,
+        analyzer,
+        { augmentationBudget: 1, logger },
+      );
+    } catch (error) {
+      logger.error(`阶段[D] Analyzer 分析失败:${errorMessage(error)}`);
+      console.error(`error: stage D analyzer failed: ${errorMessage(error)}`);
+      return 2;
+    }
+    const { consistency } = consistencyResult;
+    const total = consistency.inventory.branches.length;
+    const covered = consistency.coverage.covered.length;
+    const diverging = consistency.cases.filter((c) => c.nldVerdict === "diverges" || c.recommend === "flag-fail");
+    logger.info(
+      `阶段[D] 分支清单:${total} 个分支(方法 ${consistency.inventory.methodId}),差分覆盖率 ${covered}/${total}`,
+    );
+    notice(`Analyzer 分支清单:${total} 个分支,差分覆盖率 ${covered}/${total}${consistency.augmentations.length > 0 ? `,augmentation 补测 ${consistency.augmentations.length} 个 case` : ""}`);
+    for (const c of diverging) {
+      notice(`Analyzer 检出 [${c.caseId}] nldVerdict=${c.nldVerdict} recommend=${c.recommend}: ${c.reasons.join("; ")}`);
+      logger.warn(`阶段[D] 检出 case ${c.caseId}: ${c.reasons.join("; ")}`);
+    }
+    if (diverging.length > 0) {
+      logger.info(`阶段[D] 检出 ${diverging.length} 个"双侧一致但偏离需求"的 case(旧流程全 PASS,检错率提升)`);
+      notice(`阶段[D] 结果:检出 ${diverging.length} 个 case 两侧差分一致但偏离需求 —— 旧流程全 PASS,新流程检出(对应 DDR 提升)。`);
+    } else {
+      exitCode = 1;
+      logger.error("阶段[D] 未检出偏离需求的 case:Analyzer 未能识别共享缺陷(演示失败)");
+    }
+  } else {
+    logger.info("阶段[D]:跳过(未传 --analyzer;开启需 DEEPSEEK_API_KEY 或 --api-key)");
+  }
+
+  // 8. 阶段 B:注入 bug 演示 —— 把目标方法体替换为固定错误返回值,验证差分机制能检出 FAIL。
   logger.info("阶段[B]:注入 bug 演示(目标方法体 → 固定错误返回值)");
   const buggyTarget = injectBug(targetContent, targetClassName, targetMethodName);
   logger.debug(`注入 bug 后的目标文件:\n${buggyTarget}`);

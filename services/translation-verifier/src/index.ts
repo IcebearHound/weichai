@@ -4,6 +4,21 @@ export { verify } from "./verifier.js";
 export type { VerificationJob, VerificationReport, SideRunInfo } from "./verifier.js";
 export { TestMigratorAgent } from "./test-migrator.js";
 export type { MigrationInput, TestMigratorOptions } from "./test-migrator.js";
+export { MitGenMigratorAgent } from "./mitgen/mitgen-migrator.js";
+export type { MitGenOptions } from "./mitgen/mitgen-migrator.js";
+export type {
+  CodeFragment,
+  FragmentKind,
+  FragmentScore,
+  Correspondence,
+  Reachability,
+  FragmentReport,
+  MitGenResult,
+  RankWeights,
+} from "./mitgen/types.js";
+export { extractFragments } from "./mitgen/fragment-extractor.js";
+export { heuristicScore, rankFragments } from "./mitgen/fragment-prioritizer.js";
+export { instrumentFragment, extractMarkers } from "./mitgen/splicer.js";
 export { RealDriverExecutor } from "./executor.js";
 export type {
   CompileOutcome,

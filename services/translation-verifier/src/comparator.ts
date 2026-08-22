@@ -62,6 +62,11 @@ function normalizeExceptionType(type: string, aliases: Record<string, string>): 
   return aliases[simple] ?? simple;
 }
 
+/**
+ * 纯差分比较:不带 expected 调用即纯差分(verdict: pass/fail/divergent),
+ * 由调用方决定是否做需求黄金校验(见 validateAgainstExpected / verifier.ts)。
+ * 冒烟管线(smoke-agent)即以此模式复用——一致性判断 = 差分 + LLM 语义裁决,不依赖预置黄金值。
+ */
 export function compareCases(
   source: SideResults,
   target: SideResults,

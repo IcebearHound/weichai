@@ -49,6 +49,67 @@
 | `cli.ts` | CLI 编排入口 |
 | `e2e/` | E2E 验收脚本 + fixtures(验证机制 / 注入 bug / 修复闭环演示) |
 
+## AID 变体轨道(方向 3,LLM + 差分测试)
+
+> 对应论文 *LLM-Powered Test Case Generation for Detecting Tricky Bugs*(AID / TrickCatcher,ACL 2025)。
+> 设计文档:`.superpowers/sdd/4-test-methods/test-aid/design.md`。
+
+现有 `verify` 双轨是「源侧 A vs 目标侧 B」单参考差分(依赖 description 手写/LLM 列举的固定输入与
+`expected` 黄金值)。**变体轨道**在此基础上叠加一条平行验证线:oracle 从**行为差异**派生,不依赖
+LLM 单点推理生成的 expected。三步法(论文核心):
+
+1. **PUT-guided 变体生成**:LLM 基于「需求 + 源方法 + 目标契约」生成 N 个源语言替代实现
+   (`variantCount`,默认 3);用基础输入集做**同语言差分**过滤(与源方法行为一致才保留);
+2. **Generator-based 输入生成**:LLM 写 TS 输入生成器脚本(把逻辑与计算分离),批量产出
+   `TypedValue` 输入(默认 50),与 description 基础 cases 合成为「扩展 description」一次编译一次运行;
+3. **多样性优先差分**:参考组 `{源} ∪ {保留变体}` vs C# 目标,oracle 由规则 R0 构造
+   (不采用多数投票 —— 相似缺陷会污染多数):参考组全一致 → 共识比较;参考组分歧且目标 ∉ 参考输出集
+   → fail(高置信);目标 ∈ 参考输出集 → disputed(低置信,复用 divergent 枚举 + details 标注);
+   k-共识辅助(≥2 参考一致且与目标相悖 → fail,对应论文 DFP 触发)。
+
+### 模块清单(`src/variant/`)
+
+| 模块 | 职责 |
+| --- | --- |
+| `prompts.ts` | 三个提示词模板(变体生成 / 输入生成器;借鉴 TrickCatcher PromptTemplates) |
+| `variant-generator.ts` | `VariantGeneratorAgent`:生成 N 个源语言变体(类名改写 `Variant_<k>`、package 剥离、重试 ≤2) |
+| `variant-filter.ts` | `filterVariants`:基础输入集 + 同语言差分过滤(编译失败/行为不一致剔除) |
+| `input-generator.ts` | `InputGeneratorAgent` + `runInputGenerator`(TS 脚本执行 / 校验 / 去重 / 多样性采样)+ `toBatchDescription` |
+| `consensus.ts` | `buildConsensus` / `compareAgainstConsensus`:规则 R0(含相似缺陷污染反例测试) |
+| `aid-verifier.ts` | `verifyWithVariants`:变体 → 过滤 → 输入 → 差分 → `AIDVerificationReport` |
+
+与现有双轨的关系:`verifier.ts` 仅提取了 `executeSide` 公共辅助(行为不变,现有测试全绿);
+`verify` 语义零改动。`AIDVerificationReport` 独立于 `VerificationReport`,含变体清单、oracle
+置信度、consensus-vs-expected 冲突标注。
+
+### AID E2E 用法
+
+```bash
+# 离线验收(无 key:fixture 变体 + fixture 输入生成器,真实 javac/dotnet)
+DEEPSEEK_API_KEY= npx tsx services/translation-verifier/e2e/run-e2e-aid.ts \
+  --requirement "解码 MIME 编码文本,非编码文本原样返回" \
+  --source-method services/translation-verifier/e2e/fixtures/samples/mime-util-source.cs \
+  --target-file services/translation-verifier/e2e/fixtures/samples/mime-util-target.java
+
+# 有 key:追加阶段 C 真实 LLM 变体 + 输入生成器(演示,不影响退出码)
+npx tsx services/translation-verifier/e2e/run-e2e-aid.ts --requirement "..." --source-method ... --target-file ...
+```
+
+退出码:0=确定性验收全 PASS(阶段 A 干净目标无 fail、阶段 B off-by-one 注入被 AID 检出);
+1=阶段 A/B 验收 FAIL;2=参数/运行错误。阶段 B 输出检出率指标矩阵
+(`baselineDetectionRate` / `aidDetectionRate` / `detectionGain` / `falsePositiveRate` /
+`oracleAgreement` / `variantPassRate`,见设计文档 5.3)。
+
+### 已知限制(变体轨道)
+
+- 仅适合**纯函数式方法**(与现有验证器一致);`entryKind: "constructor"` 场景本期不支持(设计 R6);
+- 一期不做严格输入有效性校验(EvalPlus 式 contract 校验;设计 R4),非法输入可能让参考组与目标
+  「一致地异常」或「一致地错」;
+- 真实 LLM 变体可能趋同(设计 R1)或继承源缺陷(设计 R5):AID 报告中的 consensus-vs-expected
+  冲突列表供人工复核;二期可与方向 2(DISTINCT)的 NLD 锚定协作;
+- 跨语言异常别名表缺 Java `IllegalCharsetNameException`(真实 LLM 输入含非法字符集名时会产生
+  跨语言噪声 fail)—— 记录待二期补全别名表。
+
 ## 快速开始
 
 ```bash

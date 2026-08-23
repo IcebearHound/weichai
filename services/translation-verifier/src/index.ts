@@ -58,3 +58,33 @@ export type {
 
 // AID / TrickCatcher 变体轨道(参考组 vs 目标的行为差异差分,oracle 来自共识/行为差异)。
 export * from "./variant/index.js";
+
+// 统一测试质量评估框架(接口 + 五维指标 + 五个生成器适配器 + CLI)。
+export * from "./quality/types.js";
+export { loadDataset, validateDataset, buildTask, alignDescriptionTarget, findRepoRoot } from "./quality/dataset.js";
+export type { LoadResult, TaskBuildResult } from "./quality/dataset.js";
+export { createAdapter, ADAPTER_NAMES, countedClaude } from "./quality/adapters.js";
+export type { AdapterContext, CountedClaude } from "./quality/adapters.js";
+export { BaselineAdapter } from "./quality/adapters/baseline.js";
+export { SmokeAdapter, RecordingExecutor, splitSideSpec, smokeReportHasBugSignal, smokeReportBugCases } from "./quality/adapters/smoke.js";
+export { DistinctAdapter, buildSourceSide, buildTargetSide } from "./quality/adapters/distinct.js";
+export { AidAdapter } from "./quality/adapters/aid.js";
+export type { AidDetectionResult } from "./quality/adapters/aid.js";
+export { MitGenAdapter } from "./quality/adapters/mitgen.js";
+export {
+  compileGeneratedTest,
+  buildConformancePrompt,
+  parseConformanceVerdict,
+  judgeConformance,
+  targetViolations,
+  detectInjectedBug,
+  injectBug,
+  runCleanDifferential,
+  falsePositiveFromClean,
+  falsePositiveFromSmoke,
+} from "./quality/metrics.js";
+export type { CleanCheck } from "./quality/metrics.js";
+export { evaluate, sampleEntries, aggregateMetrics, defaultBugKinds } from "./quality/evaluate.js";
+export type { EvaluateOptions, EvaluationReport } from "./quality/evaluate.js";
+export { parseCliArgs, formatTable, runQualityCli } from "./quality/cli.js";
+export type { CliOptions } from "./quality/cli.js";

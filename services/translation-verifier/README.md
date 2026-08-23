@@ -50,6 +50,7 @@
 | `claude-client.ts` | claude 子进程 LLM 封装(可注入 `spawnClaude`) |
 | `logger.ts` | 零依赖日志系统(文件 DEBUG 全量 + 控制台分级;默认写 monorepo 根 `logs/`) |
 | `cli.ts` | CLI 编排入口 |
+| `quality/` | **统一测试质量评估框架**(接口 + 五维指标 + 五个生成器适配器 + CLI,见下文) |
 | `e2e/` | E2E 验收脚本 + fixtures(验证机制 / 注入 bug / 修复闭环演示) |
 
 ## AID 变体轨道(方向 3,LLM + 差分测试)
@@ -181,6 +182,61 @@ npx tsx services/translation-verifier/src/cli.ts \
   `--source-module`，类方法再提供 `--source-class`，模块级函数可省略类名。
 - `TestDescription.target.language` 仍只支持 Java/C#；Python/TypeScript 是源侧执行适配器，不会改变目标翻译契约。
 - 翻译由 agent 在调度时完成,CLI 不做 LLM 调用。
+
+## 统一测试质量评估框架(`src/quality/`)
+
+> 接口规范:`/.superpowers/sdd/4-test-methods/quality/quality-spec.md`。
+
+对五个测试生成器(baseline / smoke / distinct / aid / mitgen)在同一数据集上做**统一五维评估**:
+
+| 指标 | 定义 | 度量方式 |
+| --- | --- | --- |
+| **CSR 编译通过率** | 生成测试能否编译 | 描述型:描述→驱动→`executor.compile`;runner 型:runner 文件→compile |
+| **Conformance** | expected 与**需求**一致(而非检索代码) | LLM 三态评审 `conforms/diverges/unverified`(需求+差异标注+检索代码+测试) |
+| **检出率** | 注入 bug 后能否检出 | 复用 `bug-injection.ts` 四策略;描述型=目标偏离需求黄金值;runner 型=机械差分 |
+| **误报率** | 干净翻译不误报 | 同检出流程但不注入(描述型以 `requirementVerdict=target-diverges` 为准) |
+| **成本** | 每方法 LLM 调用次数 | 计数 spawnClaude 包装统计(含重试) |
+
+### 模块与适配器
+
+| 文件 | 职责 |
+| --- | --- |
+| `types.ts` | `QualityTask` / `GeneratedTest` / `GeneratorAdapter` / `QualityMetrics` / `DatasetEntry`(接口规范 2.1/2.2) |
+| `dataset.ts` | 数据集加载校验 + `buildTask`(Java 源侧自动收集 maven 项目全部源文件) |
+| `adapters.ts` | 适配器注册表 + `countedClaude`(成本统计) |
+| `adapters/baseline.ts` | `TestMigratorAgent` → 描述 |
+| `adapters/smoke.ts` | `SmokeAgent` 完整循环 → runner + SmokeReport(RecordingExecutor 还原 runner) |
+| `adapters/distinct.ts` | baseline 描述 + `LlmAnalyzer` 分支一致性 → flag-fail 信号 |
+| `adapters/aid.ts` | `verifyWithVariants` 变体轨道 → 共识差分信号(`detectOnTarget` 检出) |
+| `adapters/mitgen.ts` | `MitGenMigratorAgent` 片段级微观生成(源侧实跑录制 expected) |
+| `metrics.ts` | CSR / conformance 三态评审 / 检出率 / 误报率 / 成本 |
+| `evaluate.ts` | 编排(quick=抽样+1 策略 / full=全部+4 策略)+ 聚合 |
+| `cli.ts` | CLI 入口 |
+
+### CLI 用法
+
+```bash
+# 真实运行(需 DEEPSEEK_API_KEY 或 --api-key;javac/dotnet 工具链)
+npx tsx services/translation-verifier/src/quality/cli.ts \
+  --dataset services/translation-verifier/src/quality/dataset/sample.json \
+  --adapters baseline,smoke,distinct,aid,mitgen --quick
+
+# JSON 输出 / 跳过 conformance 评审(离线跑 CSR/检出率/误报率)
+npx tsx services/translation-verifier/src/quality/cli.ts \
+  --dataset <数据集.json> --adapters baseline,distinct --full --json --skip-conformance
+```
+
+- `--quick`(默认):等距抽样 `--sample-size N`(默认 5)个 entry + 1 个注入策略(默认 off-by-one);
+  `--full`:全部 entry + 4 策略(fixed-value / off-by-one / condition-flip / constant-wrong);
+- 缺 `DEEPSEEK_API_KEY` 时 CLI 明确报错退出(不静默崩溃);单测/离线验证注入 fake spawnClaude + FakeDriverExecutor;
+- 描述型适配器在评估前会把描述 target 对齐到数据集 entry 的签名(类/方法/静态/构造参数);
+- smoke 适配器需要磁盘上的源/目标文件(`--root` 解析 entry 文件路径,默认自动探测仓库根)。
+
+### 语义要点(数据集「需求 R ≠ 检索代码 S」设计)
+
+差分 fail 本身不等于检出——正确实现需求的翻译在 R/S 分歧点上**合法偏离**检索代码。因此描述型
+检出/误报以「目标是否偏离需求黄金值(expected)」为信号(`requirementVerdict=target-diverges` 或黄金
+改判 fail),而非原始差分 fail;smoke runner 型以「干净目标 vs 注入目标」的机械差分隔离注入 bug。
 
 ## 语言无关测试描述(schema v1.0)
 

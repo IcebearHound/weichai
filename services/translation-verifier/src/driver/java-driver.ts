@@ -165,9 +165,11 @@ function isNumberType(t: string): boolean {
   return t === "Integer" || t === "Long" || t === "Double" || t === "Number";
 }
 
-/** number 的 Java 装箱类型名:Integer(≤ int.MaxValue)/ Long(≤ long.MaxValue)/ Double。 */
+/** number 的 Java 装箱类型名:Integer(≤ int.MaxValue 且 ≥ int.MinValue)/ Long(≤ long.MaxValue)/ Double。 */
 function javaNumberTypeName(value: number): "Integer" | "Long" | "Double" {
-  if (Number.isInteger(value) && Math.abs(value) <= 2147483647) return "Integer";
+  // int 范围含 -2147483648:JS 的 Math.abs(-2^31)=2^31 会误入 Long 分支(装箱 Integer 变 Long,
+  // 且字面量 -2147483648L 无法传给 int 参数)。Java 的 -2147483648 是合法 int 字面量。
+  if (Number.isInteger(value) && value >= -2147483648 && value <= 2147483647) return "Integer";
   // 同 javaNumberLiteral:9223372036854775807 字面量舍入为 2^63,必须用 <,±2^63 归 Double。
   if (Number.isInteger(value) && Math.abs(value) < 9223372036854775807) return "Long";
   return "Double";
@@ -177,7 +179,8 @@ function javaNumberLiteral(value: number): string {
   if (Number.isNaN(value)) return "Double.NaN";
   if (value === Infinity) return "Double.POSITIVE_INFINITY";
   if (value === -Infinity) return "Double.NEGATIVE_INFINITY";
-  if (Number.isInteger(value) && Math.abs(value) <= 2147483647) return String(value);
+  // int 范围含 -2147483648(JS Math.abs 陷阱见 javaNumberTypeName)。
+  if (Number.isInteger(value) && value >= -2147483648 && value <= 2147483647) return String(value);
   // 注意:long.MaxValue(9223372036854775807)在 JS 中舍入为 2^63,故用 < 而非 <=;否则 ±2^63 会生成
   // 9223372036854775808L(超出 long 范围,integer number too large)。±2^63 落入下方 double 分支。
   if (Number.isInteger(value) && Math.abs(value) < 9223372036854775807) return `${String(value)}L`;

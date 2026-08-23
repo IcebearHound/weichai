@@ -229,7 +229,9 @@ function csharpNumberLiteral(value: number): string {
   if (Number.isNaN(value)) return "double.NaN";
   if (value === Infinity) return "double.PositiveInfinity";
   if (value === -Infinity) return "double.NegativeInfinity";
-  if (Number.isInteger(value) && Math.abs(value) <= 2147483647) return String(value);
+  // int 范围含 -2147483648:JS 的 Math.abs(-2^31)=2^31 会误入 long 分支,生成 -2147483648L,
+  // 而 int 参数无法接收 long 字面量(CS1503)。C#/Java 的 -2147483648 都是合法 int 字面量。
+  if (Number.isInteger(value) && value >= -2147483648 && value <= 2147483647) return String(value);
   // 注意:long.MaxValue(9223372036854775807)在 JS 中舍入为 2^63,故用 < 而非 <=;否则 ±2^63 会生成
   // 9223372036854775808L(超出 long 范围,CS1021)。±2^63 落入下方 double 指数分支。
   if (Number.isInteger(value) && Math.abs(value) < 9223372036854775807) return `${String(value)}L`;
@@ -240,7 +242,8 @@ function csharpNumberLiteral(value: number): string {
 
 /** number 的 C# 类型名:int(≤ int.MaxValue)/ long(≤ long.MaxValue)/ double。 */
 function csharpNumberTypeName(value: number): "int" | "long" | "double" {
-  if (Number.isInteger(value) && Math.abs(value) <= 2147483647) return "int";
+  // 同 csharpNumberLiteral:int 范围含 -2147483648(JS Math.abs 陷阱见上)。
+  if (Number.isInteger(value) && value >= -2147483648 && value <= 2147483647) return "int";
   // 同 csharpNumberLiteral:9223372036854775807 字面量舍入为 2^63,必须用 <,±2^63 归 double。
   if (Number.isInteger(value) && Math.abs(value) < 9223372036854775807) return "long";
   return "double";

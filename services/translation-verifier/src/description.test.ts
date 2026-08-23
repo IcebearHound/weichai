@@ -230,6 +230,87 @@ describe("validateDescription", () => {
   });
 });
 
+describe("validateDescription: case.branches(DISTINCT 分支目标标签,向后兼容)", () => {
+  it("accepts a case with a valid branches string array", () => {
+    const desc = validDescription({
+      cases: [
+        {
+          ...validDescription().cases[0],
+          branches: ["nominal", "b1: 空值返回 false"],
+        },
+      ],
+    });
+    expect(validateDescription(desc)).toEqual(desc);
+  });
+
+  it("rejects branches that is not an array", () => {
+    expect(() =>
+      validateDescription(
+        validDescription({
+          cases: [{ ...validDescription().cases[0], branches: "nominal" as never }],
+        }),
+      ),
+    ).toThrow("cases[0].branches must be an array when present.");
+    expect(() =>
+      validateDescription(
+        validDescription({
+          cases: [{ ...validDescription().cases[0], branches: 42 as never }],
+        }),
+      ),
+    ).toThrow("cases[0].branches must be an array when present.");
+  });
+
+  it("rejects branches with non-string or empty entries", () => {
+    expect(() =>
+      validateDescription(
+        validDescription({
+          cases: [{ ...validDescription().cases[0], branches: ["nominal", 7] as never }],
+        }),
+      ),
+    ).toThrow("cases[0].branches[1] must be a non-empty string.");
+    expect(() =>
+      validateDescription(
+        validDescription({
+          cases: [{ ...validDescription().cases[0], branches: ["   "] }],
+        }),
+      ),
+    ).toThrow("cases[0].branches[0] must be a non-empty string.");
+  });
+
+  it("accepts legacy descriptions without branches (backward compatibility)", () => {
+    // 旧 fixture:case 只有 id/inputs/expected,无 description 也无 branches,仍应通过校验。
+    const legacy = validDescription({
+      cases: [
+        {
+          id: "legacy-case",
+          inputs: [{ type: "number", value: 1 }],
+          expected: { kind: "return", value: { type: "number", value: 2 } },
+        },
+      ],
+    });
+    expect(validateDescription(legacy)).toEqual(legacy);
+  });
+});
+
+describe("canonicalDescriptionJson: case.branches 序列化", () => {
+  it("serializes branches when present and omits when absent", () => {
+    const withBranches = validDescription({
+      cases: [
+        {
+          ...validDescription().cases[0],
+          branches: ["boundary", "off-by-one"],
+        },
+      ],
+    });
+    const canonicalWith = canonicalDescriptionJson(withBranches);
+    expect(JSON.parse(canonicalWith).cases[0].branches).toEqual(["boundary", "off-by-one"]);
+
+    const withoutBranches = validDescription();
+    const canonicalWithout = canonicalDescriptionJson(withoutBranches);
+    expect("branches" in JSON.parse(canonicalWithout).cases[0]).toBe(false);
+  });
+});
+
 describe("canonicalDescriptionJson", () => {
   it("produces identical output for equivalent objects with different property order", () => {
     const a: TestDescription = {

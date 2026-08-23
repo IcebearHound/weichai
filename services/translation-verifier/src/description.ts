@@ -16,6 +16,11 @@ export type TypedValue =
 export interface TestCase {
   id: string;
   description?: string;
+  /**
+   * 分支目标标签(可选,Generator 输出应携带):nominal | boundary | error 或显式分支条件摘要。
+   * 由 Analyzer 作为"声称覆盖"锚点消费;旧 fixture 无该字段仍合法(向后兼容)。
+   */
+  branches?: string[];
   inputs: TypedValue[];
   expected:
     | { kind: "return"; value: TypedValue }
@@ -78,6 +83,14 @@ function validateCase(value: unknown, path: string): void {
   if (typeof c.id !== "string" || !c.id.trim()) throw new Error(`${path}.id must be a non-empty string.`);
   if (c.description !== undefined && typeof c.description !== "string") {
     throw new Error(`${path}.description must be a string when present.`);
+  }
+  if (c.branches !== undefined) {
+    if (!Array.isArray(c.branches)) throw new Error(`${path}.branches must be an array when present.`);
+    c.branches.forEach((b, i) => {
+      if (typeof b !== "string" || !b.trim()) {
+        throw new Error(`${path}.branches[${i}] must be a non-empty string.`);
+      }
+    });
   }
   if (!Array.isArray(c.inputs)) throw new Error(`${path}.inputs must be an array.`);
   c.inputs.forEach((v, i) => validateTypedValue(v, `${path}.inputs[${i}]`));
@@ -180,6 +193,7 @@ export function canonicalDescriptionJson(description: TestDescription): string {
     cases: description.cases.map((c) => ({
       id: c.id,
       ...(c.description === undefined ? {} : { description: c.description }),
+      ...(c.branches === undefined ? {} : { branches: c.branches }),
       inputs: c.inputs.map(canonicalTypedValue),
       expected:
         c.expected.kind === "return"

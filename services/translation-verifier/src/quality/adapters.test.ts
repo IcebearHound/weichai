@@ -194,6 +194,75 @@ describe("SmokeAdapter", () => {
     const files = splitSideSpec(runner!.side, TARGET_CS);
     expect(files.map((f) => f.path)).toEqual(["Driver.cs", "Helper.cs"]);
   });
+
+  it("多文件 C# 项目:标记为模块文件内容(而非全项目拼接)才能命中编译侧", async () => {
+    const executor = new FakeDriverExecutor({
+      compileResults: { success: true, errors: [], output: "" },
+      runResults: { exitCode: 0, stdout: "{}", stderr: "" },
+    });
+    // 冒烟编译侧只含目标模块文件(磁盘原内容)+ runner 附加文件。
+    const moduleContent = "namespace Apache.Commons.FileUpload { public static class Base64Decoder { } }";
+    const joinedProject = `${moduleContent}\npublic class GlobalUsings { }`; // 旧实现:全项目拼接标记
+    const recorder = new RecordingExecutor(executor, { sourceContent: SOURCE_JAVA, targetContent: moduleContent });
+    await recorder.compile({
+      language: "C#",
+      driverSource: "public class Driver { public static void Main(string[] args) {} }",
+      sourceFiles: [
+        { relativePath: "Base64Decoder.cs", content: moduleContent },
+        { relativePath: "Helper.cs", content: "public class Helper { }" },
+      ],
+    });
+    const runner = recorder.targetRunner();
+    expect(runner).not.toBeNull();
+    expect(runner!.files.map((f) => f.path)).toEqual(["Driver.cs", "Helper.cs"]);
+    // 旧实现(全项目拼接)在真实数据集(多文件项目)下必然失配。
+    expect(moduleContent).not.toBe(joinedProject);
+  });
+
+  it("完整冒烟循环(多文件 C# 项目任务)→ 目标侧 runner 仍被捕获", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "quality-smoke-multi-"));
+    try {
+      writeFileSync(join(dir, "Source.java"), SOURCE_JAVA, "utf-8");
+      writeFileSync(join(dir, "Target.cs"), TARGET_CS, "utf-8");
+      const entry: DatasetEntry = {
+        ...ENTRY,
+        source: { ...ENTRY.source, file: "Source.java" },
+        target: { ...ENTRY.target, file: "Target.cs" },
+      };
+      // 模拟真实数据集:C# 目标侧 sourceFiles 为整项目文件(项目相对路径),非单文件。
+      const task: QualityTask = {
+        entry,
+        source: { language: "Java", driverSource: "", sourceFiles: [{ relativePath: "Source.java", content: SOURCE_JAVA }] },
+        target: {
+          language: "C#",
+          driverSource: "",
+          sourceFiles: [
+            { relativePath: "Commons/FileUpload/Target.cs", content: TARGET_CS },
+            { relativePath: "Commons/FileUpload/GlobalUsings.cs", content: "global using System;\n" },
+          ],
+        },
+      };
+      const responses = [
+        JSON.stringify({ action: "plan_smoke", params: { cases: [{ id: "c01", intent: "常规输入返回 +1" }] } }),
+        JSON.stringify({ action: "write_runner", params: { side: "source", language: "Java", files: [{ path: "SmokeRunner.java", content: "public class SmokeRunner { public static void main(String[] args) {} }" }] } }),
+        JSON.stringify({ action: "write_runner", params: { side: "target", language: "C#", files: [{ path: "Driver.cs", content: "public class Driver { public static void Main(string[] args) {} }" }] } }),
+        JSON.stringify({ action: "compile_runner", params: { side: "source" } }),
+        JSON.stringify({ action: "compile_runner", params: { side: "target" } }),
+        JSON.stringify({ action: "run_runner", params: { side: "source" } }),
+        JSON.stringify({ action: "run_runner", params: { side: "target" } }),
+        JSON.stringify({ action: "compare", params: {} }),
+        JSON.stringify({ action: "judge", params: { verdicts: [{ caseId: "c01", decision: "pass", reasoning: "两侧一致" }] } }),
+        JSON.stringify({ action: "finish", params: { summary: "验收完成" } }),
+      ];
+      const adapter = new SmokeAdapter({ ...ctx(scriptedSpawn(responses)), rootDir: dir });
+      const test = await adapter.generateTest(task);
+      expect(test.kind).toBe("runner");
+      expect(test.runner?.files.length).toBeGreaterThan(0);
+      expect(test.runner?.files.some((f) => f.path === "Driver.cs")).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

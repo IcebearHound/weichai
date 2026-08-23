@@ -14,7 +14,7 @@
  * 见 AdapterContext.rootDir),且 single-file 模式下目标文件须自包含
  * (编译不依赖同项目其他类)。
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { SmokeAgent } from "../../smoke-agent.js";
 import type { SmokeReport } from "../../smoke-types.js";
@@ -46,8 +46,8 @@ export class SmokeAdapter implements GeneratorAdapter {
         `smoke 适配器需要磁盘上的源/目标文件(--root 指向仓库根):${task.entry.source.file} / ${task.entry.target.file}`,
       );
     }
-    const targetContent = task.target.sourceFiles.map((f) => f.content).join("\n");
-    const sourceContent = task.source.sourceFiles.map((f) => f.content).join("\n");
+    const targetContent = readFileSync(targetFile, "utf-8");
+    const sourceContent = readFileSync(sourceFile, "utf-8");
 
     // 记录循环内全部 compile 调用,循环结束后按模块内容归类还原目标侧 runner。
     const recorder = new RecordingExecutor(this.#ctx.executor, { sourceContent, targetContent });

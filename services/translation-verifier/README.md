@@ -43,6 +43,9 @@
 | `comparator.ts` | 差分比较器(数值容差 / 跨语言异常等价类 / 语义集合比较) |
 | `verifier.ts` | 双轨道验证编排 + 量化报告 + 需求裁决(`requirementVerdict`) |
 | `test-migrator.ts` | 测试迁移 Agent(需求第一,生成语言无关描述) |
+| `mitgen/` | MitGen 微观测试生成(片段级):片段划分/排序/定向输入生成/插桩可达性验证/目标侧对应检查 |
+| `code-utils.ts` | 轻量源码词法工具(matchingBrace/skipQuoted/escapeRegExp,零依赖) |
+| `llm-json.ts` | LLM 输出 JSON 解析(stripFences/extractJson/coerceTypedValue) |
 | `repair-loop.ts` | 反馈修复闭环(诊断携带需求判据,≤3 轮) |
 | `claude-client.ts` | claude 子进程 LLM 封装(可注入 `spawnClaude`) |
 | `logger.ts` | 零依赖日志系统(文件 DEBUG 全量 + 控制台分级;默认写 monorepo 根 `logs/`) |
@@ -133,6 +136,34 @@ npx tsx services/translation-verifier/e2e/run-e2e.ts --requirement "..." \
 
 E2E 三阶段:①验证翻译产物(差分 + 需求黄金校验)→ ②注入 bug 演示检出 FAIL → ③修复闭环
 (RepairLoop + RepairAgent)收敛。退出码:全部 PASS=0;有 FAIL=1;参数/运行错误=2。
+
+## MitGen(片段级微观测试生成)
+
+`--generator mitgen` 切换描述生成器为 `MitGenMigratorAgent`(与 `TestMigratorAgent` 平级,
+输出 schema 兼容 `TestDescription`,verifier/comparator/driver/executor 零改动):
+
+- **片段划分**(`mitgen/fragment-extractor.ts`):把源方法轻量词法分解为 guard/分支/循环/switch-case/return
+  等片段(零依赖,Java/C# 优先,Python/TS best-effort),每个片段带 `pathCondition`(通往该片段的路径条件)
+  与启发式特征;直线方法/定位失败退化为整方法单片段。
+- **片段选择**(`mitgen/fragment-prioritizer.ts`):启发式预筛 + LLM 单次批量打分(CamPri 简化版),
+  排序键 = w1·风险 + w2·可修复性 + w3·启发式分(默认 0.5/0.3/0.2,可注入),选 Top-K。
+- **片段级生成 + 回射**(`mitgen/mitgen-migrator.ts` + `mitgen/splicer.ts`):对每个选中片段,
+  LLM 受 pathCondition 引导生成整方法输入(不需推理输出)→ 在源方法副本的片段位置前插桩 marker
+  (`mitgen/splicer.ts` 纯字符串操作,单语句分支自动包块保持语义)→ 用现有 source driver 实跑,
+  解析 marker 序列验证可达性并**录制 expected(源侧实跑即 ground truth,规避 LLM 写 expected 不可靠)**;
+  不可达输入反馈 LLM 重试 1 次,仍失败丢弃。最后做目标侧片段对应检查(correspondence,只进报告不进 verdict)。
+- 预期成本:每方法 LLM 调用 ≈ 1 次打分 + F 次输入生成 + 重试 + 1 次对应检查(F=选中片段数)。
+
+```bash
+# MitGen 端到端(需 DEEPSEEK_API_KEY);--branch-bug 追加「分支级 bug 注入 + MitGen 检出」演示
+npx tsx services/translation-verifier/e2e/run-e2e.ts --requirement "..." \
+  --source-method ... --target-file ... --source-lang C# \
+  --target-class ... --target-method ... --generator mitgen --branch-bug --timeout-ms 300000
+```
+
+已知限制:片段级 expected 由源侧实跑录制,若源侧实现自身偏离需求(如字符集支持差异),
+录制结果会固化源侧行为——与现有管线一致,由 `requirementVerdict` 黄金校验兜底改判;
+correspondence 仅进报告,差分结果仍是权威裁判。
 
 ## CLI 用法
 

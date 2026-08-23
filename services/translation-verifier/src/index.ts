@@ -19,6 +19,21 @@ export { DescriptionValidator, buildValidatorFeedbackPrompt, filterDriverErrors 
 export type { DescriptionValidatorOptions } from "./validator.js";
 export { runConsistencyVerification } from "./consistency-verifier.js";
 export type { ConsistencyResult, ConsistencyVerifierOptions } from "./consistency-verifier.js";
+export { MitGenMigratorAgent } from "./mitgen/mitgen-migrator.js";
+export type { MitGenOptions } from "./mitgen/mitgen-migrator.js";
+export type {
+  CodeFragment,
+  FragmentKind,
+  FragmentScore,
+  Correspondence,
+  Reachability,
+  FragmentReport,
+  MitGenResult,
+  RankWeights,
+} from "./mitgen/types.js";
+export { extractFragments } from "./mitgen/fragment-extractor.js";
+export { heuristicScore, rankFragments } from "./mitgen/fragment-prioritizer.js";
+export { instrumentFragment, extractMarkers } from "./mitgen/splicer.js";
 export { RealDriverExecutor } from "./executor.js";
 export type {
   CompileOutcome,

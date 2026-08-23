@@ -1,6 +1,7 @@
 import { runClaude, type ClaudeClientOptions } from "./claude-client.js";
 import { validateDescription, type TestDescription } from "./description.js";
 import type { SourceInvocation } from "./driver/source-invocation.js";
+import { extractJson, coerceTypedValue } from "./llm-json.js";
 import { createLogger, type Logger } from "./logger.js";
 
 export interface MigrationInput {
@@ -22,6 +23,8 @@ export interface MigrationInput {
   targetSignature?: string;
   /** 完整目标类上下文，用于类级入口(尤其是构造函数)推导合法输入。 */
   targetContext?: string;
+  /** 目标侧翻译产物源码(MitGen 片段对应性检查用;其余生成器忽略)。 */
+  targetCode?: string;
   target: {
     language: "Java" | "C#";
     className: string;
@@ -126,12 +129,6 @@ export class TestMigratorAgent {
   }
 }
 
-function stripFences(raw: string): string {
-  const trimmed = raw.trim();
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return fenced?.[1] ?? trimmed;
-}
-
 export function buildMigrationPrompt(input: MigrationInput): string {
   // 需求第一:REQUIREMENT 段在最前;源码/测试为参考实现。
   const validationFeedback = input.validationFeedback?.trim()
@@ -168,19 +165,6 @@ ${input.existingTests}
 ` : ""}`;
 }
 
-function extractJson(raw: string): string {
-  const stripped = stripFences(raw).trim();
-  try {
-    JSON.parse(stripped);
-    return stripped;
-  } catch {
-    const start = stripped.indexOf("{");
-    const end = stripped.lastIndexOf("}");
-    if (start < 0 || end <= start) throw new Error("Claude output did not contain a JSON object.");
-    return stripped.slice(start, end + 1);
-  }
-}
-
 function coerceDescription(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const description = value as Record<string, unknown>;
@@ -205,25 +189,4 @@ function coerceDescription(value: unknown): unknown {
   };
 }
 
-function coerceTypedValue(value: unknown): unknown {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const record = value as Record<string, unknown>;
-    if (typeof record.type === "string" && "value" in record) {
-      return { ...record, value: record.type === "list" && Array.isArray(record.value)
-        ? record.value.map(coerceTypedValue)
-        : record.type === "map" && record.value && typeof record.value === "object"
-          ? Object.fromEntries(Object.entries(record.value as Record<string, unknown>).map(([key, item]) => [key, coerceTypedValue(item)]))
-          : record.value };
-    }
-    return {
-      type: "map",
-      value: Object.fromEntries(Object.entries(record).map(([key, item]) => [key, coerceTypedValue(item)])),
-    };
-  }
-  if (Array.isArray(value)) return { type: "list", value: value.map(coerceTypedValue) };
-  if (value === null) return { type: "null", value: null };
-  if (typeof value === "string") return { type: "string", value };
-  if (typeof value === "number" && Number.isFinite(value)) return { type: "number", value };
-  if (typeof value === "boolean") return { type: "boolean", value };
-  return { type: "string", value: String(value) };
-}
+

@@ -86,6 +86,7 @@ describe("extractJavaClass / renameClassName / stripPackageDeclaration", () => {
 describe("VariantGeneratorAgent.generateVariants", () => {
   it("生成 N 个变体,类名依次为 Variant_1..N,package 剥离", async () => {
     const agent = new VariantGeneratorAgent({
+      apiKey: "offline-test",
       spawnClaude: fakeSpawn(JAVA_CLASS, JAVA_CLASS.replace("MimeUtility", "MimeUtilX")),
       logger: SILENT,
     });
@@ -105,7 +106,7 @@ describe("VariantGeneratorAgent.generateVariants", () => {
       seenPrompts.push(args[1] as string);
       return { stdout: JAVA_CLASS, exitCode: 0 };
     };
-    const agent = new VariantGeneratorAgent({ spawnClaude: spawn, logger: SILENT });
+    const agent = new VariantGeneratorAgent({ apiKey: "offline-test", spawnClaude: spawn, logger: SILENT });
     await agent.generateVariants({ ...BASE_INPUT, variantCount: 3 });
     expect(seenPrompts).toHaveLength(3);
     // 三份 prompt 的策略提示互不相同(且非空)。
@@ -120,6 +121,7 @@ describe("VariantGeneratorAgent.generateVariants", () => {
 
   it("LLM 返回非代码 → 重试;第二次成功", async () => {
     const agent = new VariantGeneratorAgent({
+      apiKey: "offline-test",
       spawnClaude: fakeSpawn("Sorry, I cannot produce code.", JAVA_CLASS),
       logger: SILENT,
     });
@@ -129,6 +131,7 @@ describe("VariantGeneratorAgent.generateVariants", () => {
 
   it("重试耗尽仍失败 → 抛错", async () => {
     const agent = new VariantGeneratorAgent({
+      apiKey: "offline-test",
       spawnClaude: fakeSpawn("no class here", "still no class", "again no class"),
       logger: SILENT,
     });
@@ -137,6 +140,7 @@ describe("VariantGeneratorAgent.generateVariants", () => {
 
   it("LLM 输出过短(提取后 <40 字符)→ 视为非法并重试", async () => {
     const agent = new VariantGeneratorAgent({
+      apiKey: "offline-test",
       spawnClaude: fakeSpawn("public class Tiny {}", JAVA_CLASS),
       logger: SILENT,
     });

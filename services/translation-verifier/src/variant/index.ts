@@ -26,5 +26,5 @@ export { InputGeneratorAgent, runInputGenerator, wrapGeneratorScript, dedupeInpu
 export type { GeneratedInputs } from "./input-generator.js";
 export { buildConsensus, compareAgainstConsensus, oracleAsResult, DISPUTED_DETAIL_PREFIX } from "./consensus.js";
 export type { ConsensusOracle, ConsensusOptions, ConsensusOutputGroup } from "./consensus.js";
-export { verifyWithVariants } from "./aid-verifier.js";
-export type { AIDJob, AIDJobOptions, AIDVerificationReport } from "./aid-verifier.js";
+export { verifyTargetAgainstAIDBaseline, verifyWithVariants } from "./aid-verifier.js";
+export type { AIDJob, AIDJobOptions, AIDReplayBaseline, AIDVerificationReport } from "./aid-verifier.js";

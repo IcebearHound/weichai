@@ -10,7 +10,7 @@ import { FakeDriverExecutor, type CompileOutcome, type RunOutcome, type SideSpec
 import { createLogger } from "../logger.js";
 import { InputGeneratorAgent } from "./input-generator.js";
 import { VariantGeneratorAgent } from "./variant-generator.js";
-import { verifyWithVariants } from "./aid-verifier.js";
+import { verifyTargetAgainstAIDBaseline, verifyWithVariants } from "./aid-verifier.js";
 
 const SILENT = createLogger("test", { disabled: true });
 
@@ -89,11 +89,14 @@ function inputByCase(): Map<string, number> {
  * - 其余按 sourceFiles 内容判定行为:Math.Abs → abs;x*3 → buggy;否则 x*2;
  * - 变体编译:含 "this is not csharp" → 编译失败。
  */
-function makeExecutor(options: { generatorFailure?: boolean } = {}): FakeDriverExecutor {
+function makeExecutor(options: { generatorFailure?: boolean; targetCompileFailure?: boolean } = {}): FakeDriverExecutor {
   const inputs = inputByCase();
   return new FakeDriverExecutor({
     compileResults: (side: SideSpec): CompileOutcome => {
       const joined = side.sourceFiles.map((f) => f.content).join("");
+      if (options.targetCompileFailure && side.language === "Java") {
+        return { success: false, errors: ["target compile failed"], output: "" };
+      }
       if (joined.includes("this is not csharp")) return { success: false, errors: ["CS1002"], output: "" };
       return { success: true, errors: [], output: "" };
     },
@@ -129,8 +132,8 @@ function fakeSpawn(...outputs: string[]): SpawnClaude {
 
 function makeAgents(variantOutputs: string[]): { variants: VariantGeneratorAgent; inputs: InputGeneratorAgent } {
   return {
-    variants: new VariantGeneratorAgent({ spawnClaude: fakeSpawn(...variantOutputs), logger: SILENT }),
-    inputs: new InputGeneratorAgent({ spawnClaude: fakeSpawn(GENERATOR_SCRIPT), logger: SILENT }),
+    variants: new VariantGeneratorAgent({ apiKey: "offline-test", spawnClaude: fakeSpawn(...variantOutputs), logger: SILENT }),
+    inputs: new InputGeneratorAgent({ apiKey: "offline-test", spawnClaude: fakeSpawn(GENERATOR_SCRIPT), logger: SILENT }),
   };
 }
 
@@ -158,7 +161,7 @@ describe("verifyWithVariants: AID 编排(全 fake)", () => {
       SILENT,
     );
 
-    expect(report.schemaVersion).toBe("1.0");
+    expect(report.schemaVersion).toBe("1.1");
     // 变体 1 保留,变体 2 编译失败被剔除。
     expect(report.variants).toHaveLength(2);
     expect(report.variants[0]?.passes).toBe(true);
@@ -190,6 +193,39 @@ describe("verifyWithVariants: AID 编排(全 fake)", () => {
     expect(report.passRate).toBe(0);
     const [first] = report.comparisons;
     expect(first?.details).toContain("return value mismatch");
+  });
+
+  it("冻结 clean 基线后只重放目标侧，不重新生成输入、变体或 oracle", async () => {
+    const executor = makeExecutor();
+    const clean = await verifyWithVariants(
+      { description: description(), source: sourceSide, target: targetSide(TARGET_CLEAN), options: { inputCount: 4 } },
+      executor,
+      makeAgents([VARIANT_OK]),
+      SILENT,
+    );
+    const compileCalls = executor.compileCalls.length;
+    const runCalls = executor.runCalls.length;
+
+    const replay = await verifyTargetAgainstAIDBaseline(targetSide(TARGET_BUGGY), clean.baseline, executor, SILENT);
+
+    expect(replay.failedCases).toBe(5);
+    expect(replay.baseline).toBe(clean.baseline);
+    expect(replay.baseline.batchDescription.cases.map((c) => c.id)).toEqual(clean.baseline.batchDescription.cases.map((c) => c.id));
+    // 重放只编译和运行注入后的目标，绝不能再跑 TypeScript 输入器、源侧或变体侧。
+    expect(executor.compileCalls).toHaveLength(compileCalls + 1);
+    expect(executor.runCalls).toHaveLength(runCalls + 1);
+    expect(executor.runCalls.at(-1)?.language).toBe("Java");
+  });
+
+  it("clean target 无法完整执行时，基线明确标记为不可用于注入检出", async () => {
+    const report = await verifyWithVariants(
+      { description: description(), source: sourceSide, target: targetSide(TARGET_CLEAN), options: { inputCount: 4 } },
+      makeExecutor({ targetCompileFailure: true }),
+      makeAgents([VARIANT_OK]),
+      SILENT,
+    );
+
+    expect(report.baseline.cleanTarget).toEqual({ usable: false, note: "target-compile-failed" });
   });
 
   it("参考组内部分歧且目标命中源侧输出 → disputed(divergent 枚举 + details 标注,不判 fail)", async () => {

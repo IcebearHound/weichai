@@ -193,7 +193,7 @@ npx tsx services/translation-verifier/src/cli.ts \
 | --- | --- | --- |
 | **CSR 编译通过率** | 生成测试能否编译 | 描述型:描述→驱动→`executor.compile`;runner 型:runner 文件→compile |
 | **Conformance** | expected 与**需求**一致(而非检索代码) | LLM 三态评审 `conforms/diverges/unverified`(需求+差异标注+检索代码+测试) |
-| **检出率** | 注入 bug 后能否检出 | 复用 `bug-injection.ts` 四策略;描述型=目标偏离需求黄金值;runner 型=机械差分 |
+| **检出率** | 注入 bug 后能否检出 | 复用 `bug-injection.ts` 四策略;描述型=目标偏离需求黄金值;runner 型=机械差分。报告同时列出 attempted / eligible / injection-failed / unverified，rate 只以 eligible 为分母 |
 | **误报率** | 干净翻译不误报 | 同检出流程但不注入(描述型以 `requirementVerdict=target-diverges` 为准) |
 | **成本** | 每方法 LLM 调用次数 | 计数 spawnClaude 包装统计(含重试) |
 
@@ -207,7 +207,7 @@ npx tsx services/translation-verifier/src/cli.ts \
 | `adapters/baseline.ts` | `TestMigratorAgent` → 描述 |
 | `adapters/smoke.ts` | `SmokeAgent` 完整循环 → runner + SmokeReport(RecordingExecutor 还原 runner) |
 | `adapters/distinct.ts` | baseline 描述 + `LlmAnalyzer` 分支一致性 → flag-fail 信号 |
-| `adapters/aid.ts` | `verifyWithVariants` 变体轨道 → 共识差分信号(`detectOnTarget` 检出) |
+| `adapters/aid.ts` | `verifyWithVariants` 变体轨道 → 冻结 clean oracle；`detectOnTarget` 仅重放注入目标，避免随机变体或输入污染检出率 |
 | `adapters/mitgen.ts` | `MitGenMigratorAgent` 片段级微观生成(源侧实跑录制 expected) |
 | `metrics.ts` | CSR / conformance 三态评审 / 检出率 / 误报率 / 成本 |
 | `evaluate.ts` | 编排(quick=抽样+1 策略 / full=全部+4 策略)+ 聚合 |

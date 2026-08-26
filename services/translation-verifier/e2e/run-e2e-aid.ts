@@ -25,7 +25,7 @@ import { verify, type VerificationJob, type VerificationReport } from "../src/ve
 import { createLogger, type Logger } from "../src/logger.js";
 import { VariantGeneratorAgent } from "../src/variant/variant-generator.js";
 import { InputGeneratorAgent } from "../src/variant/input-generator.js";
-import { verifyWithVariants, type AIDVerificationReport } from "../src/variant/aid-verifier.js";
+import { verifyTargetAgainstAIDBaseline, verifyWithVariants, type AIDVerificationReport } from "../src/variant/aid-verifier.js";
 import { DISPUTED_DETAIL_PREFIX } from "../src/variant/consensus.js";
 import {
   BUG_KINDS,
@@ -456,6 +456,16 @@ export async function runE2EAid(argv: string[]): Promise<number> {
     exitCode = 1;
     logger.error("阶段[A] 未全 PASS:干净目标被 AID 判 fail(误报)");
   }
+  const cleanBaselineNote =
+    cleanReport.baseline.cleanTarget.usable !== true
+      ? cleanReport.baseline.cleanTarget.note ?? "missing-clean-target-status"
+      : cleanReport.baseline.oracle.some((entry) => entry.confidence === "consensus")
+        ? undefined
+        : "no-consensus-oracle";
+  if (cleanBaselineNote !== undefined) {
+    exitCode = 1;
+    logger.error(`阶段[A] clean 基线不可用于注入检出:${cleanBaselineNote}`);
+  }
 
   // 6. 阶段 B:注入精细 bug → AID 检出 + 检出率指标矩阵。
   logger.info("阶段[B]:注入精细 bug(off-by-one / fixed-value / condition-flip / constant-wrong)");
@@ -468,23 +478,49 @@ export async function runE2EAid(argv: string[]): Promise<number> {
   }));
   const offByOneDetected = new Map<InjectedBugKind, boolean>();
   for (const { kind, method } of INJECTION_MATRIX) {
+    if (cleanBaselineNote !== undefined) {
+      details.push({ method, kind, baselineDetected: false, aidDetected: false, note: `clean-baseline-unusable:${cleanBaselineNote}` });
+      continue;
+    }
     let buggyTarget: string;
     try {
       buggyTarget = injectFineGrainedBug(targetContent, kind, targetClassName, method).source;
     } catch (error) {
-      logger.warn(`注入 ${kind} 失败(跳过):${errorMessage(error)}`);
+      const note = `injection-failed:${errorMessage(error)}`;
+      details.push({ method, kind, baselineDetected: false, aidDetected: false, note });
+      logger.warn(`注入 ${kind} 失败:${errorMessage(error)}`);
       continue;
     }
-    // baseline:现有双轨(固定 description 输入 + 单参考差分)。
-    const baselineReport: VerificationReport = await verify(
-      { description, source: sourceSide, target: targetSide(buggyTarget) },
-      executor,
-      logger,
-    );
+    let baselineReport: VerificationReport;
+    let aidReport: AIDVerificationReport;
+    try {
+      // baseline:现有双轨(固定 description 输入 + 单参考差分)。
+      baselineReport = await verify(
+        { description, source: sourceSide, target: targetSide(buggyTarget) },
+        executor,
+        logger,
+      );
+      // AID:只重放阶段 A 已冻结的 batch/oracle，不能重新生成随机输入或变体。
+      aidReport = await verifyTargetAgainstAIDBaseline(targetSide(buggyTarget), cleanReport.baseline, executor, logger);
+    } catch (error) {
+      const note = `detection-failed:${errorMessage(error)}`;
+      details.push({ method, kind, baselineDetected: false, aidDetected: false, note });
+      logger.warn(`注入 ${kind} 的检测执行失败:${errorMessage(error)}`);
+      continue;
+    }
     const baselineDetected = baselineReport.failedCases > 0;
-    // AID:变体轨道。
-    const aidReport = await verifyWithVariants(job(targetSide(buggyTarget)), executor, fixtureAgents(), logger);
-    const aidDetected = aidReport.failedCases > 0;
+    const aidTargetUsable = cleanReport.baseline.batchDescription.cases.every((testCase) =>
+      aidReport.comparisons.some((comparison) => comparison.caseId === testCase.id && comparison.target !== null),
+    );
+    if (!aidTargetUsable) {
+      details.push({ method, kind, baselineDetected, aidDetected: false, note: "aid-target-unusable" });
+      logger.warn(`注入 ${kind} 的 AID 目标结果不完整，试验不计入检出率`);
+      continue;
+    }
+    const cleanFailedCaseIds = new Set(cleanReport.baseline.cleanFailedCaseIds);
+    const aidDetected = aidReport.comparisons.some(
+      (comparison) => comparison.verdict === "fail" && !cleanFailedCaseIds.has(comparison.caseId),
+    );
     offByOneDetected.set(kind, aidDetected);
     details.push({ method, kind, baselineDetected, aidDetected });
     logger.info(
@@ -497,11 +533,11 @@ export async function runE2EAid(argv: string[]): Promise<number> {
   metrics.variantPassRate = quality.variantPassRate;
   // 硬断言:off-by-one 必须被 AID 检出(边界输入覆盖是 AID 的核心卖点)。
   const offByOneResult = offByOneDetected.get("off-by-one");
-  if (offByOneResult === false) {
+  if (offByOneResult !== true) {
     exitCode = 1;
-    logger.error("阶段[B] off-by-one 注入 bug 未被 AID 检出");
-    console.error("error: injected off-by-one bug was NOT detected by the AID variant track.");
-  } else if (offByOneResult === true) {
+    logger.error("阶段[B] off-by-one 注入 bug 未形成可检出证据");
+    console.error("error: injected off-by-one bug was not successfully detected by the AID variant track.");
+  } else {
     logger.info("阶段[B] off-by-one 注入 bug 被 AID 检出:FAIL(符合预期)");
   }
   if (!parsed.skipMetrics) {

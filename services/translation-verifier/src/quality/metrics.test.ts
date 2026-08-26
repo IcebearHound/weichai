@@ -408,6 +408,17 @@ describe("injectBug", () => {
     expect(result.note).toContain("注入失败");
     expect(result.source).toBe(CSHARP_SOURCE);
   });
+
+  it("无可替换 token 的策略 → 注入失败，而不是把原目标计入检出率", () => {
+    const noMutationPoint = `public class Target {
+  public static string Compute(string value) {
+    return value;
+  }
+}`;
+    const result = injectBug(noMutationPoint, "off-by-one", ENTRY);
+    expect(result.note).toContain("注入失败");
+    expect(result.source).toBe(noMutationPoint);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -453,7 +464,7 @@ describe("aggregateMetrics", () => {
     ...partial,
   });
 
-  it("汇总五维:检出率排除无效试验、误报率按有效 entry", () => {
+  it("汇总五维:报告所有注入尝试，检出率只使用 eligible 试验", () => {
     const metrics = aggregateMetrics([
       entry("a", {
         csr: true,
@@ -468,14 +479,18 @@ describe("aggregateMetrics", () => {
       entry("b", {
         csr: false,
         conformance: { verdict: "diverges", reasoning: "" },
-        detections: [{ kind: "off-by-one", detected: false, note: "target-compile-failed" }],
+        detections: [
+          { kind: "off-by-one", detected: false, note: "target-compile-failed", status: "unverified" },
+          { kind: "fixed-value", detected: false, note: "injection failed", status: "injection-failed" },
+        ],
         falsePositive: true,
         llmCalls: 1,
       }),
     ]);
     expect(metrics.csr).toBe(0.5);
     expect(metrics.conformance.rate).toBe(0.5);
-    expect(metrics.detectionRate).toBe(0.5); // 1 检出 / 2 有效(1 个 note 排除)
+    expect(metrics.detectionRate).toBe(0.5); // 1 检出 / 2 eligible
+    expect(metrics.detection).toEqual({ attempted: 4, eligible: 2, injectionFailed: 1, unverified: 1, detected: 1 });
     expect(metrics.falsePositiveRate).toBe(0.5);
     expect(metrics.llmCalls).toBe(3);
   });
@@ -485,6 +500,7 @@ describe("aggregateMetrics", () => {
       entry("a", { detections: [{ kind: "off-by-one", detected: false, note: "no-runner" }] }),
     ]);
     expect(metrics.detectionRate).toBe(0);
+    expect(metrics.detection).toEqual({ attempted: 1, eligible: 0, injectionFailed: 0, unverified: 1, detected: 0 });
     expect(metrics.csr).toBe(1);
   });
 

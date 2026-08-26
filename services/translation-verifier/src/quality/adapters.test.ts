@@ -339,7 +339,7 @@ function aidSpawn(): SpawnClaude {
   );
 }
 
-function aidExecutor(cleanTarget: string, buggyMark = "-999") {
+function aidExecutor(cleanTarget: string, buggyMark = "-999", partialResultMark = "partial-target") {
   return new FakeDriverExecutor({
     compileResults: { success: true, errors: [], output: "" },
     runResults: (side) => {
@@ -351,6 +351,9 @@ function aidExecutor(cleanTarget: string, buggyMark = "-999") {
       const results = ids.map((id) => ({ caseId: id, outcome: "return", returnValue: { type: "number", value } }));
       if (side.language === "C#") {
         const module = side.sourceFiles.find((f) => f.relativePath.endsWith(".cs"))?.content ?? "";
+        if (module.includes(partialResultMark)) {
+          return { exitCode: 0, stdout: JSON.stringify({ results: results.slice(0, 1) }), stderr: "" };
+        }
         if (module !== cleanTarget && module.includes(buggyMark)) {
           for (const r of results) r.returnValue = { type: "number", value: -999 };
         }
@@ -377,12 +380,23 @@ describe("AidAdapter", () => {
 
   it("detectOnTarget:注入 bug 后共识差分 fail > clean → 检出", async () => {
     const executor = aidExecutor(TARGET_CS);
-    const adapter = new AidAdapter({ ...ctx(aidSpawn(), executor), variantCount: 1, inputCount: 2 });
+    const scripted = aidSpawn();
+    let spawnCalls = 0;
+    const spawn: SpawnClaude = async (args, env, timeoutMs) => {
+      spawnCalls += 1;
+      return scripted(args, env, timeoutMs);
+    };
+    const adapter = new AidAdapter({ ...ctx(spawn, executor), variantCount: 1, inputCount: 2 });
     const test = await adapter.generateTest(makeTask());
+    const callsAfterClean = spawnCalls;
     const buggy = TARGET_CS.replace("value + 1", "return -999;");
-    const result = await adapter.detectOnTarget(makeTask(), test, buggy);
+    // evaluate() 会浅复制 test 并替换 description；基线必须随 meta 保留。
+    const replayableTest = { ...test, description: { ...test.description! } };
+    const result = await adapter.detectOnTarget(makeTask(), replayableTest, buggy);
     expect(result.detected).toBe(true);
     expect(result.failedCasesBuggy).toBeGreaterThan(result.failedCasesClean);
+    expect(result.newFailedCaseIds.length).toBeGreaterThan(0);
+    expect(spawnCalls).toBe(callsAfterClean);
   });
 
   it("detectOnTarget:干净目标不检出", async () => {
@@ -391,6 +405,49 @@ describe("AidAdapter", () => {
     const test = await adapter.generateTest(makeTask());
     const result = await adapter.detectOnTarget(makeTask(), test, TARGET_CS);
     expect(result.detected).toBe(false);
+  });
+
+  it("detectOnTarget:缺少 clean 基线时拒绝重新生成", async () => {
+    const adapter = new AidAdapter({ ...ctx(aidSpawn(), aidExecutor(TARGET_CS)), variantCount: 1, inputCount: 2 });
+    const test = await adapter.generateTest(makeTask());
+    const withoutBaseline = { ...test, meta: { ...test.meta, aidBaseline: undefined } };
+    const result = await adapter.detectOnTarget(makeTask(), withoutBaseline, TARGET_CS);
+    expect(result.detected).toBe(false);
+    expect(result.note).toBe("clean-baseline-unavailable");
+  });
+
+  it("detectOnTarget:clean 基线目标不可用时拒绝将注入结果计为检出", async () => {
+    const adapter = new AidAdapter({ ...ctx(aidSpawn(), aidExecutor(TARGET_CS)), variantCount: 1, inputCount: 2 });
+    const test = await adapter.generateTest(makeTask());
+    const baseline = test.meta.aidBaseline!;
+    const unusableTest = {
+      ...test,
+      meta: { ...test.meta, aidBaseline: { ...baseline, cleanTarget: { usable: false, note: "target-run-failed" } } },
+    };
+    const result = await adapter.detectOnTarget(makeTask(), unusableTest, TARGET_CS.replace("value + 1", "return -999;"));
+    expect(result.detected).toBe(false);
+    expect(result.note).toBe("clean-baseline-unusable:target-run-failed");
+  });
+
+  it("detectOnTarget:没有 consensus oracle 时拒绝计入检出率", async () => {
+    const adapter = new AidAdapter({ ...ctx(aidSpawn(), aidExecutor(TARGET_CS)), variantCount: 1, inputCount: 2 });
+    const test = await adapter.generateTest(makeTask());
+    const baseline = test.meta.aidBaseline!;
+    const unusableTest = {
+      ...test,
+      meta: { ...test.meta, aidBaseline: { ...baseline, oracle: [] } },
+    };
+    const result = await adapter.detectOnTarget(makeTask(), unusableTest, TARGET_CS.replace("value + 1", "return -999;"));
+    expect(result.detected).toBe(false);
+    expect(result.note).toBe("clean-baseline-unusable:no-consensus-oracle");
+  });
+
+  it("detectOnTarget:注入目标未返回完整 batch 时标记为不可验证", async () => {
+    const adapter = new AidAdapter({ ...ctx(aidSpawn(), aidExecutor(TARGET_CS)), variantCount: 1, inputCount: 2 });
+    const test = await adapter.generateTest(makeTask());
+    const result = await adapter.detectOnTarget(makeTask(), test, `${TARGET_CS}\n// partial-target`);
+    expect(result.detected).toBe(false);
+    expect(result.note).toBe("target-unusable");
   });
 });
 

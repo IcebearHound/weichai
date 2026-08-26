@@ -36,7 +36,7 @@ import { createLogger } from "../logger.js";
 import { ADAPTER_NAMES, createAdapter, type AdapterContext } from "./adapters.js";
 import { findRepoRoot, loadDataset } from "./dataset.js";
 import { evaluate, type EvaluationReport } from "./evaluate.js";
-import type { EvaluationMode, GeneratorName } from "./types.js";
+import type { EvaluationMode, GeneratorName, QualityMetrics } from "./types.js";
 import type { InjectedBugKind } from "../bug-injection.js";
 
 export interface CliOptions {
@@ -206,9 +206,24 @@ function parseIntNonNegative(value: string, flag: string): number {
 
 /** 人类可读对比表。 */
 export function formatTable(report: EvaluationReport): string {
-  const headers = ["adapter", "csr", "conf-conforms", "conf-diverges", "conf-unverified", "conf-rate", "detection", "fp", "llmCalls"];
+  const headers = [
+    "adapter",
+    "csr",
+    "conf-conforms",
+    "conf-diverges",
+    "conf-unverified",
+    "conf-rate",
+    "detection",
+    "det-attempt",
+    "det-eligible",
+    "det-inject-failed",
+    "det-unverified",
+    "fp",
+    "llmCalls",
+  ];
   const rows = Object.values(report.adapters).map((m, i) => {
     const name = Object.keys(report.adapters)[i];
+    const detection = detectionForDisplay(m);
     return [
       String(name),
       m.csr.toFixed(2),
@@ -217,6 +232,10 @@ export function formatTable(report: EvaluationReport): string {
       String(m.conformance.unverified),
       m.conformance.rate.toFixed(2),
       m.detectionRate.toFixed(2),
+      String(detection.attempted),
+      String(detection.eligible),
+      String(detection.injectionFailed),
+      String(detection.unverified),
       m.falsePositiveRate.toFixed(2),
       String(m.llmCalls),
     ];
@@ -226,6 +245,22 @@ export function formatTable(report: EvaluationReport): string {
   const lines = [fmt(headers), fmt(headers.map(() => "-".repeat(widths.reduce((a, b) => Math.max(a, b), 0))))];
   for (const row of rows) lines.push(fmt(row));
   return lines.join("\n");
+}
+
+/** 旧版 JSON 报告没有 detection 细分时，从 perEntry 补算以保持 CLI 可读。 */
+function detectionForDisplay(metrics: QualityMetrics): QualityMetrics["detection"] {
+  if (metrics.detection) return metrics.detection;
+  const trials = metrics.perEntry.flatMap((entry) => entry.detections);
+  const statusOf = (trial: (typeof trials)[number]): "eligible" | "injection-failed" | "unverified" =>
+    trial.status ?? (trial.note === undefined ? "eligible" : "unverified");
+  const eligible = trials.filter((trial) => statusOf(trial) === "eligible");
+  return {
+    attempted: trials.length,
+    eligible: eligible.length,
+    injectionFailed: trials.filter((trial) => statusOf(trial) === "injection-failed").length,
+    unverified: trials.filter((trial) => statusOf(trial) === "unverified").length,
+    detected: eligible.filter((trial) => trial.detected).length,
+  };
 }
 
 /** CLI 主流程。 */

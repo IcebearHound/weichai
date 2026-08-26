@@ -1,5 +1,5 @@
 /**
- * 精细 bug 注入器 + 检出率统计(仅用于 AID E2E 度量,不进 src)。
+ * 精细 bug 注入器 + 检出率统计(供 AID E2E 与质量评估复用)。
  * 注入策略:
  * - fixed-value:方法体替换为固定错误返回值(简单直白,双轨与 AID 都能检出);
  * - off-by-one:优先把「偏移比较 + 长度」类边界比较移位(如 `i + 2 < length` → `i + 2 <= length`),
@@ -26,6 +26,14 @@ export interface DetectionMetrics {
   baselineDetectionRate: number;
   aidDetectionRate: number;
   detectionGain: number;
+  /** 所有计划执行的注入试验，包含注入本身失败的情况。 */
+  attempted: number;
+  /** 成功注入且进入检测比较的试验数，作为 detection rate 分母。 */
+  eligible: number;
+  /** 无法形成注入产物的试验数，单独展示而非从报告中消失。 */
+  injectionFailed: number;
+  /** 注入已形成，但基线或检测执行不可用的试验数。 */
+  unverified: number;
   falsePositiveRate: number;
   oracleAgreement: number;
   variantPassRate: number;
@@ -35,6 +43,8 @@ export interface DetectionMetrics {
     kind: InjectedBugKind;
     baselineDetected: boolean;
     aidDetected: boolean;
+    /** 注入或检测无法完成时的原因。 */
+    note?: string;
   }[];
 }
 
@@ -67,7 +77,8 @@ export function injectFineGrainedBug(
   const close = matchingBrace(source, open);
   const body = source.slice(open + 1, close);
 
-  switch (kind) {
+  const injected = (() => {
+    switch (kind) {
     case "fixed-value":
       return {
         kind,
@@ -80,7 +91,20 @@ export function injectFineGrainedBug(
       return { kind, source: injectConditionFlip(source, body, open + 1), note: "布尔比较翻转" };
     case "constant-wrong":
       return { kind, source: injectConstantWrong(source, body, open + 1), note: "整数字面量 +1" };
+    }
+  })();
+  if (!hasMaterialBodyChange(source, injected.source, open + 1, close)) {
+    throw new Error(`cannot inject ${kind}: target method has no applicable mutation point`);
   }
+  return injected;
+}
+
+/** 拒绝源码未变或仅改空白的 no-op，避免其污染检出率分母。 */
+function hasMaterialBodyChange(source: string, injectedSource: string, bodyStart: number, bodyEnd: number): boolean {
+  const suffixLength = source.length - bodyEnd;
+  const originalBody = source.slice(bodyStart, bodyEnd);
+  const injectedBody = injectedSource.slice(bodyStart, injectedSource.length - suffixLength);
+  return originalBody.replace(/\s+/g, "") !== injectedBody.replace(/\s+/g, "");
 }
 
 // ---------------------------------------------------------------------------
@@ -250,15 +274,23 @@ function escapeRegExp(text: string): string {
 // ---------------------------------------------------------------------------
 
 export function computeDetectionMetrics(details: DetectionMetrics["details"]): DetectionMetrics {
-  const total = details.length;
-  const baselineDetected = details.filter((d) => d.baselineDetected).length;
-  const aidDetected = details.filter((d) => d.aidDetected).length;
-  const baselineDetectionRate = total === 0 ? 0 : baselineDetected / total;
-  const aidDetectionRate = total === 0 ? 0 : aidDetected / total;
+  const attempted = details.length;
+  const eligibleDetails = details.filter((d) => d.note === undefined);
+  const eligible = eligibleDetails.length;
+  const injectionFailed = details.filter((d) => d.note?.startsWith("injection-failed:") === true).length;
+  const unverified = attempted - eligible - injectionFailed;
+  const baselineDetected = eligibleDetails.filter((d) => d.baselineDetected).length;
+  const aidDetected = eligibleDetails.filter((d) => d.aidDetected).length;
+  const baselineDetectionRate = eligible === 0 ? 0 : baselineDetected / eligible;
+  const aidDetectionRate = eligible === 0 ? 0 : aidDetected / eligible;
   return {
     baselineDetectionRate,
     aidDetectionRate,
     detectionGain: aidDetectionRate - baselineDetectionRate,
+    attempted,
+    eligible,
+    injectionFailed,
+    unverified,
     falsePositiveRate: 0,
     oracleAgreement: 0,
     variantPassRate: 0,

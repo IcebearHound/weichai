@@ -13,6 +13,7 @@ import type { TestDescription, TypedValue, VerifierLanguage } from "../descripti
 import type { SideSpec } from "../executor.js";
 import type { SmokeReport } from "../smoke-types.js";
 import type { InjectedBugKind } from "../bug-injection.js";
+import type { AIDReplayBaseline } from "../variant/aid-verifier.js";
 
 // ---------------------------------------------------------------------------
 // 数据集(数据集 agent 产出,评估框架消费)
@@ -90,6 +91,8 @@ export interface GeneratedTest {
     durationMs?: number;
     /** 适配器附加信号(distinct 的 flag-fail、aid 的共识差分等,仅供报告可观测)。 */
     signal?: { kind: string; caseIds?: string[]; detail?: string };
+    /** AID clean run 的冻结证据，用于后续注入目标的无 LLM 重放。 */
+    aidBaseline?: AIDReplayBaseline;
   };
 }
 
@@ -118,6 +121,11 @@ export interface DetectionTrial {
   detected: boolean;
   /** 无效原因(target-compile-failed / source-unusable / clean-already-violating / no-runner 等)。 */
   note?: string;
+  /**
+   * 是否能作为检出率分母。缺省兼容旧制品：无 note = eligible，有 note = unverified。
+   * injection-failed 单独计数，不能悄悄从报告中消失。
+   */
+  status?: "eligible" | "injection-failed" | "unverified";
 }
 
 /** 单 entry 单适配器的度量明细。 */
@@ -156,6 +164,14 @@ export interface QualityMetrics {
   };
   /** 检出率:检出试验数 / 有效试验数(排除注明的无效试验)。 */
   detectionRate: number;
+  /** 检出率分母和注入失败的透明统计。 */
+  detection: {
+    attempted: number;
+    eligible: number;
+    injectionFailed: number;
+    unverified: number;
+    detected: number;
+  };
   /** 误报率:干净目标误报 entry 数 / 有效 entry 数。 */
   falsePositiveRate: number;
   /** 成本:生成 LLM 调用总次数。 */

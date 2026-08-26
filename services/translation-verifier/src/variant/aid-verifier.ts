@@ -50,8 +50,35 @@ export interface AIDJob {
   options?: AIDJobOptions;
 }
 
+/**
+ * 可重放的干净 AID 基线。注入测试必须复用这份制品，避免重新生成变体、输入或
+ * oracle 后把随机差异误计为缺陷检出。
+ *
+ * 仅使用数组和普通对象，便于随评估制品保存和重放；`oracle` 不保留运行时 Map。
+ */
+export interface AIDReplayBaseline {
+  schemaVersion: "1.1";
+  /** 生成时的原始描述，用于复核声明 expected 与 oracle 的冲突。 */
+  description: TestDescription;
+  /** 基础用例加上已冻结生成输入后的完整驱动描述。 */
+  batchDescription: TestDescription;
+  /** 已过滤的变体（含被剔除原因），作为可审计证据。 */
+  variants: FilteredVariant[];
+  /** 参考组在 batchDescription 上形成的冻结 oracle。 */
+  oracle: ConsensusOracle[];
+  /** 建立 oracle 时使用的比较选项。 */
+  consensusOptions: ConsensusOptions;
+  /**
+   * clean 目标是否完整执行了 batch 中的每一个 case。若否，不能把后续注入目标的
+   * 结果用于检出率，因为它不再与完整的 clean 运行可比。
+   */
+  cleanTarget: { usable: boolean; note?: string };
+  /** 干净目标已失败的 case，注入检测只计算新增失败。 */
+  cleanFailedCaseIds: string[];
+}
+
 export interface AIDVerificationReport {
-  schemaVersion: "1.0";
+  schemaVersion: "1.1";
   /** 变体清单(含剔除者与原因)。 */
   variants: FilteredVariant[];
   oracleSummary: { consensusCount: number; disputedCount: number };
@@ -65,6 +92,8 @@ export interface AIDVerificationReport {
   disputedCases: number;
   /** 共识 vs description.expected 冲突的 caseId 列表(供人工复核与二期演进)。 */
   consensusExpectedConflicts: string[];
+  /** 可用于对注入目标进行无 LLM 重放的干净基线。 */
+  baseline: AIDReplayBaseline;
 }
 
 export async function verifyWithVariants(
@@ -152,26 +181,128 @@ export async function verifyWithVariants(
   const oracle = buildConsensus(referenceSides, consensusOptions);
 
   // 6. 目标侧批量执行 + 与共识比较。
+  const { targetInfo, comparisons } = await compareTargetAgainstOracle(
+    job.target,
+    batchDescription,
+    oracle,
+    consensusOptions,
+    executor,
+  );
+  const baseline = createReplayBaseline(
+    description,
+    batchDescription,
+    filtered,
+    oracle,
+    consensusOptions,
+    comparisons,
+    assessCompleteTargetRun(targetInfo, batchDescription),
+  );
+  return buildReport(description, filtered, baseline, oracle, comparisons, targetInfo.results?.results ?? [], logger);
+}
+
+/**
+ * 使用已经冻结的 clean 基线验证另一个目标实现。这个路径绝不调用 LLM、过滤变体、
+ * 执行源侧或执行变体，因此注入试验与 clean 试验使用完全相同的输入和 oracle。
+ */
+export async function verifyTargetAgainstAIDBaseline(
+  target: SideSpec,
+  baseline: AIDReplayBaseline,
+  executor: DriverExecutor,
+  logger: Logger = createLogger("aid-verifier"),
+): Promise<AIDVerificationReport> {
+  const oracle = new Map(baseline.oracle.map((entry) => [entry.caseId, entry]));
+  const { targetInfo, comparisons } = await compareTargetAgainstOracle(
+    target,
+    baseline.batchDescription,
+    oracle,
+    baseline.consensusOptions,
+    executor,
+  );
+  return buildReport(
+    baseline.description,
+    baseline.variants,
+    baseline,
+    oracle,
+    comparisons,
+    targetInfo.results?.results ?? [],
+    logger,
+  );
+}
+
+async function compareTargetAgainstOracle(
+  target: SideSpec,
+  batchDescription: TestDescription,
+  oracle: Map<string, ConsensusOracle>,
+  consensusOptions: ConsensusOptions,
+  executor: DriverExecutor,
+): Promise<{ targetInfo: Awaited<ReturnType<typeof executeSide>>; comparisons: CaseComparison[] }> {
   const targetBatchSide: SideSpec = {
-    language: job.target.language,
+    language: target.language,
     driverSource: generateDriverSource(batchDescription),
-    sourceFiles: job.target.sourceFiles,
+    sourceFiles: target.sourceFiles,
   };
   const targetInfo = await executeSide(executor, targetBatchSide, "target");
-  let comparisons: CaseComparison[];
-  if (targetInfo.results && targetInfo.results.results.length > 0) {
-    comparisons = compareAgainstConsensus(targetInfo.results, oracle, consensusOptions);
-  } else {
-    comparisons = batchDescription.cases.map((c) => ({
-      caseId: c.id,
-      verdict: "divergent",
-      source: null,
-      target: null,
-      details: ["Target side produced no usable results."],
-    }));
-  }
+  const comparisons =
+    targetInfo.results && targetInfo.results.results.length > 0
+      ? compareAgainstConsensus(targetInfo.results, oracle, consensusOptions)
+      : batchDescription.cases.map((c) => ({
+          caseId: c.id,
+          verdict: "divergent" as const,
+          source: null,
+          target: null,
+          details: ["Target side produced no usable results."],
+        }));
+  return { targetInfo, comparisons };
+}
 
-  // 7. 报告统计。
+function createReplayBaseline(
+  description: TestDescription,
+  batchDescription: TestDescription,
+  variants: FilteredVariant[],
+  oracle: Map<string, ConsensusOracle>,
+  consensusOptions: ConsensusOptions,
+  comparisons: CaseComparison[],
+  cleanTarget: AIDReplayBaseline["cleanTarget"],
+): AIDReplayBaseline {
+  return {
+    schemaVersion: "1.1",
+    description,
+    batchDescription,
+    variants,
+    oracle: [...oracle.values()],
+    consensusOptions,
+    cleanTarget,
+    cleanFailedCaseIds: comparisons.filter((comparison) => comparison.verdict === "fail").map((comparison) => comparison.caseId),
+  };
+}
+
+/** 评估 clean 目标是否提供了与冻结 batch 完整对应的可比结果。 */
+function assessCompleteTargetRun(
+  target: Awaited<ReturnType<typeof executeSide>>,
+  batchDescription: TestDescription,
+): AIDReplayBaseline["cleanTarget"] {
+  if (!target.compile.success) return { usable: false, note: "target-compile-failed" };
+  if (target.run === null || target.run.exitCode !== 0) return { usable: false, note: "target-run-failed" };
+  if (target.results === null || target.results.results.length === 0) {
+    return { usable: false, note: "target-results-unusable" };
+  }
+  const resultIds = new Set(target.results.results.map((result) => result.caseId));
+  const missingCaseIds = batchDescription.cases.filter((testCase) => !resultIds.has(testCase.id)).map((testCase) => testCase.id);
+  if (missingCaseIds.length > 0) {
+    return { usable: false, note: `target-results-incomplete:${missingCaseIds.join(",")}` };
+  }
+  return { usable: true };
+}
+
+function buildReport(
+  description: TestDescription,
+  variants: FilteredVariant[],
+  baseline: AIDReplayBaseline,
+  oracle: Map<string, ConsensusOracle>,
+  comparisons: CaseComparison[],
+  targetResults: CaseResult[],
+  logger: Logger,
+): AIDVerificationReport {
   const oracles = [...oracle.values()];
   const consensusCount = oracles.filter((o) => o.confidence === "consensus").length;
   const disputedCount = oracles.filter((o) => o.confidence === "disputed").length;
@@ -182,18 +313,14 @@ export async function verifyWithVariants(
   ).length;
   const totalCases = comparisons.length;
   const passRate = totalCases === 0 ? 0 : passedCases / totalCases;
-  const consensusExpectedConflicts = computeConsensusExpectedConflicts(
-    description,
-    oracle,
-    targetInfo.results?.results ?? [],
-  );
+  const consensusExpectedConflicts = computeConsensusExpectedConflicts(description, oracle, targetResults);
 
   logger.info(
     `AID 完成:passRate=${passRate.toFixed(2)} (pass=${passedCases} fail=${failedCases} disputed=${disputedCases}), oracle consensus=${consensusCount} disputed=${disputedCount}`,
   );
   return {
-    schemaVersion: "1.0",
-    variants: filtered,
+    schemaVersion: "1.1",
+    variants,
     oracleSummary: { consensusCount, disputedCount },
     comparisons,
     passRate,
@@ -202,6 +329,7 @@ export async function verifyWithVariants(
     failedCases,
     disputedCases,
     consensusExpectedConflicts,
+    baseline,
   };
 }
 

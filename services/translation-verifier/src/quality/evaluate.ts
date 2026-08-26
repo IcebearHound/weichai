@@ -15,7 +15,7 @@
  *
  * 检出判定分派:
  *   - 描述型(baseline/distinct/mitgen):干净差分缓存一次,注入差分按 targetViolations 判定;
- *   - aid:adapter.detectOnTarget(共识差分,detected = fail(buggy) > fail(clean));
+ *   - aid:adapter.detectOnTarget(冻结 clean oracle 后仅重放目标侧,检测新增 fail case);
  *   - smoke:复用 runner 的机械差分(干净目标 vs 注入目标)。
  */
 import { verify } from "../verifier.js";
@@ -60,7 +60,7 @@ export interface EvaluateOptions {
 }
 
 export interface EvaluationReport {
-  schemaVersion: "1.0";
+  schemaVersion: "1.1";
   mode: EvaluationMode;
   dataset: { source: string; totalEntries: number; evaluatedEntries: number };
   adapters: Record<GeneratorName, QualityMetrics>;
@@ -108,11 +108,11 @@ export async function evaluate(options: EvaluateOptions): Promise<EvaluationRepo
     }
     adapters[adapter.name] = aggregateMetrics(perEntry);
     logger.info(
-      `适配器 ${adapter.name} 完成:csr=${adapters[adapter.name].csr.toFixed(2)} conformance=${adapters[adapter.name].conformance.rate.toFixed(2)} detection=${adapters[adapter.name].detectionRate.toFixed(2)} fp=${adapters[adapter.name].falsePositiveRate.toFixed(2)} llmCalls=${adapters[adapter.name].llmCalls} (${Date.now() - started}ms)`,
+      `适配器 ${adapter.name} 完成:csr=${adapters[adapter.name].csr.toFixed(2)} conformance=${adapters[adapter.name].conformance.rate.toFixed(2)} detection=${adapters[adapter.name].detectionRate.toFixed(2)} eligible=${adapters[adapter.name].detection.eligible}/${adapters[adapter.name].detection.attempted} injectionFailed=${adapters[adapter.name].detection.injectionFailed} unverified=${adapters[adapter.name].detection.unverified} fp=${adapters[adapter.name].falsePositiveRate.toFixed(2)} llmCalls=${adapters[adapter.name].llmCalls} (${Date.now() - started}ms)`,
     );
   }
   return {
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     mode,
     dataset: { source: options.dataset.source, totalEntries: options.dataset.entries.length, evaluatedEntries: entries.length },
     adapters,
@@ -199,18 +199,27 @@ async function evaluateEntry(adapter: GeneratorAdapter, entry: DatasetEntry, ctx
     falsePositive = fp.falsePositive;
     fpNote = fp.note;
     if (adapter instanceof AidAdapter) {
-      // AID:共识差分检出(重跑变体轨道)。
+      // AID:使用生成阶段冻结的 oracle 重放注入后的目标侧。
       for (const kind of ctx.bugKinds) {
         const injected = injectBug(task.target.sourceFiles.map((f) => f.content).join("\n"), kind, entry);
         if (injected.note !== undefined) {
-          detections.push({ kind, detected: false, note: injected.note });
+          detections.push({ kind, detected: false, note: injected.note, status: "injection-failed" });
           continue;
         }
         try {
           const aidResult = await adapter.detectOnTarget(task, test, injected.source, ctx.signal);
-          detections.push({ kind, detected: aidResult.detected, ...(aidResult.note ? { note: aidResult.note } : {}) });
+          detections.push({
+            kind,
+            detected: aidResult.detected,
+            ...(aidResult.note ? { note: aidResult.note, status: "unverified" as const } : { status: "eligible" as const }),
+          });
         } catch (aidError) {
-          detections.push({ kind, detected: false, note: `aid-run-failed:${aidError instanceof Error ? aidError.message : String(aidError)}` });
+          detections.push({
+            kind,
+            detected: false,
+            note: `aid-run-failed:${aidError instanceof Error ? aidError.message : String(aidError)}`,
+            status: "unverified",
+          });
         }
       }
     } else {
@@ -218,7 +227,7 @@ async function evaluateEntry(adapter: GeneratorAdapter, entry: DatasetEntry, ctx
       for (const kind of ctx.bugKinds) {
         const injected = injectBug(task.target.sourceFiles.map((f) => f.content).join("\n"), kind, entry);
         if (injected.note !== undefined) {
-          detections.push({ kind, detected: false, note: injected.note });
+          detections.push({ kind, detected: false, note: injected.note, status: "injection-failed" });
           continue;
         }
         try {
@@ -230,9 +239,15 @@ async function evaluateEntry(adapter: GeneratorAdapter, entry: DatasetEntry, ctx
             },
             ctx.executor,
           );
-          detections.push(detectFromDifferential(clean, buggyReport, kind));
+          const detection = detectFromDifferential(clean, buggyReport, kind);
+          detections.push({ ...detection, status: detection.note === undefined ? "eligible" : "unverified" });
         } catch (detectError) {
-          detections.push({ kind, detected: false, note: `detect-failed:${detectError instanceof Error ? detectError.message : String(detectError)}` });
+          detections.push({
+            kind,
+            detected: false,
+            note: `detect-failed:${detectError instanceof Error ? detectError.message : String(detectError)}`,
+            status: "unverified",
+          });
         }
       }
     }
@@ -243,13 +258,19 @@ async function evaluateEntry(adapter: GeneratorAdapter, entry: DatasetEntry, ctx
     for (const kind of ctx.bugKinds) {
       const injected = injectBug(task.target.sourceFiles.map((f) => f.content).join("\n"), kind, entry);
       if (injected.note !== undefined) {
-        detections.push({ kind, detected: false, note: injected.note });
+        detections.push({ kind, detected: false, note: injected.note, status: "injection-failed" });
         continue;
       }
       try {
-        detections.push(await detectRunnerDifferential(test, task, ctx.executor, injected.source, kind));
+        const detection = await detectRunnerDifferential(test, task, ctx.executor, injected.source, kind);
+        detections.push({ ...detection, status: detection.note === undefined ? "eligible" : "unverified" });
       } catch (detectError) {
-        detections.push({ kind, detected: false, note: `detect-failed:${detectError instanceof Error ? detectError.message : String(detectError)}` });
+        detections.push({
+          kind,
+          detected: false,
+          note: `detect-failed:${detectError instanceof Error ? detectError.message : String(detectError)}`,
+          status: "unverified",
+        });
       }
     }
   } else {
@@ -278,8 +299,13 @@ export function aggregateMetrics(perEntry: PerEntryResult[]): QualityMetrics {
   const diverges = judged.filter((p) => p.conformance!.verdict === "diverges").length;
   const unverified = judged.filter((p) => p.conformance!.verdict === "unverified").length;
 
-  const validTrials = perEntry.flatMap((p) => p.detections).filter((d) => d.note === undefined);
+  const trials = perEntry.flatMap((p) => p.detections);
+  const statusOf = (trial: (typeof trials)[number]): "eligible" | "injection-failed" | "unverified" =>
+    trial.status ?? (trial.note === undefined ? "eligible" : "unverified");
+  const validTrials = trials.filter((trial) => statusOf(trial) === "eligible");
   const detected = validTrials.filter((d) => d.detected).length;
+  const injectionFailed = trials.filter((trial) => statusOf(trial) === "injection-failed").length;
+  const unverifiedTrials = trials.filter((trial) => statusOf(trial) === "unverified").length;
 
   const fpValid = generated.filter((p) => p.fpNote === undefined);
   const fpCount = fpValid.filter((p) => p.falsePositive).length;
@@ -294,6 +320,13 @@ export function aggregateMetrics(perEntry: PerEntryResult[]): QualityMetrics {
       rate: conforms + diverges === 0 ? 0 : conforms / (conforms + diverges),
     },
     detectionRate: validTrials.length === 0 ? 0 : detected / validTrials.length,
+    detection: {
+      attempted: trials.length,
+      eligible: validTrials.length,
+      injectionFailed,
+      unverified: unverifiedTrials,
+      detected,
+    },
     falsePositiveRate: fpValid.length === 0 ? 0 : fpCount / fpValid.length,
     llmCalls: generated.reduce((sum, p) => sum + p.llmCalls, 0),
     perEntry,

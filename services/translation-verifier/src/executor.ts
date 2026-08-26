@@ -239,7 +239,7 @@ export class RealDriverExecutor implements DriverExecutor {
           timeout: this.#options.timeoutMs,
           stdio: "pipe",
         });
-        const className = driverClassNameFromSource(side.driverSource);
+        const className = driverQualifiedNameFromSource(side.driverSource);
         this.#logger.debug(`运行命令(Java): java -cp out ${className}`);
         const stdout = await execFileAsync(this.#options.javaPath, ["-cp", join(dir, "out"), className], {
           cwd: dir,
@@ -326,7 +326,7 @@ export class RealDriverExecutor implements DriverExecutor {
       });
       const stdout = await execFileAsync(
         this.#options.javaPath,
-        ["-cp", [driverClasses, join(dir, "target/classes"), classpath].join(delimiter), driverClassNameFromSource(side.driverSource)],
+        ["-cp", [driverClasses, join(dir, "target/classes"), classpath].join(delimiter), driverQualifiedNameFromSource(side.driverSource)],
         { cwd: dir, timeoutMs: this.#options.timeoutMs },
       );
       return { exitCode: 0, stdout, stderr: "" };
@@ -413,6 +413,16 @@ function driverClassNameFromSource(source: string): string {
   const match = /public\s+class\s+(\w+)/.exec(source);
   if (!match?.[1]) throw new Error("Driver source must declare a public class.");
   return match[1];
+}
+
+/**
+ * 驱动类的全限定名:驱动源码含 package 声明(Java 包私有类访问需要同包)时返回
+ * "pkg.ClassName",否则返回类名。java -cp 运行入口必须用全限定名。
+ */
+function driverQualifiedNameFromSource(source: string): string {
+  const pkgMatch = /^\s*package\s+([\w.]+)\s*;/m.exec(source);
+  const className = driverClassNameFromSource(source);
+  return pkgMatch?.[1] ? `${pkgMatch[1]}.${className}` : className;
 }
 
 function collectRelativeFiles(dir: string): string[] {

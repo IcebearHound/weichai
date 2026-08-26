@@ -18,6 +18,22 @@ export interface SideRunInfo {
   results: SideResults | null;
 }
 
+/**
+ * 公共辅助:compile → run(编译成功才跑)→ parseSideResults(运行成功才解析)。
+ * verify(双轨)与 aid-verifier(变体轨道)共用;label 仅作结果侧标记
+ * (现有双轨传 "source"/"target",变体轨道传 "Variant_<k>"),默认 "source"。
+ */
+export async function executeSide(
+  executor: DriverExecutor,
+  side: SideSpec,
+  label: string = "source",
+): Promise<SideRunInfo> {
+  const compile = await executor.compile(side);
+  const run = compile.success ? await executor.run(side) : null;
+  const results = run && run.exitCode === 0 ? parseSideResults(label, run.stdout) : null;
+  return { language: side.language, compile, run, results };
+}
+
 export interface VerificationReport {
   schemaVersion: "1.0";
   source: SideRunInfo;
@@ -42,14 +58,14 @@ export async function verify(
   executor: DriverExecutor,
   logger: Logger = createLogger("verify"),
 ): Promise<VerificationReport> {
-  const sourceCompile = await executor.compile(job.source);
-  const targetCompile = await executor.compile(job.target);
-
-  const sourceRun = sourceCompile.success ? await executor.run(job.source) : null;
-  const targetRun = targetCompile.success ? await executor.run(job.target) : null;
-
-  const sourceResults = sourceRun && sourceRun.exitCode === 0 ? parseSideResults("source", sourceRun.stdout) : null;
-  const targetResults = targetRun && targetRun.exitCode === 0 ? parseSideResults("target", targetRun.stdout) : null;
+  const sourceInfo = await executeSide(executor, job.source, "source");
+  const targetInfo = await executeSide(executor, job.target, "target");
+  const sourceCompile = sourceInfo.compile;
+  const targetCompile = targetInfo.compile;
+  const sourceRun = sourceInfo.run;
+  const targetRun = targetInfo.run;
+  const sourceResults = sourceInfo.results;
+  const targetResults = targetInfo.results;
 
   // 「可用结果」= 该侧解析成功且至少有一个 case 结果。parseSideResults 在 stdout 非法/无 results 数组时
   // 返回 results=[] + parseErrors 的非空对象(而非 null),仅靠 truthiness 判断会误入比较分支,
@@ -114,8 +130,8 @@ export async function verify(
 
   return {
     schemaVersion: "1.0",
-    source: { language: job.source.language, compile: sourceCompile, run: sourceRun, results: sourceResults },
-    target: { language: job.target.language, compile: targetCompile, run: targetRun, results: targetResults },
+    source: sourceInfo,
+    target: targetInfo,
     comparisons,
     passRate,
     totalCases,

@@ -8,10 +8,16 @@
  *   本脚本只接收整理好的纯输入:
  *   --source-method(源语言完整方法体文件)、--source-tests(相关测试,仅参考)、
  *   --target-file(Java 翻译产物文件,翻译由 agent 在调度时完成)。
- * - 描述生成:有 DEEPSEEK_API_KEY → TestMigratorAgent(claude 子进程,需求第一);
+ * - 描述生成:有 DEEPSEEK_API_KEY → 默认 TestMigratorAgent(claude 子进程,需求第一);
+ *   指定 --generator mitgen → MitGenMigratorAgent(片段级微观测试生成,源侧实跑录制 expected);
  *   无 key → 用 --fixture(手写语言无关描述 JSON)保证离线可跑通。
  * - 验证机制:双侧真实工具链(javac/dotnet)编译运行 → 差分比较 + 需求黄金校验。
+ * - 阶段 D(可选 --analyzer):DISTINCT 描述引导的分支一致性分析 —— 缺陷源实现 + 忠实镜像的
+ *   翻译产物(双侧共享缺陷)在旧流程下差分全 PASS(行为等价率高但漏检);Analyzer 以 NLD 为锚
+ *   把"两侧一致但都偏离需求"的 case 标 diverges/flag-fail,演示检错率(DDR)提升。需 LLM key。
  * - 注入 bug 演示:把目标方法体替换为固定错误返回值 → 重新 verify → 断言检出 FAIL。
+ * - 分支级 bug 演示(仅 --generator mitgen --branch-bug):翻转目标方法内单个比较运算符
+ *   (bug 藏在单个分支),验证 MitGen 片段级用例能覆盖此前整方法生成常漏检的分支/边界。
  * - 修复闭环演示(有 key):RepairLoop + RepairAgent(claude 子进程)从注入 bug 的
  *   目标文件出发,最多 maxRounds 轮修复,rebuildTargetSide 用修复产物替换目标文件。
  *
@@ -21,13 +27,17 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { validateDescription, type TestDescription, type VerifierLanguage } from "../src/description.js";
+import { matchingBrace, escapeRegExp } from "../src/code-utils.js";
 import { generateDriverSource, generateSourceDriverSource } from "../src/driver/driver-codegen.js";
 import type { SourceInvocation } from "../src/driver/source-invocation.js";
 import { isToolchainAvailable, RealDriverExecutor, type SideSpec } from "../src/executor.js";
 import { verify, type VerificationJob, type VerificationReport } from "../src/verifier.js";
 import { formatReport } from "../src/cli-helpers.js";
 import { TestMigratorAgent } from "../src/test-migrator.js";
+import { MitGenMigratorAgent } from "../src/mitgen/mitgen-migrator.js";
 import { RepairAgent, RepairLoop } from "../src/repair-loop.js";
+import { LlmAnalyzer } from "../src/analyzer.js";
+import { runConsistencyVerification } from "../src/consistency-verifier.js";
 import { createLogger, type Logger } from "../src/logger.js";
 
 // ---------------------------------------------------------------------------
@@ -47,6 +57,12 @@ export interface E2EOptions {
   maxRounds: number;
   timeoutMs: number;
   json: boolean;
+  /** --analyzer:开启阶段 D(DISTINCT 分支一致性分析,双侧共享缺陷演示)。 */
+  analyzer: boolean;
+  /** 描述生成器:migrator=TestMigratorAgent(默认,现有验收路径);mitgen=MitGenMigratorAgent(片段级)。 */
+  generator: "mitgen" | "migrator";
+  /** 分支级 bug 注入 + MitGen 检出演示(仅 --generator mitgen 时生效,默认关闭)。 */
+  branchBug: boolean;
 }
 
 const VALUE_FLAGS = new Set([
@@ -61,13 +77,15 @@ const VALUE_FLAGS = new Set([
   "--target-method",
   "--max-rounds",
   "--timeout-ms",
+  "--generator",
 ]);
-const BOOLEAN_FLAGS = new Set(["--json"]);
+const BOOLEAN_FLAGS = new Set(["--json", "--analyzer", "--branch-bug"]);
 
 /**
  * 解析 CLI 参数(`--key value` 格式)。必填:--requirement/--source-method/--target-file;
  * 可选:--source-tests/--source-lang(默认 C#)/--fixture/--api-key/--target-class/--target-method/
- * --max-rounds(默认 3)/--timeout-ms(LLM 调用超时,默认 300000)/--json。非法参数 → { error }。
+ * --max-rounds(默认 3)/--timeout-ms(LLM 调用超时,默认 300000)/--json/--generator(migrator|mitgen,默认 migrator)/
+ * --branch-bug(MitGen 分支级 bug 检出演示)。非法参数 → { error }。
  */
 export function parseArgs(argv: string[]): E2EOptions | { error: string } {
   const options: E2EOptions = {
@@ -80,11 +98,16 @@ export function parseArgs(argv: string[]): E2EOptions | { error: string } {
     maxRounds: 3,
     timeoutMs: 300_000,
     json: false,
+    analyzer: false,
+    generator: "migrator",
+    branchBug: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i] as string;
     if (BOOLEAN_FLAGS.has(flag)) {
       if (flag === "--json") options.json = true;
+      if (flag === "--analyzer") options.analyzer = true;
+      if (flag === "--branch-bug") options.branchBug = true;
       continue;
     }
     if (VALUE_FLAGS.has(flag)) {
@@ -135,6 +158,13 @@ export function parseArgs(argv: string[]): E2EOptions | { error: string } {
             return { error: `Invalid --timeout-ms: "${value}" (must be a non-negative integer).` };
           }
           options.timeoutMs = Number.parseInt(value, 10);
+          break;
+        }
+        case "--generator": {
+          if (value !== "mitgen" && value !== "migrator") {
+            return { error: `Invalid --generator: "${value}" (must be mitgen or migrator).` };
+          }
+          options.generator = value;
           break;
         }
       }
@@ -234,58 +264,34 @@ function buggyReturnFor(returnType: string): string {
   return "return null;";
 }
 
+/**
+ * 分支级 bug 注入:把目标方法体内第一个比较运算符翻转(`<`↔`>=`、`==`↔`!=` 等)。
+ * 与 injectBug(整方法体替换)不同,bug 藏在单个分支/边界里,整方法生成常漏检——
+ * 这正是 MitGen 片段级定向输入的目标场景。
+ */
+export function injectBranchBug(source: string, className: string, methodName: string): string {
+  const simple = className.split(".").pop() as string;
+  const block = classBlock(source, simple);
+  if (!block) throw new Error(`cannot locate class ${simple} for branch bug injection`);
+  const snippet = source.slice(block.start, block.end);
+  const decl = new RegExp(
+    `public\\s+static\\s+([\\w<>[\\].]+)\\s+${escapeRegExp(methodName)}\\s*\\([^)]*\\)\\s*\\{`,
+  );
+  const dm = decl.exec(snippet);
+  if (!dm) throw new Error(`cannot locate method ${simple}.${methodName} for branch bug injection`);
+  const open = block.start + dm.index + dm[0].length - 1;
+  const close = matchingBrace(source, open);
+  const body = source.slice(open, close + 1);
+  const flipped = body.replace(/(<=|>=|==|!=|<|>)/, (op) => {
+    const map: Record<string, string> = { "<": ">=", ">": "<=", "<=": ">", ">=": "<", "==": "!=", "!=": "==" };
+    return map[op] as string;
+  });
+  return `${source.slice(0, open)}${flipped}${source.slice(close + 1)}`;
+}
+
 // ---------------------------------------------------------------------------
 // 小工具
 // ---------------------------------------------------------------------------
-
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/** 从 open 位置开始的花括号配对(跳过字符串/字符字面量与注释)。 */
-function matchingBrace(source: string, openIndex: number): number {
-  let depth = 0;
-  for (let i = openIndex; i < source.length; i += 1) {
-    const ch = source[i] as string;
-    if (ch === '"') {
-      i = skipQuoted(source, i, '"');
-      continue;
-    }
-    if (ch === "'") {
-      i = skipQuoted(source, i, "'");
-      continue;
-    }
-    if (ch === "/" && source[i + 1] === "/") {
-      while (i < source.length && source[i] !== "\n") i += 1;
-      continue;
-    }
-    if (ch === "/" && source[i + 1] === "*") {
-      const end = source.indexOf("*/", i + 2);
-      i = end === -1 ? source.length : end + 1;
-      continue;
-    }
-    if (ch === "{") depth += 1;
-    else if (ch === "}") {
-      depth -= 1;
-      if (depth === 0) return i;
-    }
-  }
-  throw new Error("unbalanced braces in source");
-}
-
-/** 跳过引号内的转义字符(逐字符处理 \x 转义)。 */
-function skipQuoted(source: string, start: number, quote: string): number {
-  let i = start + 1;
-  while (i < source.length) {
-    if (source[i] === "\\") {
-      i += 2;
-      continue;
-    }
-    if (source[i] === quote) return i;
-    i += 1;
-  }
-  return source.length - 1;
-}
 
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
@@ -389,30 +395,73 @@ export async function runE2E(argv: string[]): Promise<number> {
   }
   logger.info(`目标签名:${targetClassName}.${targetMethodName}`);
 
-  // 3. 描述生成:有 key → TestMigratorAgent(claude 子进程,需求第一);无 key → fixture。
+  // 3. 源侧类名/方法名(从 agent 整理的完整方法体文件声明行解析;MitGen 片段生成/实跑也依赖)。
+  const sourceClassName = parseSourceClassName(sourceContent);
+  const sourceMethodName = parseSourceMethodName(sourceContent, sourceClassName ?? "");
+  if (!sourceClassName || !sourceMethodName) {
+    logger.error(`无法从 source-method 解析源类名/方法名:${String(sourceClassName)}.${String(sourceMethodName)}`);
+    console.error("error: cannot resolve the source class/method from --source-method (expects a single-class method-body file).");
+    return 2;
+  }
+  logger.info(`源侧签名:${sourceClassName}.${sourceMethodName}`);
+
+  // 4. 执行器(双侧真实工具链;MitGen 片段级插桩实跑也用它)。
+  const executor = new RealDriverExecutor({ logger });
+
+  // 5. 描述生成:有 key → 按 --generator 选择 TestMigratorAgent(默认,现有验收路径)或
+  //    MitGenMigratorAgent(片段级定向输入 + 源侧实跑录制 expected);无 key → fixture(离线路径)。
   const apiKey = parsed.apiKey ?? process.env.DEEPSEEK_API_KEY;
   let description: TestDescription;
+  let mitgenSummary: string | undefined;
   if (apiKey && apiKey.trim() !== "") {
-    logger.info("阶段[描述]:TestMigratorAgent.extractDescription(claude 子进程,需求第一)");
-    const migrator = new TestMigratorAgent({ apiKey, logger, timeoutMs: parsed.timeoutMs });
-    try {
-      description = await migrator.extractDescription({
-        requirement: parsed.requirement,
-        sourceLanguage: parsed.sourceLang,
-        sourceCode: sourceContent,
-        existingTests: testsContent,
-        repository: parsed.sourceLang === "C#" ? "commons-fileupload-csharp" : undefined,
-        sourcePath: parsed.sourceMethod,
-        target: { language: "Java", className: targetClassName, method: targetMethodName, isStatic: true },
-      });
-    } catch (error) {
-      logger.error(`TestMigratorAgent 失败:${errorMessage(error)}`);
-      console.error(`error: TestMigratorAgent failed: ${errorMessage(error)}`);
-      return 2;
+    if (parsed.generator === "mitgen") {
+      logger.info("阶段[描述]:MitGenMigratorAgent.generate(片段级微观测试生成 + 源侧实跑录制 expected)");
+      const mitgen = new MitGenMigratorAgent({ apiKey, logger, timeoutMs: parsed.timeoutMs, methodName: sourceMethodName });
+      try {
+        const mitgenResult = await mitgen.generate(
+          {
+            requirement: parsed.requirement,
+            sourceLanguage: parsed.sourceLang,
+            sourceCode: sourceContent,
+            existingTests: testsContent,
+            repository: parsed.sourceLang === "C#" ? "commons-fileupload-csharp" : undefined,
+            sourcePath: parsed.sourceMethod,
+            targetCode: targetContent,
+            target: { language: "Java", className: targetClassName, method: targetMethodName, isStatic: true },
+          },
+          executor,
+        );
+        description = mitgenResult.description;
+        const verified = mitgenResult.fragments.filter((f) => f.reachability === "verified").length;
+        mitgenSummary = `片段 ${mitgenResult.fragments.length} 个(verified ${verified}),case ${description.cases.length} 个`;
+      } catch (error) {
+        logger.error(`MitGenMigratorAgent 失败:${errorMessage(error)}`);
+        console.error(`error: MitGenMigratorAgent failed: ${errorMessage(error)}`);
+        return 2;
+      }
+      logger.info(`阶段[描述]:MitGen 生成完成,${description.cases.length} 个 case`);
+    } else {
+      logger.info("阶段[描述]:TestMigratorAgent.extractDescription(claude 子进程,需求第一)");
+      const migrator = new TestMigratorAgent({ apiKey, logger, timeoutMs: parsed.timeoutMs });
+      try {
+        description = await migrator.extractDescription({
+          requirement: parsed.requirement,
+          sourceLanguage: parsed.sourceLang,
+          sourceCode: sourceContent,
+          existingTests: testsContent,
+          repository: parsed.sourceLang === "C#" ? "commons-fileupload-csharp" : undefined,
+          sourcePath: parsed.sourceMethod,
+          target: { language: "Java", className: targetClassName, method: targetMethodName, isStatic: true },
+        });
+      } catch (error) {
+        logger.error(`TestMigratorAgent 失败:${errorMessage(error)}`);
+        console.error(`error: TestMigratorAgent failed: ${errorMessage(error)}`);
+        return 2;
+      }
+      logger.info(`阶段[描述]:生成完成,${description.cases.length} 个 case`);
     }
-    logger.info(`阶段[描述]:生成完成,${description.cases.length} 个 case`);
   } else {
-    logger.info(`阶段[描述]:无 DEEPSEEK_API_KEY,读取 fixture ${parsed.fixture}(离线路径)`);
+    logger.info(`阶段[描述]:无 DEEPSEEK_API_KEY,读取 fixture ${parsed.fixture}(离线路径)${parsed.generator === "mitgen" ? ";指定 --generator mitgen 但无 key,回退 fixture" : ""}`);
     let raw: unknown;
     try {
       raw = JSON.parse(readFileSync(resolve(parsed.fixture), "utf-8"));
@@ -445,18 +494,7 @@ export async function runE2E(argv: string[]): Promise<number> {
     description = { ...description, requirement: parsed.requirement };
   }
 
-  // 4. 源侧类名/方法名(从 agent 整理的完整方法体文件声明行解析)。
-  const sourceClassName = parseSourceClassName(sourceContent);
-  const sourceMethodName = parseSourceMethodName(sourceContent, sourceClassName ?? "");
-  if (!sourceClassName || !sourceMethodName) {
-    logger.error(`无法从 source-method 解析源类名/方法名:${String(sourceClassName)}.${String(sourceMethodName)}`);
-    console.error("error: cannot resolve the source class/method from --source-method (expects a single-class method-body file).");
-    return 2;
-  }
-  logger.info(`源侧签名:${sourceClassName}.${sourceMethodName}`);
-
-  // 5. 双侧驱动 + 执行器。
-  const executor = new RealDriverExecutor({ logger });
+  // 6. 双侧驱动(描述是唯一契约)。
   const targetSide = (content: string): SideSpec => ({
     language: "Java",
     driverSource: generateDriverSource(description),
@@ -487,6 +525,9 @@ export async function runE2E(argv: string[]): Promise<number> {
   const notice = (msg: string): void => {
     if (!parsed.json) console.log(msg);
   };
+  if (mitgenSummary !== undefined) {
+    notice(`MitGen 摘要:${mitgenSummary}(case id 形如 frag-<n>-<k>;expected 由源侧实跑录制)。`);
+  }
 
   // 6. 阶段 A:真实翻译产物验证(验收主体)。
   logger.info("阶段[A]:验证翻译产物(差分验证 + 需求黄金校验)");
@@ -498,7 +539,86 @@ export async function runE2E(argv: string[]): Promise<number> {
     logger.error("阶段[A] 未全 PASS:翻译产物与源侧存在差异(或偏离需求)");
   }
 
-  // 7. 阶段 B:注入 bug 演示 —— 把目标方法体替换为固定错误返回值,验证差分机制能检出 FAIL。
+  // 7. 阶段 D(可选,--analyzer):DISTINCT 描述引导的分支一致性分析 —— 双侧共享缺陷演示。
+  //    旧流程预期:缺陷源实现 + 忠实镜像的翻译产物 → 差分两侧一致 → 全 PASS(行为等价率高但漏检);
+  //    Analyzer 以 NLD 为锚:分支清单判定缺陷分支 nldConsistent=false → expected 偏离需求 →
+  //    标记 diverges/flag-fail → 阶段 D 判定检出(对应论文 DDR 提升)。需要 DEEPSEEK_API_KEY。
+  //    演示 job 使用 --fixture 描述(确定性:expected 复制缺陷 → 差分全 PASS → Analyzer 改判检出;
+  //    真实 LLM 描述在增强 prompt 下可能已含正确 expected,阶段 A 即检出,Analyzer 增量不可见)。
+  if (parsed.analyzer) {
+    if (!apiKey || apiKey.trim() === "") {
+      logger.error("阶段[D] 需要 DEEPSEEK_API_KEY(--api-key 可覆盖)");
+      console.error("error: --analyzer requires DEEPSEEK_API_KEY (or --api-key).");
+      return 2;
+    }
+    logger.info("阶段[D]:Analyzer 分支一致性分析(双侧共享缺陷演示,LLM 判定,无插桩)");
+    let stageDDescription: TestDescription = description;
+    try {
+      stageDDescription = validateDescription(JSON.parse(readFileSync(resolve(parsed.fixture), "utf-8")));
+      logger.info(`阶段[D] 使用 fixture 描述(确定性演示):${parsed.fixture}`);
+    } catch (error) {
+      logger.warn(`阶段[D] fixture 描述不可用,回退当前描述:${errorMessage(error)}`);
+    }
+    stageDDescription = {
+      ...stageDDescription,
+      target: {
+        ...stageDDescription.target,
+        language: "Java",
+        className: targetClassName,
+        method: targetMethodName,
+        isStatic: true,
+      },
+      requirement: parsed.requirement,
+    };
+    // 按 stageDDescription 重建双侧驱动(与阶段 A 的 sourceSide/targetSide 分离)。
+    const stageDSourceSide: SideSpec = {
+      language: parsed.sourceLang,
+      driverSource: generateSourceDriverSource(stageDDescription, sourceInvocation),
+      sourceFiles: [{ relativePath: `source.${sourceExtension}`, content: sourceContent }],
+    };
+    const stageDTargetSide = (content: string): SideSpec => ({
+      language: "Java",
+      driverSource: generateDriverSource(stageDDescription),
+      sourceFiles: [{ relativePath: `${targetClassName.split(".").pop()}.java`, content }],
+    });
+    const analyzer = new LlmAnalyzer({ apiKey, logger, timeoutMs: parsed.timeoutMs });
+    let consistencyResult;
+    try {
+      consistencyResult = await runConsistencyVerification(
+        { description: stageDDescription, source: stageDSourceSide, target: stageDTargetSide(targetContent) },
+        executor,
+        analyzer,
+        { augmentationBudget: 1, logger },
+      );
+    } catch (error) {
+      logger.error(`阶段[D] Analyzer 分析失败:${errorMessage(error)}`);
+      console.error(`error: stage D analyzer failed: ${errorMessage(error)}`);
+      return 2;
+    }
+    const { consistency } = consistencyResult;
+    const total = consistency.inventory.branches.length;
+    const covered = consistency.coverage.covered.length;
+    const diverging = consistency.cases.filter((c) => c.nldVerdict === "diverges" || c.recommend === "flag-fail");
+    logger.info(
+      `阶段[D] 分支清单:${total} 个分支(方法 ${consistency.inventory.methodId}),差分覆盖率 ${covered}/${total}`,
+    );
+    notice(`Analyzer 分支清单:${total} 个分支,差分覆盖率 ${covered}/${total}${consistency.augmentations.length > 0 ? `,augmentation 补测 ${consistency.augmentations.length} 个 case` : ""}`);
+    for (const c of diverging) {
+      notice(`Analyzer 检出 [${c.caseId}] nldVerdict=${c.nldVerdict} recommend=${c.recommend}: ${c.reasons.join("; ")}`);
+      logger.warn(`阶段[D] 检出 case ${c.caseId}: ${c.reasons.join("; ")}`);
+    }
+    if (diverging.length > 0) {
+      logger.info(`阶段[D] 检出 ${diverging.length} 个"双侧一致但偏离需求"的 case(旧流程全 PASS,检错率提升)`);
+      notice(`阶段[D] 结果:检出 ${diverging.length} 个 case 两侧差分一致但偏离需求 —— 旧流程全 PASS,新流程检出(对应 DDR 提升)。`);
+    } else {
+      exitCode = 1;
+      logger.error("阶段[D] 未检出偏离需求的 case:Analyzer 未能识别共享缺陷(演示失败)");
+    }
+  } else {
+    logger.info("阶段[D]:跳过(未传 --analyzer;开启需 DEEPSEEK_API_KEY 或 --api-key)");
+  }
+
+  // 8. 阶段 B:注入 bug 演示 —— 把目标方法体替换为固定错误返回值,验证差分机制能检出 FAIL。
   logger.info("阶段[B]:注入 bug 演示(目标方法体 → 固定错误返回值)");
   const buggyTarget = injectBug(targetContent, targetClassName, targetMethodName);
   logger.debug(`注入 bug 后的目标文件:\n${buggyTarget}`);
@@ -513,6 +633,29 @@ export async function runE2E(argv: string[]): Promise<number> {
     exitCode = 1;
     logger.error("阶段[B] 注入 bug 未被检出:验证仍全 PASS,差分机制失效");
     console.error("error: injected bug was NOT detected (verification still all-PASS); differential mechanism broken.");
+  }
+
+  // 阶段 B2(仅 --generator mitgen + --branch-bug):分支级 bug 注入 + MitGen 检出演示。
+  // 与阶段 B(整方法体替换)不同,这里只翻转目标方法内的单个比较运算符(bug 藏在单个分支),
+  // 验证 MitGen 片段级定向输入能覆盖到此前整方法生成常漏检的分支/边界。
+  if (parsed.generator === "mitgen" && apiKey && apiKey.trim() !== "" && parsed.branchBug) {
+    logger.info("阶段[B2]:分支级 bug 注入演示(MitGen 片段级用例检出门闩边界翻转)");
+    const branchBuggyTarget = injectBranchBug(targetContent, targetClassName, targetMethodName);
+    logger.debug(`分支级 bug 注入后的目标文件:\n${branchBuggyTarget}`);
+    const branchReport = await verify(makeJob(targetSide(branchBuggyTarget)), executor, logger);
+    printReport(branchReport);
+    logger.info(
+      `阶段[B2] 验证:passRate=${branchReport.passRate.toFixed(2)} (pass=${branchReport.passedCases} fail=${branchReport.failedCases} divergent=${branchReport.divergentCases})`,
+    );
+    const branchDetected = branchReport.failedCases > 0 || branchReport.divergentCases > 0;
+    if (branchDetected) {
+      logger.info("阶段[B2] 分支级 bug 检出:FAIL(演示符合预期:MitGen 用例覆盖到了翻转的分支)");
+      notice("分支级 bug 检出:FAIL —— MitGen 片段级用例检出了单个分支的比较边界翻转。");
+    } else {
+      exitCode = 1;
+      logger.error("阶段[B2] 分支级 bug 未被检出:MitGen 用例未覆盖到翻转的分支");
+      console.error("error: branch-level bug was NOT detected by MitGen cases.");
+    }
   }
 
   // 8. 阶段 C:修复闭环演示(有 key)。

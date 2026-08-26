@@ -151,6 +151,33 @@ describe.skipIf(!isToolchainAvailable("Java"))("RealDriverExecutor Java 集成",
     expect(compiled.success).toBe(false);
     expect(compiled.errors.length).toBeGreaterThan(0);
   });
+
+  it("FQN 类名 + 包私有类:驱动同包声明 → 编译运行成功(包私有成员可访问)", async () => {
+    const driver = generateDriverSource({
+      schemaVersion: "1.0",
+      target: { language: "Java", className: "com.example.Secret", method: "secret", isStatic: true, constructorArgs: [] },
+      cases: [
+        { id: "c1", inputs: [], expected: { kind: "return", value: { type: "string", value: "open" } } },
+      ],
+    });
+    const side = makeSide("Java", driver, [
+      {
+        relativePath: "com/example/Secret.java",
+        content: "package com.example; final class Secret { static String secret() { return \"open\"; } }",
+      },
+    ]);
+
+    const compiled = await executor.compile(side);
+    expect(compiled.success).toBe(true);
+    expect(compiled.errors).toEqual([]);
+
+    const ran = await executor.run(side);
+    expect(ran.exitCode).toBe(0);
+    expect(ran.stderr).toBe("");
+    const parsed = JSON.parse(ran.stdout) as { results: Array<{ outcome: string; returnValue: { type: string; value: string } }> };
+    expect(parsed.results[0].outcome).toBe("return");
+    expect(parsed.results[0].returnValue.value).toBe("open");
+  });
 });
 
 describe.skipIf(!isToolchainAvailable("C#"))("RealDriverExecutor C# 集成", () => {

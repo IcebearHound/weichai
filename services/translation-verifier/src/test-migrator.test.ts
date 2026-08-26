@@ -238,4 +238,57 @@ describe("MIGRATOR_SYSTEM_PROMPT(需求第一规则)", () => {
   it("does not contain the old rule 'do not invent behavior not present in the source'", () => {
     expect(MIGRATOR_SYSTEM_PROMPT).not.toContain("do not invent behavior not present in the source");
   });
+
+  // ---- 方向 2(DISTINCT)提示词增强断言 ----
+
+  it("declares the requirement as the ONLY ground truth and forbids replicating source defects", () => {
+    expect(MIGRATOR_SYSTEM_PROMPT).toMatch(/ONLY ground truth/i);
+    expect(MIGRATOR_SYSTEM_PROMPT).toMatch(/may contain defects/i);
+    expect(MIGRATOR_SYSTEM_PROMPT).toMatch(/replicate source\s+defects/i);
+  });
+
+  it("requires the three-part description structure (场景/触发行为/目标分支或边界)", () => {
+    expect(MIGRATOR_SYSTEM_PROMPT).toMatch(/场景: <scenario>/);
+    expect(MIGRATOR_SYSTEM_PROMPT).toMatch(/触发行为: <triggered behavior>/);
+    expect(MIGRATOR_SYSTEM_PROMPT).toMatch(/目标分支或边界: <target branch or boundary>/);
+  });
+
+  it("documents the optional branches field consumed by the consistency analyzer", () => {
+    expect(MIGRATOR_SYSTEM_PROMPT).toMatch(/"branches": \["\.\.\."\]/);
+    expect(MIGRATOR_SYSTEM_PROMPT).toMatch(/branch-level consistency analyzer/i);
+  });
+
+  it("requires at least 3 cases covering nominal/boundary/error and names boundaries", () => {
+    expect(MIGRATOR_SYSTEM_PROMPT).toMatch(/AT LEAST 3 cases/i);
+    expect(MIGRATOR_SYSTEM_PROMPT).toMatch(/nominal, boundary, and error/i);
+    expect(MIGRATOR_SYSTEM_PROMPT).toMatch(/off-by-one/i);
+  });
+});
+
+describe("buildMigrationPrompt: VALIDATION_FEEDBACK 与签名增强", () => {
+  it("emits the VALIDATION_FEEDBACK section after REQUIREMENT when validationFeedback is present", () => {
+    const input = {
+      ...sampleInput(),
+      validationFeedback: "Driver.cs(3,9): error CS1503: argument 1: cannot convert from 'string' to 'int'",
+    };
+    const prompt = buildMigrationPrompt(input);
+    expect(prompt).toContain("VALIDATION_FEEDBACK (编译诊断反馈,最高优先修正)");
+    expect(prompt).toContain(input.validationFeedback as string);
+    // 反馈段位于 REQUIREMENT 之后、REFERENCE_IMPLEMENTATION 之前。
+    expect(prompt.indexOf("REQUIREMENT")).toBeLessThan(prompt.indexOf("VALIDATION_FEEDBACK"));
+    expect(prompt.indexOf("VALIDATION_FEEDBACK")).toBeLessThan(prompt.indexOf("REFERENCE_IMPLEMENTATION"));
+  });
+
+  it("omits the VALIDATION_FEEDBACK section when not provided", () => {
+    const prompt = buildMigrationPrompt(sampleInput());
+    expect(prompt).not.toContain("VALIDATION_FEEDBACK");
+  });
+
+  it("includes the target signature line in the target contract", () => {
+    const prompt = buildMigrationPrompt({ ...sampleInput(), targetSignature: "public static String decodeText(String)" });
+    expect(prompt).toContain("- signature: public static String decodeText(String)");
+    // 缺省时提示从源方法声明推导。
+    const defaultPrompt = buildMigrationPrompt(sampleInput());
+    expect(defaultPrompt).toContain("- signature: derive from the source method declaration (return type + parameters)");
+  });
 });

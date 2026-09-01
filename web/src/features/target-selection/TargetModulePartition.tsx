@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
   Box,
   Boxes,
@@ -6,10 +6,8 @@ import {
   CheckCircle2,
   Circle,
   FileCode2,
-  Search,
 } from 'lucide-react';
 import type { ModuleNode, ModuleTarget } from '@forexplore/contracts';
-import { ModuleTree, type ModuleImplementationFilter } from './ModuleTree';
 
 interface TreeStats {
   files: number;
@@ -49,27 +47,17 @@ function owningModule(target: ModuleTarget): string {
   return parts[srcIndex + 1] ?? parts[0] ?? 'workspace';
 }
 
-const filters: Array<{ id: ModuleImplementationFilter; label: string }> = [
-  { id: 'all', label: '全部' },
-  { id: 'implemented', label: '已完成' },
-  { id: 'unimplemented', label: '未完成' },
-];
-
 export function TargetModulePartition({
   root,
   selected,
-  onSelect,
   confirmLabel,
   onConfirm,
 }: {
   root: ModuleNode;
   selected: ModuleTarget | null;
-  onSelect: (target: ModuleTarget) => void;
   confirmLabel?: string;
   onConfirm: () => void;
 }) {
-  const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<ModuleImplementationFilter>('all');
   const stats = useMemo(() => treeStats(root), [root]);
   const symbolTotal = stats.implemented + stats.unimplemented;
   const completion = symbolTotal === 0 ? 0 : Math.round((stats.implemented / symbolTotal) * 100);
@@ -82,35 +70,7 @@ export function TargetModulePartition({
           <h1>识别目标工程骨架与实现状态</h1>
           <p>沿用 01A 的模块逻辑组织当前待处理工作区，并将 module / class / method 状态绑定到检索目标。</p>
         </div>
-        <label className="partition-search">
-          <Search size={14} />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索模块、文件、类或方法"
-            aria-label="搜索目标工作区"
-          />
-          <kbd>⌘K</kbd>
-        </label>
       </header>
-
-      <div className="target-toolbar">
-        <div className="status-filters" aria-label="实现状态筛选">
-          <span>状态筛选：</span>
-          {filters.map((item) => (
-            <button
-              type="button"
-              className={filter === item.id ? 'is-active' : ''}
-              aria-pressed={filter === item.id}
-              key={item.id}
-              onClick={() => setFilter(item.id)}
-            >
-              {item.id === 'implemented' ? <CheckCircle2 size={12} /> : item.id === 'unimplemented' ? <Circle size={12} /> : null}
-              {item.label}
-            </button>
-          ))}
-        </div>
-      </div>
 
       <section className="partition-metrics target-metrics" aria-label="目标工作区统计">
         <div><Boxes size={16} /><span>模块<strong>{functionalModuleCount(root)}</strong></span></div>
@@ -122,16 +82,28 @@ export function TargetModulePartition({
       </section>
 
       <div className="target-partition-grid">
-        <section className="target-tree-panel">
-          <div className="target-tree-columns"><span>目标工作区</span><span>类型</span><span>实现状态</span></div>
-          <ModuleTree
-            root={root}
-            selectedId={selected?.id ?? null}
-            onSelect={onSelect}
-            query={query}
-            statusFilter={filter}
-            showStatus
-          />
+        <section className="workspace-overview-panel">
+          <div className="partition-panel-heading"><span>工作区概览</span><small>模块树已整合至左侧边栏</small></div>
+          <div className="workspace-overview-hero">
+            <span><Boxes size={22} /></span>
+            <div>
+              <strong>{root.name}</strong>
+              <small>{functionalModuleCount(root)} modules · {stats.files} files · {symbolTotal} selectable symbols</small>
+            </div>
+            <em>{completion}%</em>
+          </div>
+          <div className="workspace-completion-bar" aria-label={`工作区实现完成度 ${completion}%`}>
+            <span style={{ width: `${completion}%` }} />
+          </div>
+          <div className="workspace-overview-copy">
+            <strong>从左侧模块树选择检索目标</strong>
+            <p>文件夹、文件、类和方法统一在左侧边栏浏览。搜索与状态筛选会直接收敛这棵树，中央区域只显示工作区状态与当前目标契约。</p>
+            <ul>
+              <li><CheckCircle2 size={13} /> class / method 可作为候选检索目标</li>
+              <li><FileCode2 size={13} /> 文件节点保留路径与上下文</li>
+              <li><Circle size={13} /> 未完成符号可通过左侧状态筛选定位</li>
+            </ul>
+          </div>
         </section>
 
         <aside className="target-detail-panel">

@@ -30,10 +30,12 @@ the default and primary view:
   and the generated `summary.json` knowledge used by retrieval. The UI accepts
   injected `repositoryModules`; the default catalog keeps the local prototype
   runnable without a planning service.
-- `01B` is the default view. It derives workspace counts from the injected `ModuleNode` tree, supports
-  symbol search and implementation-status filtering, and requires the user to
-  confirm a class or function before entering candidate retrieval. Switching
-  views does not clear the active workflow; selecting a different target does.
+- `01B` is the default view. Its folder, file, class, and method tree lives in
+  the left explorer alongside search and implementation-status filters. The
+  center workspace derives counts from the injected `ModuleNode` tree and shows
+  the selected target contract. Users must confirm a class or function before
+  entering candidate retrieval. Switching views does not clear the active
+  workflow; selecting a different target does.
 
 Natural-language requirements now belong to step `02`, where they are combined
 with the confirmed target contract before calling `CodeSearchPort`.

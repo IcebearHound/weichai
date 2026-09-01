@@ -17,9 +17,11 @@ async function selectQuoteTarget() {
 describe('ForeXplore vertical workflow', () => {
   it('defaults to 01B and switches to 01A without making history a gate', async () => {
     const moduleTree = await workspaceModuleSymbols.loadTree(csharpWorkspaceId);
-    render(<App ports={mockWorkflowPorts} moduleTree={moduleTree} />);
+    const { container } = render(<App ports={mockWorkflowPorts} moduleTree={moduleTree} />);
 
     expect(screen.getByText('识别目标工程骨架与实现状态')).toBeTruthy();
+    expect(container.querySelector('.explorer-pane .module-tree')).toBeTruthy();
+    expect(container.querySelector('.workspace-pane .module-tree')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /历史仓 01A/ }));
     expect(screen.getByText('把历史代码仓沉淀为可检索的功能模块')).toBeTruthy();
     expect(screen.getByText('summary.json')).toBeTruthy();

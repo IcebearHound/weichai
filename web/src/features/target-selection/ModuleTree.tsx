@@ -17,7 +17,6 @@ interface ModuleTreeProps {
   onSelect: (target: ModuleTarget) => void;
   query?: string;
   statusFilter?: ModuleImplementationFilter;
-  showStatus?: boolean;
 }
 
 export type ModuleImplementationFilter = 'all' | 'implemented' | 'unimplemented';
@@ -83,7 +82,6 @@ export function ModuleTree({
   onSelect,
   query = '',
   statusFilter = 'all',
-  showStatus = false,
 }: ModuleTreeProps) {
   const initialExpanded = useMemo(() => new Set(collectInitialExpandedIds(root)), [root]);
   const [expanded, setExpanded] = useState(initialExpanded);
@@ -148,11 +146,6 @@ export function ModuleTree({
             </span>
           ) : null}
           {kindLabels[node.kind] ? <span className="tree-kind">{kindLabels[node.kind]}</span> : null}
-          {showStatus && (node.kind === 'class' || node.kind === 'function') ? (
-            <span className={`tree-implementation ${node.implementationStatus === 'unimplemented' ? 'is-todo' : ''}`}>
-              {node.implementationStatus === 'unimplemented' ? '未完成' : '已完成'}
-            </span>
-          ) : null}
         </button>
         {hasChildren && isExpanded
           ? node.children?.map((child) => renderNode(child, depth + 1))
@@ -162,7 +155,7 @@ export function ModuleTree({
   }
 
   return (
-    <div className={`module-tree ${showStatus ? 'has-status-column' : ''}`}>
+    <div className="module-tree">
       {visibleRoot ? renderNode(visibleRoot, 0) : <div className="tree-empty">没有符合条件的符号</div>}
     </div>
   );

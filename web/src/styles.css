@@ -424,6 +424,57 @@ kbd {
   font: 500 7.5px/1 var(--mono);
 }
 
+.target-explorer-tools {
+  padding: 0 9px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.explorer-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 29px;
+  padding: 0 7px;
+  color: var(--faint);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+
+.explorer-search input {
+  min-width: 0;
+  flex: 1;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-size: 9px;
+}
+
+.explorer-status-filters {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.explorer-status-filters button {
+  min-height: 23px;
+  padding: 0 3px;
+  color: var(--faint);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  font-size: 8px;
+}
+
+.explorer-status-filters button:hover,
+.explorer-status-filters button.is-active {
+  color: oklch(0.42 0.13 250);
+  background: oklch(0.95 0.025 250);
+  border-color: oklch(0.72 0.08 250);
+}
+
 .repository-explorer {
   flex: 1;
   overflow-y: auto;
@@ -449,45 +500,6 @@ kbd {
 .repository-explorer small {
   display: block;
   min-width: 0;
-}
-
-.target-explorer-guide {
-  flex: 1;
-  padding: 8px 10px;
-}
-
-.target-explorer-guide > span {
-  display: grid;
-  grid-template-columns: 33px minmax(0, 1fr);
-  align-items: center;
-  min-height: 48px;
-  color: var(--faint);
-  border-bottom: 1px solid var(--line);
-}
-
-.target-explorer-guide strong {
-  font: 600 10px/1 var(--mono);
-}
-
-.target-explorer-guide small {
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 1.35;
-}
-
-.target-explorer-guide > span.is-done strong {
-  color: var(--positive);
-}
-
-.target-explorer-guide > span.is-active {
-  color: var(--accent-dark);
-  background: var(--accent-soft);
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-
-.target-explorer-guide > span.is-active strong,
-.target-explorer-guide > span.is-active small {
-  padding-left: 5px;
 }
 
 .repository-explorer strong {
@@ -792,12 +804,119 @@ kbd {
 
 .repository-module-list,
 .module-summary-panel,
-.target-tree-panel,
+.workspace-overview-panel,
 .target-detail-panel {
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 3px;
+}
+
+.workspace-overview-panel {
+  min-height: 360px;
+}
+
+.workspace-overview-hero {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 15px 13px;
+}
+
+.workspace-overview-hero > span {
+  display: grid;
+  flex: 0 0 42px;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  color: white;
+  background: oklch(0.53 0.16 250);
+  border-radius: 4px;
+}
+
+.workspace-overview-hero div,
+.workspace-overview-hero strong,
+.workspace-overview-hero small {
+  display: block;
+  min-width: 0;
+}
+
+.workspace-overview-hero div {
+  flex: 1;
+}
+
+.workspace-overview-hero strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.workspace-overview-hero small {
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--faint);
+  font: 400 8px/1.3 var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-overview-hero em {
+  color: var(--positive);
+  font: 600 19px/1 var(--mono);
+  font-style: normal;
+}
+
+.workspace-completion-bar {
+  height: 4px;
+  margin: 0 15px;
+  overflow: hidden;
+  background: var(--paper-deep);
+  border-radius: 2px;
+}
+
+.workspace-completion-bar span {
+  display: block;
+  height: 100%;
+  background: var(--positive);
+}
+
+.workspace-overview-copy {
+  margin: 17px 15px 15px;
+  padding: 14px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+
+.workspace-overview-copy > strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.workspace-overview-copy > p {
+  margin: 7px 0 12px;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.6;
+}
+
+.workspace-overview-copy ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workspace-overview-copy li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.workspace-overview-copy li svg {
+  flex: 0 0 auto;
+  color: oklch(0.52 0.11 250);
 }
 
 .partition-panel-heading {
@@ -1005,69 +1124,6 @@ kbd {
   margin-bottom: 13px;
 }
 
-.partition-search {
-  display: flex;
-  flex: 0 1 340px;
-  align-items: center;
-  gap: 7px;
-  min-width: 230px;
-  height: 34px;
-  padding: 0 8px;
-  color: var(--faint);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-}
-
-.partition-search input {
-  flex: 1;
-  min-width: 0;
-  color: var(--ink);
-  background: transparent;
-  border: 0;
-  outline: 0;
-  font-size: 10px;
-}
-
-.partition-search kbd {
-  color: var(--faint);
-  font-size: 8px;
-}
-
-.target-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 9px;
-}
-
-.status-filters {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--muted);
-  font-size: 9px;
-}
-
-.status-filters button {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 25px;
-  padding: 0 9px;
-  color: var(--muted);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  font-size: 9px;
-}
-
-.status-filters button.is-active {
-  color: oklch(0.42 0.13 250);
-  background: oklch(0.95 0.025 250);
-  border-color: oklch(0.72 0.08 250);
-}
-
 .target-metrics {
   grid-template-columns: repeat(6, minmax(0, 1fr));
 }
@@ -1087,45 +1143,6 @@ kbd {
 
 .target-partition-grid {
   grid-template-columns: minmax(0, 1.2fr) minmax(230px, 0.8fr);
-}
-
-.target-tree-panel .module-tree {
-  max-height: 430px;
-  min-height: 310px;
-}
-
-.target-tree-columns {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 43px 55px;
-  align-items: center;
-  min-height: 35px;
-  padding: 0 9px 0 12px;
-  color: var(--muted);
-  background: var(--paper);
-  border-bottom: 1px solid var(--line);
-  font-size: 9px;
-  font-weight: 600;
-}
-
-.module-tree.has-status-column .tree-row {
-  padding-right: 9px;
-}
-
-.module-tree.has-status-column .tree-kind {
-  flex: 0 0 43px;
-  margin-left: auto;
-  text-align: center;
-}
-
-.tree-implementation {
-  flex: 0 0 55px;
-  color: var(--positive);
-  font-size: 8px;
-  text-align: right;
-}
-
-.tree-implementation.is-todo {
-  color: var(--faint);
 }
 
 .tree-empty {

@@ -34,11 +34,20 @@ import {
   defaultRepositoryModules,
   type RepositoryModuleSummary,
 } from './features/repository-planning/repository-modules';
-import { ModuleTree } from './features/target-selection/ModuleTree';
+import {
+  ModuleTree,
+  type ModuleImplementationFilter,
+} from './features/target-selection/ModuleTree';
 import { TargetModulePartition } from './features/target-selection/TargetModulePartition';
 import { WorkflowRail } from './features/workflow-progress/WorkflowRail';
 
 type ModuleWorkspaceView = 'target' | 'repository';
+
+const moduleFilters: Array<{ id: ModuleImplementationFilter; label: string }> = [
+  { id: 'all', label: '全部' },
+  { id: 'implemented', label: '已完成' },
+  { id: 'unimplemented', label: '未完成' },
+];
 
 const strategyOptions: Array<{
   id: AdaptationStrategy;
@@ -357,6 +366,8 @@ export default function App({
 }: AppProps) {
   const [state, dispatch] = useReducer(workflowReducer, initialWorkflowState);
   const [workspaceView, setWorkspaceView] = useState<ModuleWorkspaceView | null>('target');
+  const [targetQuery, setTargetQuery] = useState('');
+  const [targetFilter, setTargetFilter] = useState<ModuleImplementationFilter>('all');
   const candidate = useMemo(() => selectedCandidate(state), [state]);
 
   function handleTargetSelect(target: ModuleTarget) {
@@ -499,18 +510,40 @@ export default function App({
               </div>
             ))}
           </div>
-        ) : workspaceView === 'target' ? (
-          <div className="target-explorer-guide">
-            <span className="is-done"><strong>01A</strong><small>历史仓模块边界已确认</small></span>
-            <span className="is-active"><strong>01B</strong><small>筛选并确认目标工作区符号</small></span>
-            <span><strong>02</strong><small>目标 + 需求进入候选检索</small></span>
-          </div>
         ) : (
-          <ModuleTree
-            root={moduleTree}
-            selectedId={state.target?.id ?? null}
-            onSelect={handleTargetSelect}
-          />
+          <>
+            <div className="target-explorer-tools">
+              <label className="explorer-search">
+                <Search size={12} />
+                <input
+                  value={targetQuery}
+                  onChange={(event) => setTargetQuery(event.target.value)}
+                  placeholder="搜索文件、类或方法"
+                  aria-label="搜索目标工作区"
+                />
+              </label>
+              <div className="explorer-status-filters" aria-label="侧边栏实现状态筛选">
+                {moduleFilters.map((filter) => (
+                  <button
+                    type="button"
+                    className={targetFilter === filter.id ? 'is-active' : ''}
+                    aria-pressed={targetFilter === filter.id}
+                    key={filter.id}
+                    onClick={() => setTargetFilter(filter.id)}
+                  >
+                    {filter.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <ModuleTree
+              root={moduleTree}
+              selectedId={state.target?.id ?? null}
+              onSelect={handleTargetSelect}
+              query={targetQuery}
+              statusFilter={targetFilter}
+            />
+          </>
         )}
         <div className="explorer-note">
           {workspaceView === 'repository'
@@ -539,7 +572,6 @@ export default function App({
             <TargetModulePartition
               root={moduleTree}
               selected={state.target}
-              onSelect={handleTargetSelect}
               confirmLabel={state.stage === 'target' ? undefined : '返回当前工作流阶段'}
               onConfirm={handleTargetConfirm}
             />

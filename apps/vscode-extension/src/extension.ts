@@ -23,6 +23,7 @@ import {
 import type { ModuleWaveExecutionPort } from './module-wave-execution-host';
 import type { ModuleMigrationWaveRecoveryPort } from './module-migration-recovery';
 import { TranslationPanel } from './panel';
+import { buildModuleExplorer } from './module-explorer';
 import type {
   HostToWebviewMessage,
   WebviewToHostMessage,
@@ -30,6 +31,7 @@ import type {
 import { RepositoryHealthCheck } from './repository-health';
 import { decorateRepositoryStatuses } from './repository-status';
 import { ServiceManager } from './service-manager';
+import { loadSettings } from './settings';
 import { buildModuleTarget } from './target-builder';
 import type { RepositoryStatus } from './ui-types';
 
@@ -72,6 +74,7 @@ interface LastCheckpoint {
 }
 
 let activeRun: ActiveMigrationRun | null = null;
+let moduleExplorerTargets = new Map<string, ModuleTarget>();
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel('ForeXplore');
@@ -149,6 +152,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void {
   activeRun = null;
+  moduleExplorerTargets = new Map();
 }
 
 async function startTranslation(
@@ -210,7 +214,16 @@ async function startTranslation(
   };
 
   const serviceStatus = await services.refresh();
-  const statuses = await refreshRepositoryStatus(services, health);
+  const [statuses, moduleExplorer] = await Promise.all([
+    refreshRepositoryStatus(services, health),
+    buildModuleExplorer({
+      workspaceRoot: workspaceFolder.uri.fsPath,
+      workspaceName: workspaceFolder.name,
+      currentTarget: target,
+      historyRoots: loadSettings().repositoryPaths,
+    }, { includeHistory: false }),
+  ]);
+  moduleExplorerTargets = moduleExplorer.targets;
   const runtime = services.getRuntimePresentation();
 
   await TranslationPanel.createOrShow(
@@ -220,6 +233,7 @@ async function startTranslation(
       workspaceRoot: workspaceFolder.uri.fsPath,
       repositoryStatuses: statuses,
       serviceStatus,
+      moduleExplorer: moduleExplorer.presentation,
       searchProvider: runtime.searchProvider,
       adaptationProvider: runtime.adaptationProvider,
     },
@@ -270,9 +284,63 @@ async function handlePanelMessage(
     case 'CHECK_REPOSITORIES':
       await refreshPanelStatus(host);
       return;
+    case 'REFRESH_MODULE_EXPLORER':
+      await refreshModuleExplorer();
+      return;
+    case 'SELECT_WORKSPACE_TARGET':
+      await selectWorkspaceTarget(message.targetId);
+      return;
     case 'OPEN_TARGET':
       await openTarget();
       return;
+  }
+}
+
+async function refreshModuleExplorer(): Promise<void> {
+  try {
+    const run = requireActiveRun();
+    const result = await buildModuleExplorer({
+      workspaceRoot: run.workspaceFolder.uri.fsPath,
+      workspaceName: run.workspaceFolder.name,
+      currentTarget: run.target,
+      historyRoots: loadSettings().repositoryPaths,
+    });
+    moduleExplorerTargets = result.targets;
+    publish({ type: 'MODULE_EXPLORER', explorer: result.presentation });
+  } catch (error) {
+    publishError(errorMessage(error, '刷新模块视图失败'));
+  }
+}
+
+async function selectWorkspaceTarget(targetId: string): Promise<void> {
+  try {
+    const run = requireActiveRun();
+    const target = moduleExplorerTargets.get(targetId);
+    if (!target) throw new Error('该目标不属于当前 Host 静态分析快照。');
+    if (target.id === run.target.id) return;
+    const canonicalPath = canonicalWorkspacePath(run.workspaceFolder.uri.fsPath, target.path);
+    const targetUri = vscode.Uri.joinPath(run.workspaceFolder.uri, ...canonicalPath.split('/'));
+    const openDocument = vscode.workspace.textDocuments.find(
+      (document) => document.uri.toString() === targetUri.toString(),
+    );
+    if (openDocument?.isDirty) {
+      throw new Error('新目标文件有未保存的编辑；请先保存后再切换目标。');
+    }
+    const originalBytes = await vscode.workspace.fs.readFile(targetUri);
+    activeRun = {
+      workspaceFolder: run.workspaceFolder,
+      targetUri,
+      target,
+      originalSha256: sha256(originalBytes),
+      originalContent: Buffer.from(originalBytes).toString('utf8'),
+      requirement: '',
+      candidates: [],
+      selectedCandidateId: null,
+      adaptation: null,
+    };
+    publish({ type: 'TARGET_SELECTED', target });
+  } catch (error) {
+    publishError(errorMessage(error, '切换目标失败'));
   }
 }
 

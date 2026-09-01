@@ -3,8 +3,10 @@ import type { RepositoryStatus, ServiceStatus } from '../../src/ui-types';
 import type { ModuleExplorerMode, ModuleExplorerNode } from '../../src/ui-types';
 import {
   initialWorkflowState,
+  getStepStatus,
   selectedCandidate,
   workflowReducer,
+  type WorkflowStage,
   type WorkflowState,
 } from '@forexplore/workflow-core';
 import type { PanelInitPayload } from '../../src/protocol/messages';
@@ -29,6 +31,7 @@ export default function App() {
   const [historyId, setHistoryId] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [refreshingExplorer, setRefreshingExplorer] = useState(false);
+  const [visibleStep, setVisibleStep] = useState<WorkflowStage>('target');
   const [error, setError] = useState<string | null>(null);
   const pendingRef = useRef<WorkflowState['pending']>(null);
   const targetIdRef = useRef<string | null>(null);
@@ -48,6 +51,7 @@ export default function App() {
           setError(null);
           if (targetIdRef.current !== message.payload.target.id) {
             dispatch({ type: 'SELECT_TARGET', target: message.payload.target });
+            setVisibleStep('requirement');
           }
           break;
         case 'SEARCH_RESULT':
@@ -78,6 +82,7 @@ export default function App() {
           setPayload((current) => current ? { ...current, target: message.target } : current);
           if (targetIdRef.current !== message.target.id) {
             dispatch({ type: 'SELECT_TARGET', target: message.target });
+            setVisibleStep('requirement');
           }
           setExplorerMode('target');
           setSelectedNodeId(null);
@@ -92,6 +97,10 @@ export default function App() {
       }
     });
   }, [bus]);
+
+  useEffect(() => {
+    setVisibleStep(state.stage === 'complete' ? 'patch' : state.stage);
+  }, [state.stage]);
 
   function handleSearch(): void {
     if (!state.target) return;
@@ -160,6 +169,12 @@ export default function App() {
     }
   }
 
+  function handleStepChange(step: WorkflowStage): void {
+    if (getStepStatus(step, state.stage) === 'upcoming') return;
+    setExplorerMode('target');
+    setVisibleStep(step);
+  }
+
   if (!payload || !state.target || !moduleExplorer) {
     return (
       <div className="app">
@@ -177,7 +192,11 @@ export default function App() {
           <span className="brand-glyph">FX</span>
           <strong>ForeXplore</strong>
         </div>
-        <StepRail stage={state.stage} />
+        <StepRail
+          stage={state.stage}
+          activeStep={visibleStep}
+          onStepChange={handleStepChange}
+        />
       </header>
 
       <ModuleWorkspace
@@ -200,7 +219,7 @@ export default function App() {
         ) : null}
 
         <main className="stage-body">
-        {state.stage === 'requirement' ? (
+        {visibleStep === 'requirement' ? (
           <RequirementStage
             state={state}
             target={state.target}
@@ -211,7 +230,7 @@ export default function App() {
           />
         ) : null}
 
-        {state.stage === 'candidates' ? (
+        {visibleStep === 'candidates' ? (
           <CandidatesStage
             state={state}
             dispatch={dispatch}
@@ -221,11 +240,11 @@ export default function App() {
           />
         ) : null}
 
-        {state.stage === 'adaptation' ? (
+        {visibleStep === 'adaptation' ? (
           <AdaptationStage state={state} candidate={candidate} />
         ) : null}
 
-        {(state.stage === 'patch' || state.stage === 'complete') && state.adaptation ? (
+        {visibleStep === 'patch' && state.adaptation ? (
           <PatchStage
             state={state}
             onApply={handleApply}

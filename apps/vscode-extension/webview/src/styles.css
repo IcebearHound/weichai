@@ -128,9 +128,33 @@ kbd {
 .step {
   display: flex;
   align-items: center;
-  gap: 5px;
   min-width: 0;
   color: var(--muted);
+}
+
+.step-button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 3px 5px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.step-button:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.step.is-current-view .step-button {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .step-marker {
@@ -165,6 +189,11 @@ kbd {
 }
 
 .step.is-active .step-label {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.step.is-current-view .step-label {
   color: var(--fg);
   font-weight: 600;
 }

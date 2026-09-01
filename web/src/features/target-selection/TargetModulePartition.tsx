@@ -59,11 +59,13 @@ export function TargetModulePartition({
   root,
   selected,
   onSelect,
+  confirmLabel,
   onConfirm,
 }: {
   root: ModuleNode;
   selected: ModuleTarget | null;
   onSelect: (target: ModuleTarget) => void;
+  confirmLabel?: string;
   onConfirm: () => void;
 }) {
   const [query, setQuery] = useState('');
@@ -161,7 +163,7 @@ export function TargetModulePartition({
             <div className="target-detail-empty"><Boxes size={30} /><strong>选择一个目标符号</strong><span>模块与文件用于浏览；class 或 method 可进入候选检索。</span></div>
           )}
           <button type="button" className="button-primary partition-next" disabled={!selected} onClick={onConfirm}>
-            {selected ? `使用 ${selected.name} 开始候选检索` : '请选择 class 或 method'}
+            {selected ? confirmLabel ?? `使用 ${selected.name} 开始候选检索` : '请选择 class 或 method'}
           </button>
         </aside>
       </div>

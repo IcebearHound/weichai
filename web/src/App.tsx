@@ -1,4 +1,4 @@
-import { useMemo, useReducer } from 'react';
+import { useMemo, useReducer, useState } from 'react';
 import {
   Blocks,
   Boxes,
@@ -17,6 +17,7 @@ import {
 import type {
   AdaptationStrategy,
   ModuleNode,
+  ModuleTarget,
 } from '@forexplore/contracts';
 import {
   initialWorkflowState,
@@ -36,6 +37,8 @@ import {
 import { ModuleTree } from './features/target-selection/ModuleTree';
 import { TargetModulePartition } from './features/target-selection/TargetModulePartition';
 import { WorkflowRail } from './features/workflow-progress/WorkflowRail';
+
+type ModuleWorkspaceView = 'target' | 'repository';
 
 const strategyOptions: Array<{
   id: AdaptationStrategy;
@@ -231,11 +234,13 @@ function Inspector({
   searchProvider,
   adaptationProvider,
   repositoryModuleCount,
+  workspaceView,
 }: {
   state: typeof initialWorkflowState;
   searchProvider: string;
   adaptationProvider: string;
   repositoryModuleCount: number;
+  workspaceView: ModuleWorkspaceView | null;
 }) {
   const candidate = selectedCandidate(state);
   return (
@@ -246,8 +251,8 @@ function Inspector({
       </div>
 
       <section className="inspector-section">
-        <h3>{state.stage === 'repository' ? '历史仓分析' : '目标符号'}</h3>
-        {state.stage === 'repository' ? (
+        <h3>{workspaceView === 'repository' ? '历史仓分析' : '目标符号'}</h3>
+        {workspaceView === 'repository' ? (
           <div className="repository-inspector-card">
             <Database size={16} />
             <strong>{repositoryModuleCount} 个功能模块</strong>
@@ -351,7 +356,17 @@ export default function App({
   adaptationProvider = 'Mock',
 }: AppProps) {
   const [state, dispatch] = useReducer(workflowReducer, initialWorkflowState);
+  const [workspaceView, setWorkspaceView] = useState<ModuleWorkspaceView | null>('target');
   const candidate = useMemo(() => selectedCandidate(state), [state]);
+
+  function handleTargetSelect(target: ModuleTarget) {
+    if (state.target?.id !== target.id) dispatch({ type: 'SELECT_TARGET', target });
+  }
+
+  function handleTargetConfirm() {
+    if (state.stage === 'target') dispatch({ type: 'CONFIRM_TARGET' });
+    setWorkspaceView(null);
+  }
 
   async function handleSearch() {
     if (!state.target) return;
@@ -445,14 +460,37 @@ export default function App({
 
       <aside className="explorer-pane">
         <div className="pane-heading">
-          <span>{state.stage === 'repository' ? '历史仓划分' : '目标模块树'}</span>
+          <span>{workspaceView === 'repository' ? '历史仓划分' : workspaceView === 'target' ? '目标模块树' : '当前流程'}</span>
           <PanelLeftClose size={14} />
         </div>
+        <nav className="workspace-switcher" aria-label="模块工作区切换">
+          <button
+            type="button"
+            className={workspaceView === 'target' ? 'is-active' : ''}
+            aria-pressed={workspaceView === 'target'}
+            onClick={() => setWorkspaceView('target')}
+          >
+            <Blocks size={13} /> 目标工作区 <small>01B</small>
+          </button>
+          <button
+            type="button"
+            className={workspaceView === 'repository' ? 'is-active' : ''}
+            aria-pressed={workspaceView === 'repository'}
+            onClick={() => setWorkspaceView('repository')}
+          >
+            <Database size={13} /> 历史仓 <small>01A</small>
+          </button>
+          {workspaceView !== null && state.stage !== 'target' ? (
+            <button type="button" onClick={() => setWorkspaceView(null)}>
+              <Workflow size={13} /> 返回当前流程
+            </button>
+          ) : null}
+        </nav>
         <div className="explorer-scope">
-          <span>{state.stage === 'repository' ? 'HISTORY REPOSITORY' : 'TARGET WORKSPACE'}</span>
-          <strong>{state.stage === 'repository' ? `${repositoryModules.length} MODULES` : moduleTree.name}</strong>
+          <span>{workspaceView === 'repository' ? 'HISTORY REPOSITORY' : workspaceView === 'target' ? 'TARGET WORKSPACE' : 'WORKFLOW CONTEXT'}</span>
+          <strong>{workspaceView === 'repository' ? `${repositoryModules.length} MODULES` : moduleTree.name}</strong>
         </div>
-        {state.stage === 'repository' ? (
+        {workspaceView === 'repository' ? (
           <div className="repository-explorer">
             {repositoryModules.map((module) => (
               <div key={module.id}>
@@ -461,7 +499,7 @@ export default function App({
               </div>
             ))}
           </div>
-        ) : state.stage === 'target' ? (
+        ) : workspaceView === 'target' ? (
           <div className="target-explorer-guide">
             <span className="is-done"><strong>01A</strong><small>历史仓模块边界已确认</small></span>
             <span className="is-active"><strong>01B</strong><small>筛选并确认目标工作区符号</small></span>
@@ -471,13 +509,15 @@ export default function App({
           <ModuleTree
             root={moduleTree}
             selectedId={state.target?.id ?? null}
-            onSelect={(target) => dispatch({ type: 'SELECT_TARGET', target })}
+            onSelect={handleTargetSelect}
           />
         )}
         <div className="explorer-note">
-          {state.stage === 'repository'
+          {workspaceView === 'repository'
             ? '模块边界来自静态符号与依赖证据；Agent 摘要不会直接修改历史代码仓。'
-            : '仅 class / function 可作为检索目标；选择后需在 01B 详情区显式确认。'}
+            : workspaceView === 'target'
+              ? '目标工作区是主视图；历史仓可随时切换查看，且不会清空当前流程。'
+              : '切换模块工作区只改变查看内容；选择新目标时才会重置下游结果。'}
         </div>
       </aside>
 
@@ -486,24 +526,26 @@ export default function App({
         {state.error ? <div className="error-banner">{state.error}</div> : null}
 
         <div className="workspace-content">
-          {state.stage === 'repository' ? (
+          {workspaceView === 'repository' ? (
             <RepositoryModulePlan
               modules={repositoryModules}
               sourceLabel={searchProvider === 'SeekDB' ? 'SeekDB code corpus' : 'Mock catalog'}
-              onConfirm={() => dispatch({ type: 'CONFIRM_REPOSITORY_MODULES' })}
+              confirmLabel="返回目标工作区"
+              onConfirm={() => setWorkspaceView('target')}
             />
           ) : null}
 
-          {state.stage === 'target' ? (
+          {workspaceView === 'target' ? (
             <TargetModulePartition
               root={moduleTree}
               selected={state.target}
-              onSelect={(target) => dispatch({ type: 'SELECT_TARGET', target })}
-              onConfirm={() => dispatch({ type: 'CONFIRM_TARGET' })}
+              onSelect={handleTargetSelect}
+              confirmLabel={state.stage === 'target' ? undefined : '返回当前工作流阶段'}
+              onConfirm={handleTargetConfirm}
             />
           ) : null}
 
-          {state.stage === 'requirement' ? (
+          {workspaceView === null && state.stage === 'requirement' ? (
             <RequirementPanel
               state={state}
               dispatch={dispatch}
@@ -512,7 +554,7 @@ export default function App({
             />
           ) : null}
 
-          {state.stage === 'candidates' ? (
+          {workspaceView === null && state.stage === 'candidates' ? (
             <div className="candidate-stage">
               <CandidateBrowser
                 candidates={state.candidates}
@@ -531,7 +573,7 @@ export default function App({
             </div>
           ) : null}
 
-          {state.stage === 'adaptation' ? (
+          {workspaceView === null && state.stage === 'adaptation' ? (
             <div className="processing-state">
               <div className="processing-rings" aria-hidden="true">
                 <span />
@@ -551,7 +593,7 @@ export default function App({
             </div>
           ) : null}
 
-          {(state.stage === 'patch' || state.stage === 'complete') && state.adaptation ? (
+          {workspaceView === null && (state.stage === 'patch' || state.stage === 'complete') && state.adaptation ? (
             <PatchReview
               result={state.adaptation}
               applyResult={state.applyResult}
@@ -568,6 +610,7 @@ export default function App({
         searchProvider={searchProvider}
         adaptationProvider={adaptationProvider}
         repositoryModuleCount={repositoryModules.length}
+        workspaceView={workspaceView}
       />
 
       <footer className="statusbar">

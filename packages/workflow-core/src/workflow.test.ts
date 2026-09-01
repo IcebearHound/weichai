@@ -43,10 +43,7 @@ const adaptation: AdaptationResult = {
 
 describe('workflowReducer', () => {
   it('runs through target, search, adaptation and apply stages', () => {
-    let state = workflowReducer(initialWorkflowState, { type: 'CONFIRM_REPOSITORY_MODULES' });
-    expect(state.stage).toBe('target');
-
-    state = workflowReducer(state, { type: 'SELECT_TARGET', target });
+    let state = workflowReducer(initialWorkflowState, { type: 'SELECT_TARGET', target });
     expect(state.stage).toBe('target');
     state = workflowReducer(state, { type: 'CONFIRM_TARGET' });
     expect(state.stage).toBe('requirement');
@@ -109,16 +106,13 @@ describe('workflowReducer', () => {
     expect(state.adaptation).toBeNull();
   });
 
-  it('does not leave the module-partition stages without explicit confirmation', () => {
-    expect(initialWorkflowState.stage).toBe('repository');
+  it('starts from the target workspace and requires explicit target confirmation', () => {
+    expect(initialWorkflowState.stage).toBe('target');
 
-    const repositoryConfirmed = workflowReducer(initialWorkflowState, {
-      type: 'CONFIRM_REPOSITORY_MODULES',
-    });
-    const selected = workflowReducer(repositoryConfirmed, { type: 'SELECT_TARGET', target });
+    const selected = workflowReducer(initialWorkflowState, { type: 'SELECT_TARGET', target });
 
     expect(selected.stage).toBe('target');
-    expect(workflowReducer(repositoryConfirmed, { type: 'CONFIRM_TARGET' }).stage).toBe('target');
+    expect(workflowReducer(initialWorkflowState, { type: 'CONFIRM_TARGET' }).stage).toBe('target');
     expect(workflowReducer(selected, { type: 'CONFIRM_TARGET' }).stage).toBe('requirement');
   });
 });

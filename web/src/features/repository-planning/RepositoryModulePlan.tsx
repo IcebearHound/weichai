@@ -22,10 +22,12 @@ const pipeline = [
 export function RepositoryModulePlan({
   modules = defaultRepositoryModules,
   sourceLabel,
+  confirmLabel = '返回目标工作区',
   onConfirm,
 }: {
   modules?: RepositoryModuleSummary[];
   sourceLabel: string;
+  confirmLabel?: string;
   onConfirm: () => void;
 }) {
   const [selectedId, setSelectedId] = useState(modules[0]?.id ?? '');
@@ -118,10 +120,9 @@ export function RepositoryModulePlan({
           <button
             type="button"
             className="button-primary partition-next"
-            disabled={modules.length === 0}
             onClick={onConfirm}
           >
-            {modules.length === 0 ? '尚无可确认的模块划分' : '确认划分，进入 01B 目标工作区'}
+            {confirmLabel}
           </button>
         </aside>
       </div>

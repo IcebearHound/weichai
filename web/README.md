@@ -22,15 +22,18 @@ Feature directories correspond to visible workflow stages. They must not
 implement repository indexing, candidate ranking, code translation, or direct
 workspace mutation.
 
-The first workflow step is split into two explicit review gates:
+The first workflow area has two switchable views, with the target workspace as
+the default and primary view:
 
-- `01A` reviews historical-repository functional modules, dependency evidence,
+- `01A` is an always-available reference view for historical-repository
+  functional modules, dependency evidence,
   and the generated `summary.json` knowledge used by retrieval. The UI accepts
   injected `repositoryModules`; the default catalog keeps the local prototype
   runnable without a planning service.
-- `01B` derives workspace counts from the injected `ModuleNode` tree, supports
+- `01B` is the default view. It derives workspace counts from the injected `ModuleNode` tree, supports
   symbol search and implementation-status filtering, and requires the user to
-  confirm a class or function before entering candidate retrieval.
+  confirm a class or function before entering candidate retrieval. Switching
+  views does not clear the active workflow; selecting a different target does.
 
 Natural-language requirements now belong to step `02`, where they are combined
 with the confirmed target contract before calling `CodeSearchPort`.

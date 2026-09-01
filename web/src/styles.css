@@ -384,6 +384,46 @@ kbd {
   line-height: 1.55;
 }
 
+.workspace-switcher {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  padding: 8px 9px;
+  border-bottom: 1px solid var(--line);
+}
+
+.workspace-switcher button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 6px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font-size: 9px;
+}
+
+.workspace-switcher button:last-child:nth-child(3) {
+  grid-column: 1 / -1;
+}
+
+.workspace-switcher button:hover,
+.workspace-switcher button.is-active {
+  color: oklch(0.42 0.13 250);
+  background: oklch(0.95 0.025 250);
+  border-color: oklch(0.72 0.08 250);
+}
+
+.workspace-switcher button small {
+  margin-left: auto;
+  color: var(--faint);
+  font: 500 7.5px/1 var(--mono);
+}
+
 .repository-explorer {
   flex: 1;
   overflow-y: auto;

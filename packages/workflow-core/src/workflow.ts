@@ -31,7 +31,6 @@ export interface WorkflowState {
 }
 
 export type WorkflowEvent =
-  | { type: 'CONFIRM_REPOSITORY_MODULES' }
   | { type: 'SELECT_TARGET'; target: ModuleTarget }
   | { type: 'CONFIRM_TARGET' }
   | { type: 'SET_REQUIREMENT'; value: string }
@@ -52,7 +51,7 @@ export type WorkflowEvent =
   | { type: 'RESET' };
 
 export const initialWorkflowState: WorkflowState = {
-  stage: 'repository',
+  stage: 'target',
   target: null,
   requirement: '',
   topK: 4,
@@ -71,8 +70,6 @@ export function workflowReducer(
   event: WorkflowEvent,
 ): WorkflowState {
   switch (event.type) {
-    case 'CONFIRM_REPOSITORY_MODULES':
-      return { ...state, stage: 'target', error: null };
     case 'SELECT_TARGET':
       return {
         ...initialWorkflowState,

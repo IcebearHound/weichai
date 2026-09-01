@@ -127,13 +127,11 @@ npm run dev:adaptation
   "forexplore.executionMode": "real",
   "forexplore.retrievalApiUrl": "http://127.0.0.1:8787",
   "forexplore.adaptationApiUrl": "http://127.0.0.1:8788",
-  "forexplore.repositoryPaths": [
-    "E:/CS/devsys/weichai/fixtures/code-corpus"
-  ]
+  "forexplore.repositoryPaths": []
 }
 ```
 
-该目录包含 `fixtures/code-corpus` 下的全部语料仓库。`forexplore.repositoryPaths` 仅检查本地目录是否可读；它不等于服务端“已经索引”。真实检索范围由检索服务的已授权索引决定。
+首次使用时，翻译面板会提示配置至少一个本地历史代码仓。数组中的每个路径作为一个可切换的 01A 历史仓；未配置时不会使用机器相关的示例默认路径。`forexplore.repositoryPaths` 仅检查本地目录是否可读；它不等于服务端“已经索引”。真实检索范围由检索服务的已授权索引决定。
 
 ## 写回保护
 
@@ -164,8 +162,8 @@ npm run test:integration --workspace forexplore-vscode
 
 ## 消息协议
 
-Webview → 宿主：`READY`、`START_SEARCH`、`SELECT_CANDIDATE`、`START_ADAPT`、`APPLY_CURRENT_RUN`、`CHECK_REPOSITORIES`、`OPEN_TARGET`。
+Webview → 宿主：`READY`、`START_SEARCH`、`SELECT_CANDIDATE`、`START_ADAPT`、`APPLY_CURRENT_RUN`、`CHECK_REPOSITORIES`、`REFRESH_MODULE_EXPLORER`、`OPEN_REPOSITORY_SETTINGS`、`SELECT_WORKSPACE_TARGET`、`OPEN_TARGET`。模块树目标切换只提交 Host 已发布的 `targetId`，不提交路径或源码；历史仓配置按钮只表达打开扩展设置的意图。
 
-宿主 → Webview：`INIT`、`SEARCH_RESULT`、`ADAPT_RESULT`、`APPLY_RESULT`、`REPOSITORY_STATUS`、`SERVICE_STATUS`、`ERROR`。
+宿主 → Webview：`INIT`、`MODULE_EXPLORER`、`TARGET_SELECTED`、`SEARCH_RESULT`、`ADAPT_RESULT`、`APPLY_RESULT`、`REPOSITORY_STATUS`、`SERVICE_STATUS`、`ERROR`。
 
 共享类型和状态机在 monorepo 的 `@forexplore/contracts`、`@forexplore/workflow-core` 中维护；打包时 Webview 与扩展宿主会将所需代码纳入 VSIX 构建产物。

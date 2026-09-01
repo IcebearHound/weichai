@@ -4,7 +4,11 @@ import type {
   ModuleTarget,
   SearchCandidate,
 } from '@forexplore/contracts';
-import type { RepositoryStatus, ServiceStatus } from '../ui-types';
+import type {
+  ModuleExplorerPresentation,
+  RepositoryStatus,
+  ServiceStatus,
+} from '../ui-types';
 
 /** Snapshot sent by the trusted extension host when the panel is created. */
 export interface PanelInitPayload {
@@ -12,6 +16,7 @@ export interface PanelInitPayload {
   workspaceRoot: string;
   repositoryStatuses: RepositoryStatus[];
   serviceStatus: ServiceStatus;
+  moduleExplorer: ModuleExplorerPresentation;
   searchProvider: 'SeekDB';
   adaptationProvider: 'DeepSeek';
 }
@@ -24,6 +29,8 @@ export type HostToWebviewMessage =
   | { type: 'APPLY_RESULT'; result: ApplyResult }
   | { type: 'REPOSITORY_STATUS'; statuses: RepositoryStatus[] }
   | { type: 'SERVICE_STATUS'; status: ServiceStatus }
+  | { type: 'MODULE_EXPLORER'; explorer: ModuleExplorerPresentation }
+  | { type: 'TARGET_SELECTED'; target: ModuleTarget }
   | { type: 'ERROR'; message: string };
 
 /**
@@ -41,6 +48,9 @@ export type WebviewToHostMessage =
   | { type: 'START_ADAPT'; decisionNotes: string }
   | { type: 'APPLY_CURRENT_RUN' }
   | { type: 'CHECK_REPOSITORIES' }
+  | { type: 'REFRESH_MODULE_EXPLORER' }
+  | { type: 'OPEN_REPOSITORY_SETTINGS' }
+  | { type: 'SELECT_WORKSPACE_TARGET'; targetId: string }
   | { type: 'OPEN_TARGET' };
 
 const hostMessageTypes = new Set<string>([
@@ -50,6 +60,8 @@ const hostMessageTypes = new Set<string>([
   'APPLY_RESULT',
   'REPOSITORY_STATUS',
   'SERVICE_STATUS',
+  'MODULE_EXPLORER',
+  'TARGET_SELECTED',
   'ERROR',
 ]);
 
@@ -61,6 +73,8 @@ export function isWebviewToHostMessage(value: unknown): value is WebviewToHostMe
     case 'READY':
     case 'APPLY_CURRENT_RUN':
     case 'CHECK_REPOSITORIES':
+    case 'REFRESH_MODULE_EXPLORER':
+    case 'OPEN_REPOSITORY_SETTINGS':
     case 'OPEN_TARGET':
       return hasOnlyKeys(message, ['type']);
     case 'START_SEARCH':
@@ -79,6 +93,13 @@ export function isWebviewToHostMessage(value: unknown): value is WebviewToHostMe
         typeof message.candidateId === 'string' &&
         message.candidateId.length > 0 &&
         message.candidateId.length <= 256
+      );
+    case 'SELECT_WORKSPACE_TARGET':
+      return (
+        hasOnlyKeys(message, ['type', 'targetId']) &&
+        typeof message.targetId === 'string' &&
+        message.targetId.length > 0 &&
+        message.targetId.length <= 512
       );
     case 'START_ADAPT':
       return (

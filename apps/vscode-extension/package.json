@@ -101,8 +101,8 @@
           "items": {
             "type": "string"
           },
-          "default": ["E:/CS/devsys/weichai/fixtures/code-corpus"],
-          "description": "仅检查本地目录是否可读，不能证明该目录已被远端检索服务索引。真实检索范围由服务端部署配置决定。"
+          "default": [],
+          "description": "历史代码仓的本地目录。未配置时翻译面板会提示添加路径；本地可读不代表目录已被远端检索服务索引。"
         },
         "forexplore.retrievalApiUrl": {
           "type": "string",

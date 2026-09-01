@@ -26,7 +26,13 @@ import {
 } from '@forexplore/workflow-core';
 import { CandidateBrowser } from './features/candidate-selection/CandidateBrowser';
 import { PatchReview } from './features/patch-review/PatchReview';
+import {
+  defaultRepositoryModules,
+  RepositoryModulePlan,
+  type RepositoryModuleSummary,
+} from './features/repository-planning/RepositoryModulePlan';
 import { ModuleTree } from './features/target-selection/ModuleTree';
+import { TargetModulePartition } from './features/target-selection/TargetModulePartition';
 import { WorkflowRail } from './features/workflow-progress/WorkflowRail';
 
 const strategyOptions: Array<{
@@ -57,11 +63,10 @@ function RequirementPanel({
     <div className="requirement-layout">
       <section className="requirement-main">
         <div className="section-intro">
-          <div className="eyebrow">目标模块已锁定</div>
-          <h1>描述这个模块需要补齐的能力</h1>
+          <div className="eyebrow">02 / 候选检索</div>
+          <h1>补充需求并检索相似实现</h1>
           <p>
-            检索接口同时接收自然语言需求和目标符号契约；真实检索器可替换当前 Mock
-            Adapter。
+            01B 已锁定目标模块与实现状态；检索接口同时接收自然语言需求和目标符号契约。
           </p>
         </div>
 
@@ -223,10 +228,12 @@ function Inspector({
   state,
   searchProvider,
   adaptationProvider,
+  repositoryModuleCount,
 }: {
   state: typeof initialWorkflowState;
   searchProvider: string;
   adaptationProvider: string;
+  repositoryModuleCount: number;
 }) {
   const candidate = selectedCandidate(state);
   return (
@@ -237,8 +244,15 @@ function Inspector({
       </div>
 
       <section className="inspector-section">
-        <h3>目标符号</h3>
-        {state.target ? (
+        <h3>{state.stage === 'repository' ? '历史仓分析' : '目标符号'}</h3>
+        {state.stage === 'repository' ? (
+          <div className="repository-inspector-card">
+            <Database size={16} />
+            <strong>{repositoryModuleCount} 个功能模块</strong>
+            <span>静态依赖证据已绑定</span>
+            <span>summary.json 已生成</span>
+          </div>
+        ) : state.target ? (
           <div className="target-card">
             <div className="target-kind">
               {state.target.kind === 'class' ? <Boxes size={15} /> : <Braces size={15} />}
@@ -260,7 +274,7 @@ function Inspector({
             </span>
           </div>
         ) : (
-          <p className="empty-copy">从左侧模块树选择 class 或 function。</p>
+          <p className="empty-copy">从 01B 工作区树选择 class 或 function。</p>
         )}
       </section>
 
@@ -322,6 +336,7 @@ function Inspector({
 export interface AppProps {
   ports: WorkflowPorts;
   moduleTree: ModuleNode;
+  repositoryModules?: RepositoryModuleSummary[];
   searchProvider?: string;
   adaptationProvider?: string;
 }
@@ -329,6 +344,7 @@ export interface AppProps {
 export default function App({
   ports,
   moduleTree,
+  repositoryModules = defaultRepositoryModules,
   searchProvider = 'Mock',
   adaptationProvider = 'Mock',
 }: AppProps) {
@@ -427,20 +443,39 @@ export default function App({
 
       <aside className="explorer-pane">
         <div className="pane-heading">
-          <span>模块树</span>
+          <span>{state.stage === 'repository' ? '历史仓划分' : '目标模块树'}</span>
           <PanelLeftClose size={14} />
         </div>
         <div className="explorer-scope">
-          <span>WORKSPACE</span>
-          <strong>{moduleTree.name}</strong>
+          <span>{state.stage === 'repository' ? 'HISTORY REPOSITORY' : 'TARGET WORKSPACE'}</span>
+          <strong>{state.stage === 'repository' ? `${repositoryModules.length} MODULES` : moduleTree.name}</strong>
         </div>
-        <ModuleTree
-          root={moduleTree}
-          selectedId={state.target?.id ?? null}
-          onSelect={(target) => dispatch({ type: 'SELECT_TARGET', target })}
-        />
+        {state.stage === 'repository' ? (
+          <div className="repository-explorer">
+            {repositoryModules.map((module) => (
+              <div key={module.id}>
+                <Boxes size={14} />
+                <span><strong>{module.name}</strong><small>{module.sourceFiles.length} files · {module.language}</small></span>
+              </div>
+            ))}
+          </div>
+        ) : state.stage === 'target' ? (
+          <div className="target-explorer-guide">
+            <span className="is-done"><strong>01A</strong><small>历史仓模块边界已确认</small></span>
+            <span className="is-active"><strong>01B</strong><small>筛选并确认目标工作区符号</small></span>
+            <span><strong>02</strong><small>目标 + 需求进入候选检索</small></span>
+          </div>
+        ) : (
+          <ModuleTree
+            root={moduleTree}
+            selectedId={state.target?.id ?? null}
+            onSelect={(target) => dispatch({ type: 'SELECT_TARGET', target })}
+          />
+        )}
         <div className="explorer-note">
-          仅 class / function 可作为工作流目标；文件节点用于导航和上下文组织。
+          {state.stage === 'repository'
+            ? '模块边界来自静态符号与依赖证据；Agent 摘要不会直接修改历史代码仓。'
+            : '仅 class / function 可作为检索目标；选择后需在 01B 详情区显式确认。'}
         </div>
       </aside>
 
@@ -449,18 +484,21 @@ export default function App({
         {state.error ? <div className="error-banner">{state.error}</div> : null}
 
         <div className="workspace-content">
+          {state.stage === 'repository' ? (
+            <RepositoryModulePlan
+              modules={repositoryModules}
+              sourceLabel={searchProvider === 'SeekDB' ? 'SeekDB code corpus' : 'Mock catalog'}
+              onConfirm={() => dispatch({ type: 'CONFIRM_REPOSITORY_MODULES' })}
+            />
+          ) : null}
+
           {state.stage === 'target' ? (
-            <div className="target-empty-state">
-              <span className="empty-state-index">01</span>
-              <div>
-                <div className="eyebrow">从软件结构开始</div>
-                <h1>选择一个需要补齐能力的 class 或 function</h1>
-                <p>
-                  目标符号会作为后续检索、接口映射、翻译和回填的稳定锚点。当前 C# 树由
-                  ModuleSymbolPort 提供，并保留真实路径和签名；后续可替换为 IDE Symbol Provider。
-                </p>
-              </div>
-            </div>
+            <TargetModulePartition
+              root={moduleTree}
+              selected={state.target}
+              onSelect={(target) => dispatch({ type: 'SELECT_TARGET', target })}
+              onConfirm={() => dispatch({ type: 'CONFIRM_TARGET' })}
+            />
           ) : null}
 
           {state.stage === 'requirement' ? (
@@ -527,6 +565,7 @@ export default function App({
         state={state}
         searchProvider={searchProvider}
         adaptationProvider={adaptationProvider}
+        repositoryModuleCount={repositoryModules.length}
       />
 
       <footer className="statusbar">

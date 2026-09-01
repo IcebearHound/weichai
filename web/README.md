@@ -21,3 +21,16 @@ Only public service URLs belong in the Web `.env`; keep `DEEPSEEK_API_KEY` in
 Feature directories correspond to visible workflow stages. They must not
 implement repository indexing, candidate ranking, code translation, or direct
 workspace mutation.
+
+The first workflow step is split into two explicit review gates:
+
+- `01A` reviews historical-repository functional modules, dependency evidence,
+  and the generated `summary.json` knowledge used by retrieval. The UI accepts
+  injected `repositoryModules`; the default catalog keeps the local prototype
+  runnable without a planning service.
+- `01B` derives workspace counts from the injected `ModuleNode` tree, supports
+  symbol search and implementation-status filtering, and requires the user to
+  confirm a class or function before entering candidate retrieval.
+
+Natural-language requirements now belong to step `02`, where they are combined
+with the confirmed target contract before calling `CodeSearchPort`.

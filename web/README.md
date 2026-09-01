@@ -21,21 +21,3 @@ Only public service URLs belong in the Web `.env`; keep `DEEPSEEK_API_KEY` in
 Feature directories correspond to visible workflow stages. They must not
 implement repository indexing, candidate ranking, code translation, or direct
 workspace mutation.
-
-The first workflow area has two switchable views, with the target workspace as
-the default and primary view:
-
-- `01A` is an always-available reference view for historical-repository
-  functional modules, dependency evidence,
-  and the generated `summary.json` knowledge used by retrieval. The UI accepts
-  injected `repositoryModules`; the default catalog keeps the local prototype
-  runnable without a planning service.
-- `01B` is the default view. Its folder, file, class, and method tree lives in
-  the left explorer alongside search and implementation-status filters. The
-  center workspace derives counts from the injected `ModuleNode` tree and shows
-  the selected target contract. Users must confirm a class or function before
-  entering candidate retrieval. Switching views does not clear the active
-  workflow; selecting a different target does.
-
-Natural-language requirements now belong to step `02`, where they are combined
-with the confirmed target contract before calling `CodeSearchPort`.

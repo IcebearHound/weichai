@@ -44,8 +44,6 @@ const adaptation: AdaptationResult = {
 describe('workflowReducer', () => {
   it('runs through target, search, adaptation and apply stages', () => {
     let state = workflowReducer(initialWorkflowState, { type: 'SELECT_TARGET', target });
-    expect(state.stage).toBe('target');
-    state = workflowReducer(state, { type: 'CONFIRM_TARGET' });
     expect(state.stage).toBe('requirement');
 
     state = workflowReducer(state, {
@@ -99,20 +97,10 @@ describe('workflowReducer', () => {
       target: nextTarget,
     });
 
-    expect(state.stage).toBe('target');
+    expect(state.stage).toBe('requirement');
     expect(state.target).toEqual(nextTarget);
     expect(state.requirement).toBe('');
     expect(state.candidates).toEqual([]);
     expect(state.adaptation).toBeNull();
-  });
-
-  it('starts from the target workspace and requires explicit target confirmation', () => {
-    expect(initialWorkflowState.stage).toBe('target');
-
-    const selected = workflowReducer(initialWorkflowState, { type: 'SELECT_TARGET', target });
-
-    expect(selected.stage).toBe('target');
-    expect(workflowReducer(initialWorkflowState, { type: 'CONFIRM_TARGET' }).stage).toBe('target');
-    expect(workflowReducer(selected, { type: 'CONFIRM_TARGET' }).stage).toBe('requirement');
   });
 });

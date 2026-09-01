@@ -7,7 +7,6 @@ import type {
 } from '@forexplore/contracts';
 
 export type WorkflowStage =
-  | 'repository'
   | 'target'
   | 'requirement'
   | 'candidates'
@@ -32,7 +31,6 @@ export interface WorkflowState {
 
 export type WorkflowEvent =
   | { type: 'SELECT_TARGET'; target: ModuleTarget }
-  | { type: 'CONFIRM_TARGET' }
   | { type: 'SET_REQUIREMENT'; value: string }
   | { type: 'SET_TOP_K'; value: number }
   | { type: 'SEARCH_START' }
@@ -74,13 +72,9 @@ export function workflowReducer(
       return {
         ...initialWorkflowState,
         target: event.target,
-        stage: 'target',
+        stage: 'requirement',
         requirement: state.target?.id === event.target.id ? state.requirement : '',
       };
-    case 'CONFIRM_TARGET':
-      return state.target
-        ? { ...state, stage: 'requirement', error: null }
-        : state;
     case 'SET_REQUIREMENT':
       return { ...state, requirement: event.value, error: null };
     case 'SET_TOP_K':
@@ -161,22 +155,20 @@ export const workflowSteps: Array<{
   label: string;
   shortLabel: string;
 }> = [
-  { id: 'repository', label: '历史仓划分', shortLabel: '01A' },
-  { id: 'target', label: '目标区划分', shortLabel: '01B' },
-  { id: 'requirement', label: '候选检索', shortLabel: '02' },
-  { id: 'candidates', label: '人工选择', shortLabel: '03' },
-  { id: 'adaptation', label: '翻译验证', shortLabel: '04' },
-  { id: 'patch', label: '校验回填', shortLabel: '05' },
+  { id: 'target', label: '选择模块', shortLabel: '01' },
+  { id: 'requirement', label: '描述需求', shortLabel: '02' },
+  { id: 'candidates', label: '选择方案', shortLabel: '03' },
+  { id: 'adaptation', label: '翻译 / 桥接', shortLabel: '04' },
+  { id: 'patch', label: '校验与回填', shortLabel: '05' },
 ];
 
 const stageOrder: Record<WorkflowStage, number> = {
-  repository: 0,
-  target: 1,
-  requirement: 2,
-  candidates: 3,
-  adaptation: 4,
-  patch: 5,
-  complete: 6,
+  target: 0,
+  requirement: 1,
+  candidates: 2,
+  adaptation: 3,
+  patch: 4,
+  complete: 5,
 };
 
 export function getStepStatus(

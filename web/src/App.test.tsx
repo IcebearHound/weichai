@@ -6,38 +6,7 @@ import App from './App';
 
 afterEach(cleanup);
 
-async function selectQuoteTarget() {
-  fireEvent.click(screen.getByRole('button', { name: 'Application' }));
-  fireEvent.click(screen.getByRole('button', { name: 'QuoteOrchestrationService.cs' }));
-  fireEvent.click(screen.getByRole('button', { name: /^QuoteOrchestrationServicecls/ }));
-  fireEvent.click(screen.getByRole('button', { name: /GetQuoteAsync/ }));
-  fireEvent.click(screen.getByRole('button', { name: /使用 GetQuoteAsync 开始候选检索/ }));
-}
-
 describe('ForeXplore vertical workflow', () => {
-  it('defaults to 01B and switches to 01A without making history a gate', async () => {
-    const moduleTree = await workspaceModuleSymbols.loadTree(csharpWorkspaceId);
-    const { container } = render(<App ports={mockWorkflowPorts} moduleTree={moduleTree} />);
-
-    expect(screen.getByText('识别目标工程骨架与实现状态')).toBeTruthy();
-    expect(container.querySelector('.explorer-pane .module-tree')).toBeTruthy();
-    expect(container.querySelector('.workspace-pane .module-tree')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /历史仓 01A/ }));
-    expect(screen.getByText('把历史代码仓沉淀为可检索的功能模块')).toBeTruthy();
-    expect(screen.getByText('summary.json')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /请求合并模块/ }));
-    expect(screen.getByText('RequestCoalescer.run · InflightRegistry.release')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: /目标工作区 01B/ }));
-    expect(screen.getByText('识别目标工程骨架与实现状态')).toBeTruthy();
-    expect((screen.getByRole('button', { name: '请选择 class 或 method' }) as HTMLButtonElement).disabled).toBe(true);
-
-    fireEvent.change(screen.getByLabelText('搜索目标工作区'), { target: { value: 'GetQuoteAsync' } });
-    fireEvent.click(screen.getByRole('button', { name: /GetQuoteAsync/ }));
-    expect(screen.getByText('目标契约')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /使用 GetQuoteAsync 开始候选检索/ })).toBeTruthy();
-  });
-
   it('limits real adaptation demo searches to Java candidates', async () => {
     const moduleTree = await workspaceModuleSymbols.loadTree(csharpWorkspaceId);
     const search = vi.fn(
@@ -51,7 +20,10 @@ describe('ForeXplore vertical workflow', () => {
       />,
     );
 
-    await selectQuoteTarget();
+    fireEvent.click(screen.getByRole('button', { name: 'Application' }));
+    fireEvent.click(screen.getByRole('button', { name: 'QuoteOrchestrationService.cs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'QuoteOrchestrationServicecls' }));
+    fireEvent.click(screen.getByRole('button', { name: /GetQuoteAsync/ }));
     expect(
       screen.getByText('Gets a quote through the configured cache and provider fallback policy.'),
     ).toBeTruthy();
@@ -82,26 +54,30 @@ describe('ForeXplore vertical workflow', () => {
     const moduleTree = await workspaceModuleSymbols.loadTree(csharpWorkspaceId);
     render(<App ports={mockWorkflowPorts} moduleTree={moduleTree} />);
 
-    await selectQuoteTarget();
+    fireEvent.click(screen.getByRole('button', { name: 'Application' }));
+    fireEvent.click(screen.getByRole('button', { name: 'QuoteOrchestrationService.cs' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'QuoteOrchestrationServicecls' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /GetQuoteAsync/ }));
     fireEvent.click(screen.getByRole('button', { name: '检索相似实现' }));
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /QuoteCache\.getOrLoad/ })).toBeTruthy();
     });
-
-    fireEvent.click(screen.getByRole('button', { name: /历史仓 01A/ }));
-    expect(screen.getByText('把历史代码仓沉淀为可检索的功能模块')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /目标工作区 01B/ }));
-    expect(screen.getAllByText('GetQuoteAsync').length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole('button', { name: '返回当前流程' }));
-    expect(screen.getByRole('button', { name: /QuoteCache\.getOrLoad/ })).toBeTruthy();
   });
 
   it('lets a user select a function, retrieve candidates, adapt, and observes the write gate', async () => {
     const moduleTree = await workspaceModuleSymbols.loadTree(csharpWorkspaceId);
     render(<App ports={mockWorkflowPorts} moduleTree={moduleTree} />);
 
-    await selectQuoteTarget();
+    expect(screen.getAllByText('ForeXplore.Skeleton')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Application' }));
+    fireEvent.click(screen.getByRole('button', { name: 'QuoteOrchestrationService.cs' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'QuoteOrchestrationServicecls' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /GetQuoteAsync/ }));
 
     const requirement = screen.getByLabelText(/功能需求/);
     fireEvent.change(requirement, {

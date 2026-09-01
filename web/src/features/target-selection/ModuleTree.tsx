@@ -15,36 +15,6 @@ interface ModuleTreeProps {
   root: ModuleNode;
   selectedId: string | null;
   onSelect: (target: ModuleTarget) => void;
-  query?: string;
-  statusFilter?: ModuleImplementationFilter;
-}
-
-export type ModuleImplementationFilter = 'all' | 'implemented' | 'unimplemented';
-
-function normalized(value: string): string {
-  return value.trim().toLocaleLowerCase();
-}
-
-function filterTree(
-  node: ModuleNode,
-  query: string,
-  statusFilter: ModuleImplementationFilter,
-): ModuleNode | null {
-  const searchable = `${node.name} ${node.path} ${node.signature ?? ''}`.toLocaleLowerCase();
-  const queryMatches = !query || searchable.includes(query);
-  const isTarget = node.kind === 'class' || node.kind === 'function';
-  const isImplemented = node.implementationStatus !== 'unimplemented';
-  const statusMatches = statusFilter === 'all' ||
-    (statusFilter === 'implemented' ? isImplemented : !isImplemented);
-
-  if (queryMatches && statusFilter === 'all') return node;
-  const children = node.children
-    ?.map((child) => filterTree(child, query, statusFilter))
-    .filter((child): child is ModuleNode => child !== null);
-  if ((isTarget && queryMatches && statusMatches) || children?.length) {
-    return { ...node, children };
-  }
-  return null;
 }
 
 function collectInitialExpandedIds(
@@ -76,19 +46,9 @@ const kindLabels: Partial<Record<ModuleKind, string>> = {
   function: 'fn',
 };
 
-export function ModuleTree({
-  root,
-  selectedId,
-  onSelect,
-  query = '',
-  statusFilter = 'all',
-}: ModuleTreeProps) {
+export function ModuleTree({ root, selectedId, onSelect }: ModuleTreeProps) {
   const initialExpanded = useMemo(() => new Set(collectInitialExpandedIds(root)), [root]);
   const [expanded, setExpanded] = useState(initialExpanded);
-  const visibleRoot = useMemo(
-    () => filterTree(root, normalized(query), statusFilter),
-    [query, root, statusFilter],
-  );
 
   function toggle(id: string) {
     setExpanded((current) => {
@@ -101,7 +61,7 @@ export function ModuleTree({
 
   function renderNode(node: ModuleNode, depth: number) {
     const hasChildren = Boolean(node.children?.length);
-    const isExpanded = expanded.has(node.id) || Boolean(query.trim()) || statusFilter !== 'all';
+    const isExpanded = expanded.has(node.id);
     const target = toModuleTarget(node);
     const isSelectable = Boolean(target);
     const isSelected = selectedId === node.id;
@@ -154,9 +114,5 @@ export function ModuleTree({
     );
   }
 
-  return (
-    <div className="module-tree">
-      {visibleRoot ? renderNode(visibleRoot, 0) : <div className="tree-empty">没有符合条件的符号</div>}
-    </div>
-  );
+  return <div className="module-tree">{renderNode(root, 0)}</div>;
 }

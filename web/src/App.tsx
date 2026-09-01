@@ -27,10 +27,12 @@ import {
 import { CandidateBrowser } from './features/candidate-selection/CandidateBrowser';
 import { PatchReview } from './features/patch-review/PatchReview';
 import {
-  defaultRepositoryModules,
   RepositoryModulePlan,
-  type RepositoryModuleSummary,
 } from './features/repository-planning/RepositoryModulePlan';
+import {
+  defaultRepositoryModules,
+  type RepositoryModuleSummary,
+} from './features/repository-planning/repository-modules';
 import { ModuleTree } from './features/target-selection/ModuleTree';
 import { TargetModulePartition } from './features/target-selection/TargetModulePartition';
 import { WorkflowRail } from './features/workflow-progress/WorkflowRail';

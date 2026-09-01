@@ -3,16 +3,6 @@
 Language-neutral code adaptation: Analyzer report → Translator generation →
 target-language compilation → protected patch generation.
 
-Production HTTP and MCP entry points attach `TranslationVerifierAdapter` in
-**fail-closed mode**. The service does not execute retrieved candidate preview
-or generated code on the host: it has model credentials and access to the
-developer workspace, but does not provision a safe execution sandbox. It
-therefore returns a required `unverified` behavioral-validation record and
-write-back remains blocked. Differential execution is available only to a
-separate deployment integration that injects an external executor with no
-network, host credentials, or mounted workspace; `RealDriverExecutor` is not
-accepted by the service adapter for that path.
-
 ## Analyzer-driven Translator Agent
 
 The Translator now has a structured member-C entry point:
@@ -33,14 +23,15 @@ const result = await translateWithAnalysis(
 `AnalyzerAgent` and `TranslatorAgent` are independent, stateless DeepSeek
 agents. The Analyzer receives the target facts, requirement, and candidate and
 returns `AnalysisReport v1`. The Translator starts a fresh model interaction;
-it receives its own target prompt plus that validated report, never Analyzer
+it receives its own target prompt plus that advisory report, never Analyzer
 messages or conversation history. Its response is parsed as a structured
 `TranslationResult` containing generated code, completed plan steps, and
 unresolved items. The legacy `interfaceMappings` response field is retained
 for compatibility but is not required or used as a completion attestation.
 
-Runtime guards reject unresolved dependencies, changed target signatures, omitted
-plan steps, and output that escapes the requested method or class scope
+Analyzer judgements, unknown action terms, unresolved dependencies, and empty
+plans are advisory and do not stop translation. Runtime guards still reject changed target
+signatures, omitted non-empty plan steps, and output that escapes the requested method or class scope
 with imports, namespaces, or extra types. When Analyzer marks only the selected
 candidate as `reject`, the adapter drops that candidate and runs a target-only
 generation path; the result carries a non-blocking warning for developer review
@@ -51,8 +42,7 @@ integrated sequence:
 collectTargetContext -> AnalyzerAgent.analyze -> AnalysisReport artifact
   -> TranslatorAgent.translate
   -> compile validation
-  -> differential verification -> modification plan
-  -> repairTranslation (at most three rounds) -> recompile/reverify
+  -> repairTranslation (at most three rounds) -> recompile
 ```
 
 `AnalysisReport` comes from `@forexplore/contracts`; the Translator no longer
@@ -160,11 +150,10 @@ code-indexer (module 1) → retrieval-service (module 2) → adaptation-service 
 | `src/translator.test.ts` | Translator parsing, rejection, contract, planning and repair tests |
 | `testdata/translator-*.json` | direct/adapt/reject member-C fixtures |
 | `src/context-collector.ts` | Collects bounded target-module facts and direct dependencies |
-| `src/analyzer.ts` | Independent Analyzer Agent that returns validated `AnalysisReport` JSON |
+| `src/analyzer.ts` | Independent Analyzer Agent that returns a normalized advisory `AnalysisReport` |
 | `src/compiler.ts` | Language-registry compiler checks for all contract languages |
 | `src/model-config.ts` | Isolated temporary model provider configuration |
 | `src/adaptation-adapter.ts` | Main adapter, orchestrates context → analyze → translate → compile → verify → repair |
-| `src/verification-adapter.ts` | Bridges TestMigrator, dual-side verifier execution, and behavior modification plans |
 | `src/backfill-adapter.ts` | Backfill results into corpus |
 | `poc/translate_poc.py` | Standalone POC with 5 test cases |
 | `poc/e2e_pipeline.py` | End-to-end: calls retrieval-service /v1/search |
@@ -179,7 +168,8 @@ outside `projectRoot`.
 
 `new AnalyzerAgent({ apiKey }).analyze(request)` makes a separate DeepSeek call
 with target facts, the user requirement, and one retrieval candidate. The
-response must be `AnalysisReport` schema version `1.0`; markdown fences are
-accepted for compatibility, but every field and enum is validated before the
-report is returned. Analyzer does not generate code, compile it, or run
+prompt requests `AnalysisReport` schema version `1.0`, but runtime treats it as
+advisory context: missing sections receive defaults, unknown terminology passes
+through, and non-JSON narrative output is preserved instead of blocking. Only an
+empty model response fails the Analyzer boundary. Analyzer does not generate code, compile it, or run
 behavior tests. Those remain Translator and Validator responsibilities.

@@ -13,16 +13,6 @@ export type {
   AdaptationValidator,
 } from "./adaptation-adapter";
 
-export { TranslationVerifierAdapter } from "./verification-adapter";
-export type {
-  AdaptationVerifier,
-  DifferentialVerificationInput,
-  DifferentialVerificationResult,
-  IsolatedDriverExecutor,
-  TranslationVerifierAdapterOptions,
-  TranslationVerifierExecution,
-} from "./verification-adapter";
-
 export { BackfillAdapter } from "./backfill-adapter";
 export type {
   BackfillAdapterOptions,

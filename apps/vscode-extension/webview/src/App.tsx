@@ -151,6 +151,10 @@ export default function App() {
     bus.post({ type: 'REFRESH_MODULE_EXPLORER' });
   }
 
+  function handleOpenRepositorySettings(): void {
+    bus.post({ type: 'OPEN_REPOSITORY_SETTINGS' });
+  }
+
   function handleSelectWorkspaceTarget(targetId: string): void {
     if (targetId === state.target?.id) return;
     setError(null);
@@ -211,6 +215,7 @@ export default function App() {
         onNodeSelect={(node: ModuleExplorerNode) => setSelectedNodeId(node.id)}
         onTargetSelect={handleSelectWorkspaceTarget}
         onRefresh={handleRefreshModuleExplorer}
+        onOpenHistorySettings={handleOpenRepositorySettings}
       >
         {error ? (
           <div className="error-banner" role="alert">

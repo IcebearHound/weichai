@@ -49,6 +49,7 @@ export type WebviewToHostMessage =
   | { type: 'APPLY_CURRENT_RUN' }
   | { type: 'CHECK_REPOSITORIES' }
   | { type: 'REFRESH_MODULE_EXPLORER' }
+  | { type: 'OPEN_REPOSITORY_SETTINGS' }
   | { type: 'SELECT_WORKSPACE_TARGET'; targetId: string }
   | { type: 'OPEN_TARGET' };
 
@@ -73,6 +74,7 @@ export function isWebviewToHostMessage(value: unknown): value is WebviewToHostMe
     case 'APPLY_CURRENT_RUN':
     case 'CHECK_REPOSITORIES':
     case 'REFRESH_MODULE_EXPLORER':
+    case 'OPEN_REPOSITORY_SETTINGS':
     case 'OPEN_TARGET':
       return hasOnlyKeys(message, ['type']);
     case 'START_SEARCH':

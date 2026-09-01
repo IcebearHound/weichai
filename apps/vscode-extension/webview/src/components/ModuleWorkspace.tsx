@@ -38,6 +38,7 @@ interface ModuleWorkspaceProps {
   onNodeSelect(node: ModuleExplorerNode): void;
   onTargetSelect(targetId: string): void;
   onRefresh(): void;
+  onOpenHistorySettings(): void;
   children: React.ReactNode;
 }
 
@@ -53,6 +54,7 @@ export function ModuleWorkspace({
   onNodeSelect,
   onTargetSelect,
   onRefresh,
+  onOpenHistorySettings,
   children,
 }: ModuleWorkspaceProps) {
   const [query, setQuery] = useState('');
@@ -186,6 +188,18 @@ export function ModuleWorkspace({
 
       <section className="module-main">
         <div className="module-main-scroll">
+          {explorer.history.length === 0 ? (
+            <section className="history-configuration-prompt" role="status">
+              <div className="history-configuration-icon"><History size={17} /></div>
+              <div>
+                <strong>尚未配置历史仓</strong>
+                <span>添加至少一个本地历史代码仓路径，保存后点击左侧刷新按钮即可加载 01A。</span>
+              </div>
+              <button type="button" className="secondary-action" onClick={onOpenHistorySettings}>
+                配置路径
+              </button>
+            </section>
+          ) : null}
           {mode === 'target' ? (
             <TargetOverview workspace={workspace} selectedNode={selectedNode} />
           ) : (

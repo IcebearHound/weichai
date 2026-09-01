@@ -287,6 +287,12 @@ async function handlePanelMessage(
     case 'REFRESH_MODULE_EXPLORER':
       await refreshModuleExplorer();
       return;
+    case 'OPEN_REPOSITORY_SETTINGS':
+      await vscode.commands.executeCommand(
+        'workbench.action.openSettings',
+        'forexplore.repositoryPaths',
+      );
+      return;
     case 'SELECT_WORKSPACE_TARGET':
       await selectWorkspaceTarget(message.targetId);
       return;

@@ -267,6 +267,7 @@ export default function App() {
           <main className="stage-body">
             {visibleStep === 'requirement' ? (
               <RequirementStage
+                key={state.target.id}
                 state={state}
                 target={state.target}
                 dispatch={dispatch}

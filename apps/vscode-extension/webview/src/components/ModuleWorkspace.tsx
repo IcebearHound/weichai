@@ -202,16 +202,12 @@ export function ModuleWorkspace({
               </button>
             </section>
           ) : null}
-          {!settingsOpen ? (
-            mode === 'target' ? (
-              <TargetOverview workspace={workspace} selectedNode={selectedNode} />
-            ) : (
-              <HistoryOverview
-                workspace={workspace}
-                selectedNode={selectedNode}
-                onNodeSelect={onNodeSelect}
-              />
-            )
+          {!settingsOpen && mode === 'history' ? (
+            <HistoryOverview
+              workspace={workspace}
+              selectedNode={selectedNode}
+              onNodeSelect={onNodeSelect}
+            />
           ) : null}
           {settingsOpen || mode === 'target' ? children : null}
         </div>
@@ -284,32 +280,6 @@ function NodeIcon({ node }: { node: ModuleExplorerNode }) {
 
 function StatusMark({ status }: { status?: ModuleImplementationStatus }) {
   return <i className={`status-mark is-${status ?? 'unknown'}`} title={statusLabel(status)} />;
-}
-
-function TargetOverview({
-  workspace,
-  selectedNode,
-}: {
-  workspace: ModuleWorkspacePresentation;
-  selectedNode?: ModuleExplorerNode;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <div className="module-overview">
-      <OverviewHeader
-        code="01B"
-        title="目标工作区模块划分"
-        description="识别模块、文件、类与方法，并持续记录实现状态"
-        workspace={workspace}
-      />
-      <StatsGrid workspace={workspace} />
-      <button type="button" className="overview-toggle" onClick={() => setExpanded((value) => !value)}>
-        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        {expanded ? '收起详情' : '展开详情'}
-      </button>
-      {expanded ? <NodeDetail node={selectedNode} targetMode /> : null}
-    </div>
-  );
 }
 
 function HistoryOverview({
@@ -547,85 +517,6 @@ function containsNode(root: ModuleExplorerNode, id: string): boolean {
 function visitNode(node: ModuleExplorerNode, visit: (node: ModuleExplorerNode) => void): void {
   visit(node);
   node.children.forEach((child) => visitNode(child, visit));
-}
-
-function OverviewHeader({
-  code,
-  title,
-  description,
-  workspace,
-}: {
-  code: string;
-  title: string;
-  description: string;
-  workspace: ModuleWorkspacePresentation;
-}) {
-  return (
-    <div className="overview-header">
-      <div className="overview-glyph"><Box size={17} /></div>
-      <div>
-        <h1><span>{code}</span> {title}</h1>
-        <p>{description}</p>
-      </div>
-      <div className="snapshot-meta">
-        <span>{workspace.snapshotId ? `快照 ${workspace.snapshotId.slice(0, 12)}` : '无可用快照'}</span>
-        {workspace.revision ? <code>{workspace.revision.slice(0, 10)}</code> : null}
-      </div>
-    </div>
-  );
-}
-
-function StatsGrid({ workspace }: { workspace: ModuleWorkspacePresentation }) {
-  const stats = [
-    ['模块', workspace.stats.modules, 'M'],
-    ['文件', workspace.stats.files, 'F'],
-    ['类 / 类型', workspace.stats.types, 'C'],
-    ['方法', workspace.stats.methods, 'ƒ'],
-    ['已完成', workspace.stats.implemented, '✓'],
-    ['未完成', workspace.stats.unimplemented, '○'],
-  ] as const;
-  return (
-    <div className="module-stats">
-      {stats.map(([label, value, glyph]) => (
-        <div key={label} className={`stat-card is-${label === '已完成' ? 'done' : label === '未完成' ? 'pending' : 'neutral'}`}>
-          <span>{glyph}</span><div><strong>{value}</strong><small>{label}</small></div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function NodeDetail({ node, targetMode = false }: { node?: ModuleExplorerNode; targetMode?: boolean }) {
-  return (
-    <section className="card node-detail-card">
-      <div className="card-heading">
-        <span>{targetMode ? '当前目标详情' : '模块项详情'}</span>
-        {node?.targetId ? <StatusPill status={node.implementationStatus} /> : null}
-      </div>
-      {!node ? (
-        <p className="muted-copy">从左侧模块树选择一个模块、文件、类或方法查看详情。</p>
-      ) : (
-        <div className="node-detail">
-          <div className="node-detail-title"><NodeIcon node={node} /><strong>{node.name}</strong><small>{kindLabel(node.kind)}</small></div>
-          {node.description ? <p>{node.description}</p> : null}
-          <dl className="compact-definition-list">
-            {node.path ? <div><dt>所属文件</dt><dd><code>{node.path}</code></dd></div> : null}
-            {node.language ? <div><dt>语言</dt><dd>{node.language}</dd></div> : null}
-            {node.line ? <div><dt>起始行</dt><dd>{node.line}</dd></div> : null}
-            {node.children.length ? <div><dt>子项</dt><dd>{node.children.length}</dd></div> : null}
-          </dl>
-          {node.signature ? <pre className="signature-preview"><code>{node.signature}</code></pre> : null}
-          {targetMode && node.targetId ? (
-            <p className="target-reset-note">选择不同的类或方法会建立新的 Host 文件快照，并重置下游需求、候选与补丁。</p>
-          ) : null}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function StatusPill({ status }: { status?: ModuleImplementationStatus }) {
-  return <span className={`status-pill is-${status ?? 'unknown'}`}><StatusMark status={status} />{statusLabel(status)}</span>;
 }
 
 function activeWorkspace(

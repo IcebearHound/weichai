@@ -1,4 +1,5 @@
-import { Search, Target as TargetIcon } from 'lucide-react';
+import { useState } from 'react';
+import { ChevronDown, ChevronRight, FileCode2, Search, Target as TargetIcon } from 'lucide-react';
 import type { ModuleTarget } from '@forexplore/contracts';
 import type { WorkflowEvent, WorkflowState } from '@forexplore/workflow-core';
 
@@ -16,47 +17,95 @@ export function RequirementStage({
   onSearch,
 }: RequirementStageProps) {
   const searching = state.pending === 'search';
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   return (
-    <div className="stage-stack">
-      <section className="selected-target-strip" aria-label="当前选择">
-        <span className="selected-target-icon"><TargetIcon size={15} /></span>
-        <div>
-          <span>当前选择</span>
-          <strong>{target.name}</strong>
-        </div>
-        <code title={target.signature}>{target.signature}</code>
-        <small>{target.language} · {target.kind}</small>
-      </section>
+    <form
+      className="stage-stack task-definition-stage"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!searching) onSearch();
+      }}
+    >
+      <section className="task-composer" aria-labelledby="task-definition-title">
+        <header className="task-composer-header">
+          <span>01 · 定义任务</span>
+          <h1 id="task-definition-title">选择目标，补充你想完成的需求</h1>
+          <p>从左侧模块树选择类或方法；需求说明可选，留空时将按代码上下文检索。</p>
+        </header>
 
-      <section className="card">
-        <div className="card-heading">
-          <span>02 · 描述需求</span>
-          <span className="card-heading-meta">可选</span>
-        </div>
-        <textarea
-          className="requirement-input"
-          value={state.requirement}
-          onChange={(event) =>
-            dispatch({ type: 'SET_REQUIREMENT', value: event.target.value })
-          }
-          placeholder="例如：解析 multipart 请求并保留字段顺序、文件阈值和大小限制；保持现有接口不变。留空时按目标名称、签名与注释检索。"
-          rows={4}
-        />
-        <div className="requirement-meta">
-          <span>{state.requirement.length} 字符</span>
-        </div>
-      </section>
+        <div className="task-composer-content">
+          <section className="task-target" aria-label="已选目标">
+            <div className="task-section-heading">
+              <span>已选目标</span>
+              <button
+                type="button"
+                className="text-button task-detail-toggle"
+                aria-expanded={detailsOpen}
+                onClick={() => setDetailsOpen((open) => !open)}
+              >
+                {detailsOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                {detailsOpen ? '收起详情' : '展开详情'}
+              </button>
+            </div>
 
-      <button
-        type="button"
-        className="primary-action"
-        onClick={onSearch}
-        disabled={searching}
-      >
-        {searching ? <span className="spinner" /> : <Search size={15} />}
-        {searching ? '正在检索相似实现…' : `检索相似实现 · Top ${state.topK}`}
-      </button>
-    </div>
+            <div className="task-target-summary">
+              <span className="task-target-icon"><TargetIcon size={17} /></span>
+              <div>
+                <strong>{target.name}</strong>
+                <span>{target.language} · {target.kind === 'class' ? '类' : '函数'}</span>
+              </div>
+              <span className={`task-target-status is-${target.implementationStatus ?? 'unknown'}`}>
+                {target.implementationStatus === 'implemented'
+                  ? '已完成'
+                  : target.implementationStatus === 'unimplemented' ? '待实现' : '待确认'}
+              </span>
+            </div>
+
+            <div className="task-target-location">
+              <FileCode2 size={13} />
+              <code title={target.path}>{target.path}{target.line ? `:${target.line}` : ''}</code>
+            </div>
+
+            {detailsOpen ? (
+              <div className="task-target-details">
+                {target.documentation ? <p>{target.documentation}</p> : null}
+                <pre><code>{target.signature}</code></pre>
+                <small>从左侧切换目标会重置下游方案和补丁。</small>
+              </div>
+            ) : null}
+          </section>
+
+          <label className="task-requirement">
+            <span className="task-section-heading">
+              <span>需求补充</span>
+              <small>可选</small>
+            </span>
+            <textarea
+              className="requirement-input"
+              value={state.requirement}
+              onChange={(event) =>
+                dispatch({ type: 'SET_REQUIREMENT', value: event.target.value })
+              }
+              placeholder="例如：保留现有接口，增加文件大小限制和异常处理。"
+              rows={6}
+              maxLength={8000}
+            />
+            <span className="requirement-meta">
+              <span>用业务目标和约束补充代码上下文</span>
+              <span>{state.requirement.length} / 8000</span>
+            </span>
+          </label>
+        </div>
+
+        <footer className="task-composer-footer">
+          <span>目标与需求将一起用于历史模块检索</span>
+          <button type="submit" className="primary-action" disabled={searching}>
+            {searching ? <span className="spinner" /> : <Search size={15} />}
+            {searching ? '正在检索相似实现…' : `查找 ${state.topK} 个候选方案`}
+          </button>
+        </footer>
+      </section>
+    </form>
   );
 }

@@ -93,15 +93,15 @@ describe('ModuleWorkspace history configuration prompt', () => {
     expect(markup).not.toContain('尚未配置历史仓');
   });
 
-  it('keeps target implementation details collapsed by default', () => {
+  it('lets the target workflow own the main area without a duplicate overview', () => {
     const markup = renderWorkspace({
       generatedAt: '2026-09-01T00:00:00.000Z',
       target: targetWorkspace,
       history: [],
     });
 
-    expect(markup).toContain('展开详情');
-    expect(markup).not.toContain('当前目标详情');
+    expect(markup).toContain('Workflow');
+    expect(markup).not.toContain('目标工作区模块划分');
   });
 
   it('keeps history analysis workflow collapsed by default', () => {

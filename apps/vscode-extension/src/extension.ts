@@ -31,7 +31,7 @@ import type {
 import { RepositoryHealthCheck } from './repository-health';
 import { decorateRepositoryStatuses } from './repository-status';
 import { ServiceManager } from './service-manager';
-import { loadSettings } from './settings';
+import { loadSettings, savePanelSettings } from './settings';
 import { buildModuleTarget } from './target-builder';
 import type { RepositoryStatus } from './ui-types';
 
@@ -213,6 +213,7 @@ async function startTranslation(
     adaptation: null,
   };
 
+  const settings = loadSettings();
   const serviceStatus = await services.refresh();
   const [statuses, moduleExplorer] = await Promise.all([
     refreshRepositoryStatus(services, health),
@@ -220,7 +221,7 @@ async function startTranslation(
       workspaceRoot: workspaceFolder.uri.fsPath,
       workspaceName: workspaceFolder.name,
       currentTarget: target,
-      historyRoots: loadSettings().repositoryPaths,
+      historyRoots: settings.repositoryPaths,
     }, { includeHistory: false }),
   ]);
   moduleExplorerTargets = moduleExplorer.targets;
@@ -231,6 +232,10 @@ async function startTranslation(
     {
       target,
       workspaceRoot: workspaceFolder.uri.fsPath,
+      settings: {
+        repositoryPaths: settings.repositoryPaths,
+        topK: settings.topK,
+      },
       repositoryStatuses: statuses,
       serviceStatus,
       moduleExplorer: moduleExplorer.presentation,
@@ -287,11 +292,8 @@ async function handlePanelMessage(
     case 'REFRESH_MODULE_EXPLORER':
       await refreshModuleExplorer();
       return;
-    case 'OPEN_REPOSITORY_SETTINGS':
-      await vscode.commands.executeCommand(
-        'workbench.action.openSettings',
-        'forexplore.repositoryPaths',
-      );
+    case 'SAVE_SETTINGS':
+      await updatePanelSettings(host, message.settings);
       return;
     case 'SELECT_WORKSPACE_TARGET':
       await selectWorkspaceTarget(message.targetId);
@@ -299,6 +301,38 @@ async function handlePanelMessage(
     case 'OPEN_TARGET':
       await openTarget();
       return;
+  }
+}
+
+async function updatePanelSettings(
+  host: ExtensionHost,
+  settings: Extract<WebviewToHostMessage, { type: 'SAVE_SETTINGS' }>['settings'],
+): Promise<void> {
+  let saved: Awaited<ReturnType<typeof savePanelSettings>>;
+  try {
+    saved = await savePanelSettings(settings);
+  } catch (error) {
+    publishError(errorMessage(error, '保存设置失败'));
+    return;
+  }
+
+  publish({ type: 'SETTINGS_UPDATED', settings: saved });
+  try {
+    const run = requireActiveRun();
+    const [statuses, explorer] = await Promise.all([
+      refreshRepositoryStatus(host.services, host.health),
+      buildModuleExplorer({
+        workspaceRoot: run.workspaceFolder.uri.fsPath,
+        workspaceName: run.workspaceFolder.name,
+        currentTarget: run.target,
+        historyRoots: saved.repositoryPaths,
+      }, { includeHistory: false }),
+    ]);
+    moduleExplorerTargets = explorer.targets;
+    publish({ type: 'REPOSITORY_STATUS', statuses });
+    publish({ type: 'MODULE_EXPLORER', explorer: explorer.presentation });
+  } catch (error) {
+    publishError(errorMessage(error, '设置已保存，但刷新仓库状态失败'));
   }
 }
 

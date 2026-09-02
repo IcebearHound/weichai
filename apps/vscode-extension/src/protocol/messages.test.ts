@@ -13,7 +13,12 @@ describe('Webview message boundary', () => {
     expect(isWebviewToHostMessage({ type: 'SELECT_CANDIDATE', candidateId: 'java-quote-cache' })).toBe(true);
     expect(isWebviewToHostMessage({ type: 'APPLY_CURRENT_RUN' })).toBe(true);
     expect(isWebviewToHostMessage({ type: 'REFRESH_MODULE_EXPLORER' })).toBe(true);
-    expect(isWebviewToHostMessage({ type: 'OPEN_REPOSITORY_SETTINGS' })).toBe(true);
+    expect(
+      isWebviewToHostMessage({
+        type: 'SAVE_SETTINGS',
+        settings: { topK: 6, repositoryPaths: ['D:/history/one', 'D:/history/two'] },
+      }),
+    ).toBe(true);
     expect(
       isWebviewToHostMessage({
         type: 'SELECT_WORKSPACE_TARGET',
@@ -59,6 +64,24 @@ describe('Webview message boundary', () => {
     ).toBe(false);
     expect(isWebviewToHostMessage({ type: 'SELECT_CANDIDATE', candidateId: '' })).toBe(false);
     expect(isWebviewToHostMessage({ type: 'SELECT_WORKSPACE_TARGET', targetId: '' })).toBe(false);
-    expect(isWebviewToHostMessage({ type: 'OPEN_REPOSITORY_SETTINGS', path: 'C:/secret' })).toBe(false);
+    expect(isWebviewToHostMessage({ type: 'OPEN_REPOSITORY_SETTINGS' })).toBe(false);
+    expect(
+      isWebviewToHostMessage({
+        type: 'SAVE_SETTINGS',
+        settings: { topK: 0, repositoryPaths: [] },
+      }),
+    ).toBe(false);
+    expect(
+      isWebviewToHostMessage({
+        type: 'SAVE_SETTINGS',
+        settings: { topK: 4, repositoryPaths: Array.from({ length: 21 }, (_, index) => `D:/repo-${index}`) },
+      }),
+    ).toBe(false);
+    expect(
+      isWebviewToHostMessage({
+        type: 'SAVE_SETTINGS',
+        settings: { topK: 4, repositoryPaths: [''] },
+      }),
+    ).toBe(false);
   });
 });

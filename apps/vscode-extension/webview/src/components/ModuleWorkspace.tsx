@@ -38,7 +38,8 @@ interface ModuleWorkspaceProps {
   onNodeSelect(node: ModuleExplorerNode): void;
   onTargetSelect(targetId: string): void;
   onRefresh(): void;
-  onOpenHistorySettings(): void;
+  onOpenSettings(): void;
+  settingsOpen: boolean;
   children: React.ReactNode;
 }
 
@@ -54,7 +55,8 @@ export function ModuleWorkspace({
   onNodeSelect,
   onTargetSelect,
   onRefresh,
-  onOpenHistorySettings,
+  onOpenSettings,
+  settingsOpen,
   children,
 }: ModuleWorkspaceProps) {
   const [query, setQuery] = useState('');
@@ -188,24 +190,26 @@ export function ModuleWorkspace({
 
       <section className="module-main">
         <div className="module-main-scroll">
-          {explorer.history.length === 0 ? (
+          {!settingsOpen && explorer.history.length === 0 ? (
             <section className="history-configuration-prompt" role="status">
               <div className="history-configuration-icon"><History size={17} /></div>
               <div>
                 <strong>尚未配置历史仓</strong>
-                <span>添加至少一个本地历史代码仓路径，保存后点击左侧刷新按钮即可加载 01A。</span>
+                <span>添加至少一个本地历史代码仓路径，保存后即可从左侧切换并加载 01A。</span>
               </div>
-              <button type="button" className="secondary-action" onClick={onOpenHistorySettings}>
+              <button type="button" className="secondary-action" onClick={onOpenSettings}>
                 配置路径
               </button>
             </section>
           ) : null}
-          {mode === 'target' ? (
-            <TargetOverview workspace={workspace} selectedNode={selectedNode} />
-          ) : (
-            <HistoryOverview workspace={workspace} selectedNode={selectedNode} />
-          )}
-          {mode === 'target' ? children : null}
+          {!settingsOpen ? (
+            mode === 'target' ? (
+              <TargetOverview workspace={workspace} selectedNode={selectedNode} />
+            ) : (
+              <HistoryOverview workspace={workspace} selectedNode={selectedNode} />
+            )
+          ) : null}
+          {settingsOpen || mode === 'target' ? children : null}
         </div>
       </section>
     </div>
@@ -285,6 +289,7 @@ function TargetOverview({
   workspace: ModuleWorkspacePresentation;
   selectedNode?: ModuleExplorerNode;
 }) {
+  const [expanded, setExpanded] = useState(false);
   return (
     <div className="module-overview">
       <OverviewHeader
@@ -294,7 +299,11 @@ function TargetOverview({
         workspace={workspace}
       />
       <StatsGrid workspace={workspace} />
-      <NodeDetail node={selectedNode} targetMode />
+      <button type="button" className="overview-toggle" onClick={() => setExpanded((value) => !value)}>
+        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        {expanded ? '收起详情' : '展开详情'}
+      </button>
+      {expanded ? <NodeDetail node={selectedNode} targetMode /> : null}
     </div>
   );
 }
@@ -306,6 +315,7 @@ function HistoryOverview({
   workspace: ModuleWorkspacePresentation;
   selectedNode?: ModuleExplorerNode;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const pipeline = [
     { icon: <Database size={15} />, title: '静态索引', detail: `${workspace.stats.files} 文件 / ${workspace.stats.types + workspace.stats.methods} 符号`, complete: Boolean(workspace.snapshotId) },
     { icon: <GitBranch size={15} />, title: '依赖分析', detail: `${workspace.stats.dependencies} 条依赖证据`, complete: Boolean(workspace.snapshotId) },
@@ -327,43 +337,51 @@ function HistoryOverview({
         description="从历史代码静态证据沉淀模块边界与可复用知识"
         workspace={workspace}
       />
-      <div className="analysis-pipeline">
-        {pipeline.map((step, index) => (
-          <div key={step.title} className={`pipeline-step${step.complete ? ' is-complete' : ''}`}>
-            <span className="pipeline-number">{index + 1}</span>
-            <span className="pipeline-icon">{step.icon}</span>
-            <div><strong>{step.title}</strong><small>{step.detail}</small></div>
-            {step.complete ? <CheckCircle2 size={14} /> : <span className="pipeline-pending" />}
+      <button type="button" className="overview-toggle" onClick={() => setExpanded((value) => !value)}>
+        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        {expanded ? '收起详情' : '展开详情'}
+      </button>
+      {expanded ? (
+        <>
+          <div className="analysis-pipeline">
+            {pipeline.map((step, index) => (
+              <div key={step.title} className={`pipeline-step${step.complete ? ' is-complete' : ''}`}>
+                <span className="pipeline-number">{index + 1}</span>
+                <span className="pipeline-icon">{step.icon}</span>
+                <div><strong>{step.title}</strong><small>{step.detail}</small></div>
+                {step.complete ? <CheckCircle2 size={14} /> : <span className="pipeline-pending" />}
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-      <div className="history-grid">
-        <NodeDetail node={selectedNode} />
-        <section className="card summary-card">
-          <div className="card-heading"><span>模块知识摘要</span><FileJson2 size={14} /></div>
-          {workspace.summary.error ? (
-            <div className="summary-empty is-error">
-              <AlertTriangle size={24} />
-              <strong>module-summary.json 无法读取</strong>
-              <span>{workspace.summary.error}</span>
-            </div>
-          ) : workspace.summary.exists ? (
-            <dl className="compact-definition-list">
-              <div><dt>计划</dt><dd>{workspace.summary.planId}</dd></div>
-              <div><dt>状态</dt><dd>{workspace.summary.status}</dd></div>
-              <div><dt>模块</dt><dd>{workspace.summary.moduleCount}</dd></div>
-              <div><dt>执行波次</dt><dd>{workspace.summary.waveCount}</dd></div>
-              <div><dt>审批</dt><dd>{workspace.summary.approvalsCurrent ? '当前有效' : '需重新确认'}</dd></div>
-            </dl>
-          ) : (
-            <div className="summary-empty">
-              <FileJson2 size={24} />
-              <strong>未发现 module-summary.json</strong>
-              <span>完成 Agent 模块计划和受信任审批后，由 Host 事务生成。</span>
-            </div>
-          )}
-        </section>
-      </div>
+          <div className="history-grid">
+            <NodeDetail node={selectedNode} />
+            <section className="card summary-card">
+              <div className="card-heading"><span>模块知识摘要</span><FileJson2 size={14} /></div>
+              {workspace.summary.error ? (
+                <div className="summary-empty is-error">
+                  <AlertTriangle size={24} />
+                  <strong>module-summary.json 无法读取</strong>
+                  <span>{workspace.summary.error}</span>
+                </div>
+              ) : workspace.summary.exists ? (
+                <dl className="compact-definition-list">
+                  <div><dt>计划</dt><dd>{workspace.summary.planId}</dd></div>
+                  <div><dt>状态</dt><dd>{workspace.summary.status}</dd></div>
+                  <div><dt>模块</dt><dd>{workspace.summary.moduleCount}</dd></div>
+                  <div><dt>执行波次</dt><dd>{workspace.summary.waveCount}</dd></div>
+                  <div><dt>审批</dt><dd>{workspace.summary.approvalsCurrent ? '当前有效' : '需重新确认'}</dd></div>
+                </dl>
+              ) : (
+                <div className="summary-empty">
+                  <FileJson2 size={24} />
+                  <strong>未发现 module-summary.json</strong>
+                  <span>完成 Agent 模块计划和受信任审批后，由 Host 事务生成。</span>
+                </div>
+              )}
+            </section>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

@@ -206,7 +206,11 @@ export function ModuleWorkspace({
             mode === 'target' ? (
               <TargetOverview workspace={workspace} selectedNode={selectedNode} />
             ) : (
-              <HistoryOverview workspace={workspace} selectedNode={selectedNode} />
+              <HistoryOverview
+                workspace={workspace}
+                selectedNode={selectedNode}
+                onNodeSelect={onNodeSelect}
+              />
             )
           ) : null}
           {settingsOpen || mode === 'target' ? children : null}
@@ -311,11 +315,14 @@ function TargetOverview({
 function HistoryOverview({
   workspace,
   selectedNode,
+  onNodeSelect,
 }: {
   workspace: ModuleWorkspacePresentation;
   selectedNode?: ModuleExplorerNode;
+  onNodeSelect(node: ModuleExplorerNode): void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const modules = workspace.tree.filter((node) => node.kind === 'module');
   const pipeline = [
     { icon: <Database size={15} />, title: '静态索引', detail: `${workspace.stats.files} 文件 / ${workspace.stats.types + workspace.stats.methods} 符号`, complete: Boolean(workspace.snapshotId) },
     { icon: <GitBranch size={15} />, title: '依赖分析', detail: `${workspace.stats.dependencies} 条依赖证据`, complete: Boolean(workspace.snapshotId) },
@@ -331,16 +338,86 @@ function HistoryOverview({
   ];
   return (
     <div className="module-overview history-overview">
-      <OverviewHeader
-        code="01A"
-        title="历史仓模块划分"
-        description="从历史代码静态证据沉淀模块边界与可复用知识"
-        workspace={workspace}
-      />
-      <button type="button" className="overview-toggle" onClick={() => setExpanded((value) => !value)}>
-        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        {expanded ? '收起详情' : '展开详情'}
-      </button>
+      <section className="history-library-hero">
+        <div className="history-library-title">
+          <div className="overview-glyph"><History size={17} /></div>
+          <div>
+            <span className="history-library-code">01A · 历史模块库</span>
+            <h1>{workspace.name}</h1>
+            <p>浏览可复用模块，并选择本次需求需要参考的代码范围</p>
+          </div>
+        </div>
+        <div className={`history-library-state${workspace.snapshotId ? ' is-ready' : ''}`}>
+          <span><i />{workspace.snapshotId ? '模块库已就绪' : '等待分析'}</span>
+          <small title={workspace.rootLabel}>{workspace.rootLabel}</small>
+        </div>
+      </section>
+
+      <HistoryStats workspace={workspace} />
+
+      <section className="history-catalog" aria-label="历史模块目录">
+        <div className="history-section-heading">
+          <div>
+            <h2>模块目录</h2>
+            <p>选择模块后，可继续在左侧定位到具体文件、类或方法</p>
+          </div>
+          <span>{modules.length} 个模块</span>
+        </div>
+        {modules.length > 0 ? (
+          <div className="history-module-grid">
+            {modules.map((module) => {
+              const summary = summarizeModule(module);
+              const selected = selectedNode ? containsNode(module, selectedNode.id) : false;
+              return (
+                <button
+                  key={module.id}
+                  type="button"
+                  className={`history-module-card${selected ? ' is-selected' : ''}`}
+                  aria-pressed={selected}
+                  onClick={() => onNodeSelect(module)}
+                >
+                  <span className="history-module-card-top">
+                    <span className="history-module-icon"><Box size={15} /></span>
+                    <span className="history-module-languages">
+                      {summary.languages.length > 0
+                        ? summary.languages.slice(0, 2).map((language) => <small key={language}>{language}</small>)
+                        : <small>代码模块</small>}
+                    </span>
+                  </span>
+                  <strong>{module.name}</strong>
+                  <span className="history-module-description">
+                    {module.description ?? `包含 ${summary.files} 个代码文件，可作为需求实现的检索范围。`}
+                  </span>
+                  <span className="history-module-card-footer">
+                    <span>{summary.files} 文件</span>
+                    <span>{summary.types} 类型</span>
+                    <span>{summary.methods} 方法</span>
+                    <ChevronRight size={13} />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="history-catalog-empty">
+            <Box size={22} />
+            <div>
+              <strong>暂无可浏览模块</strong>
+              <span>{workspace.error ?? '重新分析该历史仓后，模块会显示在这里。'}</span>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <HistorySelectionPreview node={selectedNode} />
+
+      <div className="history-analysis-fold">
+        <button type="button" className="overview-toggle" onClick={() => setExpanded((value) => !value)}>
+          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          {expanded ? '收起分析信息' : '查看分析信息'}
+        </button>
+        {!expanded ? <span>4 项技术状态</span> : null}
+      </div>
       {expanded ? (
         <>
           <div className="analysis-pipeline">
@@ -354,7 +431,6 @@ function HistoryOverview({
             ))}
           </div>
           <div className="history-grid">
-            <NodeDetail node={selectedNode} />
             <section className="card summary-card">
               <div className="card-heading"><span>模块知识摘要</span><FileJson2 size={14} /></div>
               {workspace.summary.error ? (
@@ -384,6 +460,93 @@ function HistoryOverview({
       ) : null}
     </div>
   );
+}
+
+function HistoryStats({ workspace }: { workspace: ModuleWorkspacePresentation }) {
+  const stats = [
+    ['可复用模块', workspace.stats.modules, 'M'],
+    ['代码文件', workspace.stats.files, 'F'],
+    ['类 / 类型', workspace.stats.types, 'C'],
+    ['方法 / 函数', workspace.stats.methods, 'ƒ'],
+  ] as const;
+  return (
+    <div className="history-stats" aria-label="历史仓规模">
+      {stats.map(([label, value, glyph]) => (
+        <div key={label}>
+          <span>{glyph}</span>
+          <strong>{value}</strong>
+          <small>{label}</small>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HistorySelectionPreview({ node }: { node?: ModuleExplorerNode }) {
+  if (!node) {
+    return (
+      <section className="history-selection-preview is-empty">
+        <Box size={16} />
+        <span>从模块卡片或左侧模块树中选择一项，查看它的检索范围。</span>
+      </section>
+    );
+  }
+  const summary = summarizeModule(node);
+  return (
+    <section className="history-selection-preview" aria-label="当前选择">
+      <div className="history-selection-heading">
+        <span>当前选择</span>
+        <small>{kindLabel(node.kind)}</small>
+      </div>
+      <div className="history-selection-body">
+        <span className="history-selection-icon"><NodeIcon node={node} /></span>
+        <div>
+          <strong>{node.name}</strong>
+          <p>{node.description ?? node.signature ?? '该项将作为历史代码检索与复用的参考范围。'}</p>
+          <div className="history-selection-meta">
+            {node.path ? <code title={node.path}>{node.path}</code> : null}
+            {node.language ? <span>{node.language}</span> : null}
+            {summary.files > 0 ? <span>{summary.files} 文件</span> : null}
+            {summary.types > 0 ? <span>{summary.types} 类型</span> : null}
+            {summary.methods > 0 ? <span>{summary.methods} 方法</span> : null}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+interface ModuleContentsSummary {
+  files: number;
+  types: number;
+  methods: number;
+  languages: string[];
+}
+
+function summarizeModule(node: ModuleExplorerNode): ModuleContentsSummary {
+  const summary: ModuleContentsSummary = { files: 0, types: 0, methods: 0, languages: [] };
+  const languages = new Set<string>();
+  visitNode(node, (current) => {
+    if (current.kind === 'file') summary.files += 1;
+    if (['class', 'interface', 'record', 'struct', 'enum'].includes(current.kind)) summary.types += 1;
+    if (['method', 'constructor', 'function'].includes(current.kind)) summary.methods += 1;
+    if (current.language) languages.add(current.language);
+  });
+  summary.languages = [...languages].sort((left, right) => left.localeCompare(right));
+  return summary;
+}
+
+function containsNode(root: ModuleExplorerNode, id: string): boolean {
+  let found = false;
+  visitNode(root, (node) => {
+    if (node.id === id) found = true;
+  });
+  return found;
+}
+
+function visitNode(node: ModuleExplorerNode, visit: (node: ModuleExplorerNode) => void): void {
+  visit(node);
+  node.children.forEach((child) => visitNode(child, visit));
 }
 
 function OverviewHeader({

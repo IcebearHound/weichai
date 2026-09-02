@@ -162,6 +162,14 @@ export default function App() {
     bus.post({ type: 'OPEN_TARGET' });
   }
 
+  function handleCopyTargetPath(): void {
+    bus.post({ type: 'COPY_TARGET_PATH' });
+  }
+
+  function handleRevealTargetInExplorer(): void {
+    bus.post({ type: 'REVEAL_TARGET_IN_EXPLORER' });
+  }
+
   function handleRefreshModuleExplorer(): void {
     setError(null);
     setRefreshingExplorer(true);
@@ -272,6 +280,8 @@ export default function App() {
                 target={state.target}
                 dispatch={dispatch}
                 onSearch={handleSearch}
+                onCopyTargetPath={handleCopyTargetPath}
+                onRevealTarget={handleRevealTargetInExplorer}
               />
             ) : null}
 

@@ -13,6 +13,8 @@ describe('Webview message boundary', () => {
     expect(isWebviewToHostMessage({ type: 'SELECT_CANDIDATE', candidateId: 'java-quote-cache' })).toBe(true);
     expect(isWebviewToHostMessage({ type: 'APPLY_CURRENT_RUN' })).toBe(true);
     expect(isWebviewToHostMessage({ type: 'REFRESH_MODULE_EXPLORER' })).toBe(true);
+    expect(isWebviewToHostMessage({ type: 'COPY_TARGET_PATH' })).toBe(true);
+    expect(isWebviewToHostMessage({ type: 'REVEAL_TARGET_IN_EXPLORER' })).toBe(true);
     expect(
       isWebviewToHostMessage({
         type: 'SAVE_SETTINGS',
@@ -38,6 +40,8 @@ describe('Webview message boundary', () => {
     ).toBe(false);
     expect(isWebviewToHostMessage({ type: 'APPLY_PATCHES', files: [] })).toBe(false);
     expect(isWebviewToHostMessage({ type: 'OPEN_FILE', path: '/tmp/secret', line: 1 })).toBe(false);
+    expect(isWebviewToHostMessage({ type: 'COPY_TARGET_PATH', path: '../../outside.cs' })).toBe(false);
+    expect(isWebviewToHostMessage({ type: 'REVEAL_TARGET_IN_EXPLORER', path: '../../outside.cs' })).toBe(false);
     expect(
       isWebviewToHostMessage({
         type: 'SELECT_WORKSPACE_TARGET',

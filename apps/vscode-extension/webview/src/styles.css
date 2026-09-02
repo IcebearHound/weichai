@@ -531,28 +531,77 @@ select:disabled {
   color: var(--warning);
 }
 
+.task-target-path {
+  margin-top: 13px;
+}
+
+.task-target-path-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.task-target-path-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.task-target-path-actions .text-button {
+  font-size: 8px;
+}
+
 .task-target-location {
   display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
   min-width: 0;
-  margin-top: 13px;
   padding: 7px 8px;
+  border: 1px solid transparent;
   border-radius: 5px;
   background: var(--surface-2);
   color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-target-location:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--fg);
 }
 
 .task-target-location svg {
   flex: none;
 }
 
+.task-target-location svg:last-child {
+  margin-left: auto;
+  color: var(--accent);
+}
+
 .task-target-location code {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 9px;
+}
+
+.task-target-path.is-expanded .task-target-location {
+  align-items: flex-start;
+}
+
+.task-target-path.is-expanded .task-target-location code {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .task-target-details {

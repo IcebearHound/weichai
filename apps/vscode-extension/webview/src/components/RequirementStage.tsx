@@ -1,5 +1,13 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, FileCode2, Search, Target as TargetIcon } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  FileCode2,
+  FolderOpen,
+  Search,
+  Target as TargetIcon,
+} from 'lucide-react';
 import type { ModuleTarget } from '@forexplore/contracts';
 import type { WorkflowEvent, WorkflowState } from '@forexplore/workflow-core';
 
@@ -8,6 +16,8 @@ interface RequirementStageProps {
   target: ModuleTarget;
   dispatch: React.Dispatch<WorkflowEvent>;
   onSearch: () => void;
+  onCopyTargetPath: () => void;
+  onRevealTarget: () => void;
 }
 
 export function RequirementStage({
@@ -15,9 +25,12 @@ export function RequirementStage({
   target,
   dispatch,
   onSearch,
+  onCopyTargetPath,
+  onRevealTarget,
 }: RequirementStageProps) {
   const searching = state.pending === 'search';
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [pathExpanded, setPathExpanded] = useState(false);
 
   return (
     <form
@@ -62,9 +75,40 @@ export function RequirementStage({
               </span>
             </div>
 
-            <div className="task-target-location">
-              <FileCode2 size={13} />
-              <code title={target.path}>{target.path}{target.line ? `:${target.line}` : ''}</code>
+            <div className={`task-target-path${pathExpanded ? ' is-expanded' : ''}`}>
+              <div className="task-target-path-heading">
+                <span>目标路径</span>
+                <span className="task-target-path-actions">
+                  <button
+                    type="button"
+                    className="text-button"
+                    aria-expanded={pathExpanded}
+                    onClick={() => setPathExpanded((expanded) => !expanded)}
+                  >
+                    {pathExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    {pathExpanded ? '收起' : '展开'}
+                  </button>
+                  <button
+                    type="button"
+                    className="text-button"
+                    aria-label="复制目标路径"
+                    title="复制目标路径"
+                    onClick={onCopyTargetPath}
+                  >
+                    <Copy size={12} />复制
+                  </button>
+                </span>
+              </div>
+              <button
+                type="button"
+                className="task-target-location"
+                title="在左侧资源管理器中定位"
+                onClick={onRevealTarget}
+              >
+                <FileCode2 size={13} />
+                <code>{target.path}{target.line ? `:${target.line}` : ''}</code>
+                <FolderOpen size={13} />
+              </button>
             </div>
 
             {detailsOpen ? (

@@ -58,6 +58,8 @@ export type WebviewToHostMessage =
   | { type: 'REFRESH_MODULE_EXPLORER' }
   | { type: 'SAVE_SETTINGS'; settings: PanelSettingsPresentation }
   | { type: 'SELECT_WORKSPACE_TARGET'; targetId: string }
+  | { type: 'COPY_TARGET_PATH' }
+  | { type: 'REVEAL_TARGET_IN_EXPLORER' }
   | { type: 'OPEN_TARGET' };
 
 const hostMessageTypes = new Set<string>([
@@ -82,6 +84,8 @@ export function isWebviewToHostMessage(value: unknown): value is WebviewToHostMe
     case 'APPLY_CURRENT_RUN':
     case 'CHECK_REPOSITORIES':
     case 'REFRESH_MODULE_EXPLORER':
+    case 'COPY_TARGET_PATH':
+    case 'REVEAL_TARGET_IN_EXPLORER':
     case 'OPEN_TARGET':
       return hasOnlyKeys(message, ['type']);
     case 'SAVE_SETTINGS':

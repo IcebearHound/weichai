@@ -33,7 +33,14 @@ const reactTestEnvironment = globalThis as typeof globalThis & {
 describe('RequirementStage', () => {
   it('combines target selection context and optional requirement in one task composer', () => {
     const markup = renderToStaticMarkup(
-      <RequirementStage state={state} target={target} dispatch={vi.fn()} onSearch={vi.fn()} />,
+      <RequirementStage
+        state={state}
+        target={target}
+        dispatch={vi.fn()}
+        onSearch={vi.fn()}
+        onCopyTargetPath={vi.fn()}
+        onRevealTarget={vi.fn()}
+      />,
     );
 
     expect(markup).toContain('01 · 定义任务');
@@ -42,20 +49,44 @@ describe('RequirementStage', () => {
     expect(markup).toContain('可选');
     expect(markup).toContain('保留现有接口');
     expect(markup).toContain('查找 4 个候选方案');
+    expect(markup).toContain('复制目标路径');
+    expect(markup).toContain('在左侧资源管理器中定位');
     expect(markup).not.toContain(target.signature);
   });
 
-  it('reveals target details on demand and submits the combined task', () => {
+  it('expands, copies, reveals and submits the combined target', () => {
     reactTestEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
     const onSearch = vi.fn();
+    const onCopyTargetPath = vi.fn();
+    const onRevealTarget = vi.fn();
     const container = document.createElement('div');
     const root = createRoot(container);
 
     act(() => {
       root.render(
-        <RequirementStage state={state} target={target} dispatch={vi.fn()} onSearch={onSearch} />,
+        <RequirementStage
+          state={state}
+          target={target}
+          dispatch={vi.fn()}
+          onSearch={onSearch}
+          onCopyTargetPath={onCopyTargetPath}
+          onRevealTarget={onRevealTarget}
+        />,
       );
     });
+
+    const pathSection = container.querySelector('.task-target-path');
+    const pathExpandButton = pathSection?.querySelector<HTMLButtonElement>('[aria-expanded="false"]');
+    act(() => pathExpandButton?.click());
+    expect(pathSection?.classList.contains('is-expanded')).toBe(true);
+
+    const copyButton = container.querySelector<HTMLButtonElement>('[aria-label="复制目标路径"]');
+    act(() => copyButton?.click());
+    expect(onCopyTargetPath).toHaveBeenCalledOnce();
+
+    const revealButton = container.querySelector<HTMLButtonElement>('[title="在左侧资源管理器中定位"]');
+    act(() => revealButton?.click());
+    expect(onRevealTarget).toHaveBeenCalledOnce();
 
     const detailButton = [...container.querySelectorAll('button')]
       .find((button) => button.textContent?.includes('展开详情'));

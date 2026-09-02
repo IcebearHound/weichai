@@ -298,6 +298,12 @@ async function handlePanelMessage(
     case 'SELECT_WORKSPACE_TARGET':
       await selectWorkspaceTarget(message.targetId);
       return;
+    case 'COPY_TARGET_PATH':
+      await copyTargetPath();
+      return;
+    case 'REVEAL_TARGET_IN_EXPLORER':
+      await revealTargetInExplorer();
+      return;
     case 'OPEN_TARGET':
       await openTarget();
       return;
@@ -553,6 +559,26 @@ async function openTarget(): Promise<void> {
     });
   } catch (error) {
     publishError(errorMessage(error, '无法打开当前目标文件'));
+  }
+}
+
+async function copyTargetPath(): Promise<void> {
+  try {
+    const run = requireActiveRun();
+    await vscode.env.clipboard.writeText(run.target.path);
+    vscode.window.setStatusBarMessage('ForeXplore: 已复制目标路径', 2_000);
+  } catch (error) {
+    publishError(errorMessage(error, '无法复制当前目标路径'));
+  }
+}
+
+async function revealTargetInExplorer(): Promise<void> {
+  try {
+    const run = requireActiveRun();
+    await vscode.commands.executeCommand('workbench.view.explorer');
+    await vscode.commands.executeCommand('revealInExplorer', run.targetUri);
+  } catch (error) {
+    publishError(errorMessage(error, '无法在资源管理器中定位当前目标文件'));
   }
 }
 
